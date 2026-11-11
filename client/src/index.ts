@@ -25,12 +25,11 @@ export type { ApprovalCardProps } from './ui/ApprovalSheet.js'
 /**
  * 必需服务。
  *
- * ⚠️ **故意为空数组**：desktop 宿主不提供 `remote` / `slots`，声明式 inject 会让
- * client 激活失败 → web boot 整体中止（2026-11-11 桌面崩溃的直接死因）。
- * plugin.ts 里做**软探测**（官方 `ctx.get(name)`，非 `reflect.props` 声明表——
- * 那只反映声明、不反映可用性）且 mount/panel 全程 try/catch 降级：
- * 服务在 → 装 mount + 面板；服务缺 → 只装 transport + access，
- * 插件激活成功、面板不出现。fail-closed 且绝不拖垮宿主。
+ * ⚠️ **故意为空数组**：本 entry `inject: []` 立即激活，绝不因等待服务而 pending
+ * 到 web boot 收尾被 qZ 判死（2026-11-11 桌面崩溃的死因）。`remote`（api-gateway
+ * client 提供）与 `slots`（dsh-client-ui-renderer client 提供）都**晚于**本 entry
+ * 就绪，plugin.ts 用 `ctx.inject(deps, cb)` 做**延迟装配**：服务就绪自动挂载、
+ * 永不就绪安静不挂；装配异常 try/catch 降级。fail-closed 且绝不拖垮宿主。
  */
 export const inject: string[] = []
 

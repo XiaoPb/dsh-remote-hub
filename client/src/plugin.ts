@@ -1,15 +1,20 @@
 /**
  * Client 装配。
  *
- * 顺序（固定）：transport → mount → access → UI。
- * 所有资源都通过 `ctx.effect(() => disposer, label)` 注册；卸载时 cordis 按
- * **逆序**执行 disposer，无残留订阅、无残留轮询。
+ * 顺序（固定）：transport → access →（延迟）mount →（延迟）UI。
+ * transport / access 不依赖宿主服务，**立即装配**；`remote` / `slots` 由宿主的
+ * 其它 client entry 提供（`remote` ← api-gateway client，依赖 typert+connection；
+ * `slots` ← dsh-client-ui-renderer client），**晚于本 entry** 激活——所以这两块
+ * 用 `ctx.inject(deps, cb)` 做**延迟装配**：cordis 响应式子 fiber，服务就绪时
+ * 自动执行、服务卸载时自动回收，永不就绪则安静不挂。
  *
- * v0.2 变更点：
- * - transport 是三方法长轮询，**不是 WebSocket**（D-3）。
- * - `ClientContext` 就是 `@deepseek-ai/cordis` 的 `Context`（D-8）；
- *   `@deepseek-ai/dsh-client-runtime` 在 0.2.2-rc.1 检出里不存在。
- * - access 快照读的是 `core/capabilities.ts` 的同一张矩阵（D-11）。
+ * ⚠️ 本 entry 自身保持 `inject: []`（见 index.ts）：声明式硬 inject 若遇到
+ * 服务永不出现的组合，fiber 会 pending 到 web boot 收尾被 qZ 判死
+ * （`web boot: N entries did not activate`，2026-11-11 桌面崩溃的死因）。
+ * 延迟子 fiber 的 pending **不属于** entry fiber，不影响 boot 判定。
+ *
+ * 所有资源通过 `ctx.effect(() => disposer, label)` 注册；卸载时 cordis 按
+ * **逆序**执行 disposer，无残留订阅、无残留轮询。
  *
  * @module dsh-remote-hub/client/plugin
  */
@@ -36,13 +41,8 @@ interface HubGlobal {
   token?: string
 }
 
-/** `ctx.remote`（`@deepseek-ai/dsh-api-remotes/client` 装配提供）的最小形状。 */
-interface RemoteFace {
-  $mount(contribution: { package: string; descriptors: readonly unknown[] }): Promise<() => Promise<void>>
-}
-
 /** 降级告警：装配失败只留痕，不让异常逃出 effect 回调拖垮 web boot。 */
-function warnDegrade(stage: 'mount' | 'panel', error: unknown): void {
+function warnDegrade(stage: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error)
   try {
     console.warn(`dsh-remote-hub: ${stage} unavailable, degraded (${message})`)
@@ -55,23 +55,37 @@ function hubGlobal(): HubGlobal {
   return (globalThis as { __DSH_REMOTE_HUB__?: HubGlobal }).__DSH_REMOTE_HUB__ ?? {}
 }
 
+/** `ctx.inject(deps, cb)` 返回的子 fiber（只需 dispose 能力）。 */
+interface InjectFiber {
+  dispose?: () => unknown
+}
+
 /**
- * 服务软探测：cordis 官方无 inject 读取（`ReflectService.get(name, strict)`）。
- * 服务从未被提供 → 返回 `undefined`，**不抛错、不触发 get trap**。
- *
- * ⚠️ 绝不裸读 `ctx.<name>`：client 插件 fiber 的 ctx 是 scoped proxy，`inject: []`
- * 时裸读未注入的服务会抛 `cannot get property "<name>" without inject`
- * （cordis ReflectService.handler 的 get trap；2026-11-11 桌面崩溃的死因）。
- * 也不读 `ctx.reflect.props`：那是**属性声明表**（`{ type: "service" }` 元数据），
- * 不代表服务当前真的可用，会产生假阳性。
+ * 延迟装配：等 `deps` 里的服务全部就绪后执行 `setup`（cordis `ctx.inject` 语义：
+ * 即 `ctx.plugin({ inject: deps, apply: cb })` 的响应式子 fiber——服务卸载时回收、
+ * 重现时重跑）。**绝不**让异常逃出回调；宿主永不提供这些服务时安静不挂。
+ * @returns 子 fiber（用于主动回收），宿主 ctx 不支持 inject 时为 `undefined`。
  */
-function probeService(ctx: Context, name: string): unknown {
+function injectWhenReady(
+  ctx: Context,
+  deps: readonly string[],
+  stage: string,
+  setup: (scoped: Context) => (() => void) | void,
+): InjectFiber | undefined {
   try {
-    const get = (ctx as unknown as { get?: (name: string, strict?: boolean) => unknown }).get
-    if (typeof get !== 'function') return undefined
-    const value = (get as (this: unknown, name: string, strict?: boolean) => unknown).call(ctx, name)
-    return typeof value === 'object' && value !== null ? value : undefined
-  } catch {
+    const inject = (ctx as unknown as Context & {
+      inject?: (deps: readonly string[], callback: (scoped: Context) => (() => void) | void) => InjectFiber
+    }).inject
+    if (typeof inject !== 'function') return undefined
+    return inject.call(ctx, deps, scoped => {
+      try {
+        return setup(scoped)
+      } catch (error) {
+        warnDegrade(stage, error)
+      }
+    })
+  } catch (error) {
+    warnDegrade(stage, error)
     return undefined
   }
 }
@@ -90,14 +104,8 @@ export interface ClientAssembly {
 export function applyRemoteHubClient(ctx: Context, options: ClientAssemblyOptions = {}): void {
   const injected = hubGlobal()
   const origin = options.origin ?? injected.origin ?? (globalThis.location as { origin?: string } | undefined)?.origin ?? ''
-
-  // **软探测**（probeService，见上）：`slots` / `remote` 服务缺席时降级为不装
-  // 对应的部分（不抛错——client 激活失败会拖垮宿主的 web boot，2026-11-11 桌面
-  // 崩溃的教训）。transport / access 不依赖这两个服务，所以它们仍可装配。
-  const slots = probeService(ctx, 'slots') as
-    | { register(options: unknown, component: unknown): () => void }
-    | undefined
-  const remote = probeService(ctx, 'remote') as RemoteFace | undefined
+  const locationOrigin = (globalThis.location as { origin?: string } | undefined)?.origin
+  const sameOrigin = origin !== '' && origin === locationOrigin
 
   ctx.effect(() => {
     const disposers: (() => void)[] = []
@@ -107,7 +115,7 @@ export function applyRemoteHubClient(ctx: Context, options: ClientAssemblyOption
     const access = createAccessStore()
     push(() => access.dispose())
 
-    // 2. transport
+    // 2. transport（不依赖宿主服务，立即装配）
     const transportOptions: TransportOptions = {
       origin,
       ...(options.token ?? injected.token ?? undefined) === undefined
@@ -120,36 +128,33 @@ export function applyRemoteHubClient(ctx: Context, options: ClientAssemblyOption
     const transport = options.transport ?? createTransport(transportOptions)
     push(() => transport.close())
 
-    // 3. mount（同源模式；跨源由 transport 负责）。**三重护栏**：
-    //    a) 只在 origin 就是当前页面时尝试；
-    //    b) `remote` 服务缺席（desktop 宿主不装配 dsh-api-remotes）→ 直接跳过；
-    //    c) 挂载过程任何错误 → 记日志、降级为不挂载，**绝不**让异常逃出 effect
-    //       回调（那会让本 entry 变成 `failed`，web boot 整体中止）。
-    const locationOrigin = (globalThis.location as { origin?: string } | undefined)?.origin
-    if (origin === locationOrigin && typeof remote?.$mount === 'function') {
-      try {
-        const mounted = mountRemote(ctx, null)
-        push(() => mounted.dispose())
-      } catch (error) {
-        warnDegrade('mount', error)
-      }
+    // 3. mount（同源模式；跨源由 transport 负责）——延迟到 `remote` 就绪。
+    //    scoped ctx 已声明注入，mount 内部读服务不会再触发 get trap。
+    if (sameOrigin) {
+      const fiber = injectWhenReady(ctx, ['remote'], 'mount', scoped => {
+        const mounted = mountRemote(scoped, null)
+        return () => { mounted.dispose() }
+      })
+      const disposeFiber = fiber?.dispose
+      if (disposeFiber !== undefined) push(() => { void disposeFiber() })
     }
 
-    // 4. UI（LAST：永远从 access 读权限，不从本地猜）。slots 缺席 → 跳过 UI，
-    //    保留 transport + access 句柄（插件激活成功，面板不出现）。
-    //    slots 服务实例**显式传入** mountRemotePanel，不让它再裸读 `ctx.slots`。
-    if (slots !== undefined) {
-      try {
-        const panel = mountRemotePanel(ctx, {
-          slots,
-          access,
-          call: (method, args) => transport.call(method, args),
-        })
-        push(() => panel.dispose())
-      } catch (error) {
-        warnDegrade('panel', error)
-      }
-    }
+    // 4. UI（LAST：永远从 access 读权限，不从本地猜）——延迟到 `slots` 就绪。
+    //    面板 slots 实例取自 inject 作用域（已注入，裸读安全）。
+    const panelFiber = injectWhenReady(ctx, ['slots'], 'panel', scoped => {
+      const slots = (scoped as unknown as {
+        slots?: { register(options: unknown, component: unknown): () => void }
+      }).slots
+      if (slots === undefined || typeof slots.register !== 'function') return
+      const panel = mountRemotePanel(scoped, {
+        slots,
+        access,
+        call: (method, args) => transport.call(method, args),
+      })
+      return () => { panel.dispose() }
+    })
+    const disposePanelFiber = panelFiber?.dispose
+    if (disposePanelFiber !== undefined) push(() => { void disposePanelFiber() })
 
     const assembly: ClientAssembly = {
       transport,

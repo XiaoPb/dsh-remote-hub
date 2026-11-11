@@ -51,11 +51,17 @@ export function mountRemote(ctx: Context, target: RemoteTarget | null): MountedR
     )
   }
 
-  // 走 reflect.props 读（绝不裸读 `ctx.remote`：client fiber 的裸读会抛
-  // `cannot get property "remote" without inject` —— cordis proxy get trap）。
+  // 服务值读取：cordis 官方无 inject 软读 `ctx.get(name, strict)` —— 服务未被
+  // 提供时返回 `undefined`，**不抛错、不触发 get trap**。
+  // ⚠️ 两类错误读法都踩过坑（2026-11-11 桌面崩溃）：
+  //  - 裸读 `ctx.remote`：scoped proxy 上未注入的服务抛
+  //    `cannot get property "remote" without inject`（get trap）；
+  //  - 读 `ctx.reflect.props.remote`：那是**属性声明表**元数据
+  //    （`{ type: "service" }`），不是服务值——旧实现把元数据强转成 RemoteFace，
+  //    `$mount` 永远 undefined，同源挂载从未成功过。
   const remote = (ctx as unknown as {
-    reflect?: { props?: Record<string, unknown> }
-  }).reflect?.props?.remote as RemoteFace | undefined
+    get?: (name: string, strict?: boolean) => unknown
+  }).get?.call(ctx, 'remote') as RemoteFace | undefined
   if (remote === undefined || typeof remote.$mount !== 'function') {
     throw new Error(
       'dsh-remote-hub: ctx.remote.$mount is unavailable; the same-origin mode requires '
