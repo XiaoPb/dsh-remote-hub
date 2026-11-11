@@ -23,7 +23,7 @@ export interface RemotePanelOptions {
   /** 发一条一元 RPC；由 transport 注入。 */
   call: (method: string, args: Record<string, unknown>) => Promise<unknown>
   /**
-   * 显式传入已探测的 `slots` 服务（推荐）：caller 用 `ctx.get('slots')` 软探测后
+   * 显式传入已探测的 `slots` 服务（必需）：caller 用注入作用域取值后传入，
    * 传入实例，本函数就**不再裸读 `ctx.slots`**——scoped proxy 上裸读未注入的
    * 服务会抛 `cannot get property "slots" without inject`（cordis get trap）。
    * 缺省时回退到裸读（保持对既有调用方与测试的兼容）。
@@ -119,9 +119,10 @@ export function renderPanel(options: RemotePanelOptions): React.ReactNode {
  * @returns `RemotePanel`。
  */
 export function mountRemotePanel(ctx: unknown, options: RemotePanelOptions): RemotePanel {
-  // 优先用 caller 显式传入的 slots 实例（无 get-trap 风险）；缺省才裸读回退。
+  // 只用 caller 显式传入的 slots 实例。**绝不**裸读 `ctx.slots` 回退：cordis
+  // fiber scope proxy 上未注入的属性**读**也会抛（get trap）——caller 应通过
+  // `injectWhenReady` 的注入作用域取值后传入（见 plugin.ts）。
   const slots = options.slots
-    ?? (ctx as { slots?: { register(opts: unknown, component: unknown): () => void } } | undefined)?.slots
   const disposers: (() => void)[] = []
 
   if (slots !== undefined && typeof slots.register === 'function') {

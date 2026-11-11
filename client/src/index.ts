@@ -8,9 +8,9 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 
-import { applyRemoteHubClient, type ClientAssemblyOptions } from './plugin.js'
+import { applyRemoteHubClient, getRemoteHubClient, type ClientAssemblyOptions } from './plugin.js'
 
-export { applyRemoteHubClient }
+export { applyRemoteHubClient, getRemoteHubClient }
 export { createTransport } from './transport.js'
 export type { RemoteTransport, TransportOptions, ClientRequestEnvelope, ServerResponseEnvelope, StreamNextValue } from './transport.js'
 export { createAccessStore } from './access.js'

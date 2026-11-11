@@ -97,6 +97,22 @@ export interface ClientAssembly {
 }
 
 /**
+ * 装配句柄注册表（模块级）。
+ *
+ * ⚠️ **绝不**把句柄写到 ctx 属性上（`ctx.remoteHubClient = …`）：cordis 的 fiber
+ * scope proxy 对**写属性**同样有 trap——裸写未 provide 的属性抛
+ * `cannot set property … without provide`，apply 抛错 → entry `failed` →
+ * web boot 整体中止（2026-11-11 15:41 桌面第三次崩溃的死因；读和写都必须走
+ * 显式方法或模块级存储，绝不能裸操作 proxy）。
+ */
+const assemblies = new WeakMap<object, ClientAssembly>()
+
+/** 诊断：按 ctx 查询装配句柄（同 fiber 生命周期，卸载后清除）。 */
+export function getRemoteHubClient(ctx: object): ClientAssembly | undefined {
+  return assemblies.get(ctx)
+}
+
+/**
  * Client 插件入口。
  * @param ctx - Client Cordis root。
  * @param options - 装配选项。
@@ -162,7 +178,10 @@ export function applyRemoteHubClient(ctx: Context, options: ClientAssemblyOption
         for (const dispose of [...disposers].reverse()) dispose()
       },
     }
-    ;(ctx as unknown as { remoteHubClient?: ClientAssembly }).remoteHubClient = assembly
-    return () => assembly.dispose()
+    assemblies.set(ctx, assembly)
+    return () => {
+      assemblies.delete(ctx)
+      assembly.dispose()
+    }
   }, 'dsh-remote-hub: client assembly')
 }
