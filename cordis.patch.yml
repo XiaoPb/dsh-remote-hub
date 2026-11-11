@@ -1,0 +1,15 @@
+# @xiaopb/dsh-remote-hub bundle patch.
+#
+# 往 web profile 的 roster 里插入一行，让本插件在宿主进程加载：
+#   - 导出 "."     → host 半边（配对 / 设备令牌 / 角色策略 / 回环守卫 / 隧道监督）
+#   - 导出 "./client" → browser 半边（dsh.client 声明在 package.json，
+#                      产物 lib/client.js 由 __ModuleLoader__ 作为 closure factory 载入）
+#
+# 安装（本地联调）：
+#   dsh plugin --profile web add link:E:/Code/DSH/plugins/dsh-remote-hub
+#
+# 注意：守卫默认只绑 127.0.0.1:8443 且对未配对设备 fail-closed；
+# 在把隧道接上去之前，本插件不会扩大任何网络暴露面。
+- insert:
+    - id: remote-hub
+      name: '@xiaopb/dsh-remote-hub'

@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install
+        run: pnpm install --config.node-linker=hoisted
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build
+        run: pnpm build
+
+      - name: Unit tests
+        run: node --test test/*.test.mjs
+
+      - name: Version gate
+        run: node scripts/version-gate.mjs
+
+      - name: Contract check
+        run: node scripts/contract-check.mjs
+
+      - name: Source fence
+        run: node scripts/fence.mjs
+
+      - name: Red lines
+        run: node scripts/redlines.mjs
