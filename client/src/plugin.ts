@@ -36,8 +36,44 @@ interface HubGlobal {
   token?: string
 }
 
+/** `ctx.remote`（`@deepseek-ai/dsh-api-remotes/client` 装配提供）的最小形状。 */
+interface RemoteFace {
+  $mount(contribution: { package: string; descriptors: readonly unknown[] }): Promise<() => Promise<void>>
+}
+
+/** 降级告警：装配失败只留痕，不让异常逃出 effect 回调拖垮 web boot。 */
+function warnDegrade(stage: 'mount' | 'panel', error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error)
+  try {
+    console.warn(`dsh-remote-hub: ${stage} unavailable, degraded (${message})`)
+  } catch {
+    // 连 console 都没有的环境就静默降级。
+  }
+}
+
 function hubGlobal(): HubGlobal {
   return (globalThis as { __DSH_REMOTE_HUB__?: HubGlobal }).__DSH_REMOTE_HUB__ ?? {}
+}
+
+/**
+ * 服务软探测：cordis 官方无 inject 读取（`ReflectService.get(name, strict)`）。
+ * 服务从未被提供 → 返回 `undefined`，**不抛错、不触发 get trap**。
+ *
+ * ⚠️ 绝不裸读 `ctx.<name>`：client 插件 fiber 的 ctx 是 scoped proxy，`inject: []`
+ * 时裸读未注入的服务会抛 `cannot get property "<name>" without inject`
+ * （cordis ReflectService.handler 的 get trap；2026-11-11 桌面崩溃的死因）。
+ * 也不读 `ctx.reflect.props`：那是**属性声明表**（`{ type: "service" }` 元数据），
+ * 不代表服务当前真的可用，会产生假阳性。
+ */
+function probeService(ctx: Context, name: string): unknown {
+  try {
+    const get = (ctx as unknown as { get?: (name: string, strict?: boolean) => unknown }).get
+    if (typeof get !== 'function') return undefined
+    const value = (get as (this: unknown, name: string, strict?: boolean) => unknown).call(ctx, name)
+    return typeof value === 'object' && value !== null ? value : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** 装配完成后暴露给诊断的句柄。 */
@@ -55,23 +91,23 @@ export function applyRemoteHubClient(ctx: Context, options: ClientAssemblyOption
   const injected = hubGlobal()
   const origin = options.origin ?? injected.origin ?? (globalThis.location as { origin?: string } | undefined)?.origin ?? ''
 
-  // **软探测**：`slots` / `remote` 服务缺席时降级为不装 UI（不抛错——client 激活
-  // 失败会拖垮宿主的 web boot，同一次桌面崩溃的教训）。transport 不依赖这两个
-  // 服务，所以 transport 本身仍可装配（对纯 transport 消费者有用）。
-  //
-  // ⚠️ 走 reflect.props 读，**绝不裸读 `ctx.slots`**：client 插件 fiber 的 ctx 是
-  // scoped proxy，裸读未注入的服务会抛 `cannot get property "slots" without
-  // inject`（cordis ReflectService get trap；2026-11-11 桌面第二次崩溃的教训）。
-  const slots = (ctx as unknown as {
-    reflect?: { props?: Record<string, unknown> }
-  }).reflect?.props?.slots
-  const hasSlots = typeof slots === 'object' && slots !== null
+  // **软探测**（probeService，见上）：`slots` / `remote` 服务缺席时降级为不装
+  // 对应的部分（不抛错——client 激活失败会拖垮宿主的 web boot，2026-11-11 桌面
+  // 崩溃的教训）。transport / access 不依赖这两个服务，所以它们仍可装配。
+  const slots = probeService(ctx, 'slots') as
+    | { register(options: unknown, component: unknown): () => void }
+    | undefined
+  const remote = probeService(ctx, 'remote') as RemoteFace | undefined
 
   ctx.effect(() => {
     const disposers: (() => void)[] = []
     const push = (dispose: () => void): void => { disposers.push(dispose) }
 
-    // 1. transport
+    // 1. access（**先建**：transport 的回调闭包引用它，不能落在后面）
+    const access = createAccessStore()
+    push(() => access.dispose())
+
+    // 2. transport
     const transportOptions: TransportOptions = {
       origin,
       ...(options.token ?? injected.token ?? undefined) === undefined
@@ -84,26 +120,35 @@ export function applyRemoteHubClient(ctx: Context, options: ClientAssemblyOption
     const transport = options.transport ?? createTransport(transportOptions)
     push(() => transport.close())
 
-    // 2. mount（同源模式；跨源由 transport 负责，mount 会抛明确错误 —— 这里
-    //    只在 origin 就是当前页面时尝试挂载，避免无谓的加载期失败）
+    // 3. mount（同源模式；跨源由 transport 负责）。**三重护栏**：
+    //    a) 只在 origin 就是当前页面时尝试；
+    //    b) `remote` 服务缺席（desktop 宿主不装配 dsh-api-remotes）→ 直接跳过；
+    //    c) 挂载过程任何错误 → 记日志、降级为不挂载，**绝不**让异常逃出 effect
+    //       回调（那会让本 entry 变成 `failed`，web boot 整体中止）。
     const locationOrigin = (globalThis.location as { origin?: string } | undefined)?.origin
-    if (origin === locationOrigin) {
-      const mounted = mountRemote(ctx, null)
-      push(() => mounted.dispose())
+    if (origin === locationOrigin && typeof remote?.$mount === 'function') {
+      try {
+        const mounted = mountRemote(ctx, null)
+        push(() => mounted.dispose())
+      } catch (error) {
+        warnDegrade('mount', error)
+      }
     }
-
-    // 3. access
-    const access = createAccessStore()
-    push(() => access.dispose())
 
     // 4. UI（LAST：永远从 access 读权限，不从本地猜）。slots 缺席 → 跳过 UI，
     //    保留 transport + access 句柄（插件激活成功，面板不出现）。
-    if (hasSlots) {
-      const panel = mountRemotePanel(ctx, {
-        access,
-        call: (method, args) => transport.call(method, args),
-      })
-      push(() => panel.dispose())
+    //    slots 服务实例**显式传入** mountRemotePanel，不让它再裸读 `ctx.slots`。
+    if (slots !== undefined) {
+      try {
+        const panel = mountRemotePanel(ctx, {
+          slots,
+          access,
+          call: (method, args) => transport.call(method, args),
+        })
+        push(() => panel.dispose())
+      } catch (error) {
+        warnDegrade('panel', error)
+      }
     }
 
     const assembly: ClientAssembly = {

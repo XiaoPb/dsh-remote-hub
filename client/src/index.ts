@@ -27,7 +27,9 @@ export type { ApprovalCardProps } from './ui/ApprovalSheet.js'
  *
  * ⚠️ **故意为空数组**：desktop 宿主不提供 `remote` / `slots`，声明式 inject 会让
  * client 激活失败 → web boot 整体中止（2026-11-11 桌面崩溃的直接死因）。
- * plugin.ts 里做**软探测**：服务在 → 装面板；服务缺 → 只装 transport + access，
+ * plugin.ts 里做**软探测**（官方 `ctx.get(name)`，非 `reflect.props` 声明表——
+ * 那只反映声明、不反映可用性）且 mount/panel 全程 try/catch 降级：
+ * 服务在 → 装 mount + 面板；服务缺 → 只装 transport + access，
  * 插件激活成功、面板不出现。fail-closed 且绝不拖垮宿主。
  */
 export const inject: string[] = []
