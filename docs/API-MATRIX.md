@@ -17,9 +17,9 @@
 
 | 角色 | 中文 | 能做什么 | 不能做什么 | 授权数量 |
 | --- | --- | --- | --- | ---: |
-| `read-only` | 只读 | 看列表、历史、状态、文件内容、任务面板、只读目录 | 任何写入、执行、上传 | 55 |
-| `control` | 控制 | 只读 + 驱动会话（prompt / cancel / create / fork / rename / 队列）、审批与提问 | 碰文件系统与终端 | 80 |
-| `full` | 完全 | 控制 + 上传文件、工作区文件读写、终端、`job/kill` | **不等于 DSH owner**：凭据、账号、插件安装、动态执行仍然全部拒绝 | 106 |
+| `read-only` | 只读 | 看列表、历史、状态、文件内容、任务面板、只读目录 | 任何写入、执行、上传 | 60 |
+| `control` | 控制 | 只读 + 驱动会话（prompt / cancel / create / fork / rename / 队列）、审批与提问 | 碰文件系统与终端 | 92 |
+| `full` | 完全 | 控制 + 上传文件、工作区文件读写、终端、`job/kill` | **不等于 DSH owner**：凭据、账号、插件安装、动态执行仍然全部拒绝 | 120 |
 
 **未知 endpoint 一律拒绝（fail-closed）**。三档角色严格包含：`read-only ⊆ control ⊆ full`。
 
@@ -37,16 +37,19 @@
 | 红线（前缀） | `NEVER_DELEGATED_NAMESPACES`：整条关闭，但共享只读目录可豁免 |
 | 红线（Gateway 内部面） | `$events` / `$events/result`，非 owner 由 `interactions:'none'` 挡住 |
 
-## 2. 已授权接口（106 个）
+## 2. 已授权接口（120 个）
 
 按资源种类分组。资源种类决定 binding 挂法：没有参数指明资源时是 `global`，
 由 `sessionId` / `workspaceFileScopeId` / `agentId` 解析出来的是 `session`。
 
-### 2.1 global 资源（70 个）
+### 2.1 global 资源（82 个）
 
 | endpoint | 资源 | 形式 | 只读 | 控制 | 完全 | 判定依据 |
 | --- | --- | --- | :---: | :---: | :---: | --- |
 | `agentPresets/list` | global | 一元 | ✓ | ✓ | ✓ | 只读业务 |
+| `agentPresets/read` | global | 一元 | ✓ | ✓ | ✓ | 只读业务 |
+| `agentPresets/select` | global | 一元 | — | ✓ | ✓ | 会话驱动 |
+| `commands/execute` | global | 一元 | ✓ | ✓ | ✓ | 只读业务 |
 | `credentials/describe` | global | 一元 | ✓ | ✓ | ✓ | 共享只读目录 |
 | `credentials/set` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `credentials/unset` | global | 一元 | — | — | ✓ | Full 专属管理面 |
@@ -71,6 +74,8 @@
 | `llm/discoverModels` | global | 一元 | ✓ | ✓ | ✓ | 只读业务 |
 | `llm/listConfigurableProviders` | global | 一元 | ✓ | ✓ | ✓ | 只读业务 |
 | `llm/listProviders` | global | 一元 | ✓ | ✓ | ✓ | 只读业务 |
+| `messageFeedback/delete` | global | 一元 | — | — | ✓ | 文件/终端 |
+| `messageFeedback/put` | global | 一元 | — | ✓ | ✓ | 会话驱动 |
 | `permissionPresets/catalog` | global | 一元 | ✓ | ✓ | ✓ | 只读业务 |
 | `pluginInventory/list` | global | 一元 | ✓ | ✓ | ✓ | 共享只读目录 |
 | `pluginManager/cancelInstall` | global | 一元 | — | — | ✓ | Full 专属管理面 |
@@ -93,8 +98,15 @@
 | `pluginMarket/search` | global | 一元 | ✓ | ✓ | ✓ | 共享只读目录 |
 | `pluginMarket/setIndexes` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `schedule/catalog` | global | 一元 | ✓ | ✓ | ✓ | 共享只读目录 |
+| `schedule/create` | global | 一元 | — | ✓ | ✓ | 会话驱动 |
+| `schedule/deleteInactive` | global | 一元 | — | — | ✓ | 文件/终端 |
+| `schedule/deliveryLimits` | global | 一元 | ✓ | ✓ | ✓ | 只读业务 |
+| `schedule/edit` | global | 一元 | — | ✓ | ✓ | 会话驱动 |
 | `schedule/history` | global | 一元 | ✓ | ✓ | ✓ | 共享只读目录 |
 | `schedule/list` | global | 一元 | ✓ | ✓ | ✓ | 共享只读目录 |
+| `schedule/run` | global | 一元 | — | ✓ | ✓ | 会话驱动 |
+| `schedule/view` | global | 一元 | ✓ | ✓ | ✓ | 只读业务 |
+| `session/canOpenWorkspacePath` | global | 一元 | ✓ | ✓ | ✓ | 只读业务 |
 | `session/control` | global | stream | ✓ | ✓ | ✓ | 只读业务 |
 | `session/create` | global | 一元 | — | ✓ | ✓ | 会话驱动 |
 | `session/list` | global | 一元 | ✓ | ✓ | ✓ | 只读业务 |
@@ -117,7 +129,7 @@
 | `workspace/unarchiveSession` | global | 一元 | — | ✓ | ✓ | 会话驱动 |
 | `workspace/unpinSession` | global | 一元 | — | ✓ | ✓ | 会话驱动 |
 
-### 2.2 session 资源（36 个）
+### 2.2 session 资源（38 个）
 
 | endpoint | 资源 | 形式 | 只读 | 控制 | 完全 | 判定依据 |
 | --- | --- | --- | :---: | :---: | :---: | --- |
@@ -142,6 +154,8 @@
 | `session/wait` | session | 一元 | ✓ | ✓ | ✓ | 只读业务 |
 | `sessionReferenceResolver/candidates` | session | 一元 | ✓ | ✓ | ✓ | 只读业务 |
 | `skills/list` | session | 一元 | ✓ | ✓ | ✓ | 只读业务 |
+| `subagents/interruptByParent` | session | 一元 | — | ✓ | ✓ | 会话驱动 |
+| `subagents/prompt` | session | 一元 | — | ✓ | ✓ | 会话驱动 |
 | `terminal/attach` | session | stream | — | — | ✓ | 文件/终端 |
 | `terminal/close` | session | 一元 | — | — | ✓ | 文件/终端 |
 | `terminal/create` | session | 一元 | — | — | ✓ | 文件/终端 |

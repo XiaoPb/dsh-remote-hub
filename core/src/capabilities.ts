@@ -157,11 +157,32 @@ export const ENDPOINT_TABLE: Readonly<Record<string, EndpointFact>> = {
   // Composer discovery is read-only and session-scoped; include every source
   // consulted by @ candidate rendering, not only the candidate RPC itself.
   'fileReferences/list': { kind: 'session' },
-  'messageFeedback/list': { kind: 'session' },
   'sessionReferenceResolver/candidates': { kind: 'session' },
   'commands/list': { kind: 'session' },
   /** request.sessionId 由 Gateway default sessionId resource field 提取。 */
   'skills/list': { kind: 'session' },
+
+  // ── 0.3.2 覆盖率审计补齐：官方注册但此前未登记的 endpoint ──────────────────
+  // 只读/探测类
+  'agentPresets/read': { kind: 'global' },
+  'commands/execute': { kind: 'global' },
+  'schedule/view': { kind: 'global' },
+  'schedule/deliveryLimits': { kind: 'global' },
+  'session/canOpenWorkspacePath': { kind: 'global' },
+  // 会话驱动类（control 起）
+  'agentPresets/select': { kind: 'global' },
+  'schedule/create': { kind: 'global' },
+  'schedule/edit': { kind: 'global' },
+  'schedule/run': { kind: 'global' },
+  /** 反馈目录按会话可见性过滤：session 资源（与 fileReferences/skills 同组）。 */
+  'messageFeedback/list': { kind: 'session' },
+  'messageFeedback/put': { kind: 'global' },
+  // `subagents/prompt` 需要一个存活父会话地址；`interruptByParent` 同域。
+  'subagents/prompt': { kind: 'session' },
+  'subagents/interruptByParent': { kind: 'session' },
+  // Full 维护类
+  'schedule/deleteInactive': { kind: 'global' },
+  'messageFeedback/delete': { kind: 'global' },
 
   // ── 本插件自己的 hub/* 方法（同过 decide()，与官方 endpoint 等权）──────────
   'hub/devices': { kind: 'global', hub: true },
@@ -195,7 +216,14 @@ const READ_ONLY: RoleMatrix = {
     'settings/describe',
     ...SHARED_READ_ENDPOINTS,
     'llm/listConfigurableProviders', 'llm/listProviders', 'llm/discoverModels', 'permissionPresets/catalog', 'agentPresets/list',
-    // ── Remote Hub 自有只读状态流 ──────────────────────────────────────────
+    // ── 0.3.2 覆盖率审计补齐：只读即可用的目录与探测 ────────────────────────
+    'agentPresets/read',
+    'commands/execute',
+    'schedule/view', 'schedule/deliveryLimits',
+    'session/canOpenWorkspacePath',
+    // 按会话可见性过滤的技能/反馈目录（global 形态，远端 UI 需要）
+    'skills/list',
+    // Remote Hub 自有只读状态流 ──────────────────────────────────────────
     'hub/stream.open',
     'hub/stream.next',
     'hub/stream.cancel',
@@ -229,7 +257,7 @@ const READ_ONLY: RoleMatrix = {
     'commands/list',
     'fileReferences/list',
     'messageFeedback/list',
-    'sessionReferenceResolver/candidates',
+      'sessionReferenceResolver/candidates',
     'skills/list',
   ],
   workspace: [],
@@ -259,6 +287,11 @@ const CONTROL: RoleMatrix = {
     'goals/pause',
     'goals/resume',
     'goals/complete',
+    // ── 0.3.2 覆盖率审计补齐：驱动会话所需的写动作 ──────────────────────────
+    'agentPresets/select',
+    'schedule/create', 'schedule/edit', 'schedule/run',
+    'messageFeedback/put',
+    'subagents/prompt', 'subagents/interruptByParent',
     'hub/devices',
     'hub/answerApproval',
   ],
@@ -290,6 +323,9 @@ const FULL: RoleMatrix = {
     ...FULL_ADMIN_ENDPOINTS,
     'job/kill',
     'goals/clear',
+    // ── 0.3.2 覆盖率审计补齐：文件写入与调度维护 ────────────────────────────
+    'schedule/deleteInactive',
+    'messageFeedback/delete',
     'hub/revoke',
   ],
   session: [

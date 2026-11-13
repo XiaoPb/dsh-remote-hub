@@ -5,15 +5,35 @@
 
 ## [0.3.2] - 2026-11-13
 
-**修复：远端模型探测被权限拦截。**
+**权限全面复核：补上 19 个漏登记的官方 endpoint，并把「漏登记」变成 CI 断言。**
 
 ### 修复
 
-- `llm/discoverModels` 补进能力矩阵（`read-only` / `control` / `full` 三档共享只读）。
-  它是官方的**只读**远端适配器：按 `settingsNs` 让目标主机去问 Provider 有哪些模型，
-  没有任何副作用。此前它既不在矩阵也不在 endpoint 表里，导致远端「添加模型 / 发现模型」
-  被 `decide()` 以 `no-allow` 拒绝，界面弹出「远端权限不足（llm/discoverModels）」。
-- 0.2.6 加入 Provider 配置能力时遗漏了这一个 endpoint；当时的 CI 不覆盖它，因此没有暴露。
+- `llm/discoverModels` 补进能力矩阵（三档共享只读）。它是官方**只读**远端适配器，
+  按 `settingsNs` 让目标主机去问 Provider 有哪些模型；此前不在矩阵也不在 endpoint 表，
+  远端「发现模型」被 `decide()` 以 `no-allow` 拒绝，界面弹出「远端权限不足」。
+- 按官方注册表复核后补齐另外 18 个此前**未登记**的 endpoint：
+
+  | 角色 | 补齐的 endpoint |
+  | --- | --- |
+  | 三档只读 | `agentPresets/read`、`commands/execute`、`schedule/view`、`schedule/deliveryLimits`、`session/canOpenWorkspacePath`、`skills/list`(global)、`messageFeedback/list` |
+  | control 起 | `agentPresets/select`、`schedule/{create,edit,run}`、`messageFeedback/put`、`subagents/{prompt,interruptByParent}` |
+  | full 起 | `schedule/deleteInactive`、`messageFeedback/delete` |
+
+### 新增门禁
+
+- `scripts/audit-permissions.mjs`：把**官方 Typert 注册表里的全部 150 个 endpoint**
+  与能力矩阵逐条对账。每个 endpoint 必须显式归入「已授权 / 红线 / 未实现（写明理由）」
+  之一，否则 CI 失败。脚本同时检测「矩阵里登记了官方不存在的 endpoint」。
+  已接入 `ci.yml` 与 `release.yml`，本地可用 `npm run audit:permissions`。
+- 当前状态：已授权 120、红线 25、未实现 5（`officeToPdf/*`、`sessionFeedback/record`
+  等，均写明理由）、未登记遗漏 **0**。
+
+### 说明
+
+- 未实现的 5 类在 `scripts/audit-permissions.mjs` 的 `INTENTIONAL_GAPS` 里逐条写明原因，
+  不是「忘记」，而是「尚未评审」——放开前需要单独设计。
+- `docs/API-MATRIX.md` 随矩阵重新生成。
 ## [0.3.1] - 2026-11-13
 
 **插件权限：`full` 完全放开、不再审批；其他角色也能完整读取插件。**

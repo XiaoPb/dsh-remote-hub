@@ -71,6 +71,9 @@ jobs:
       - name: Red lines
         run: node scripts/redlines.mjs
 
+      - name: Permission coverage audit
+        run: node scripts/audit-permissions.mjs --check
+
       - name: API permission matrix in sync
         run: node scripts/render-api-matrix.mjs --check
 

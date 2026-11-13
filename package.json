@@ -55,7 +55,8 @@
     "docs:matrix": "node scripts/render-api-matrix.mjs",
     "docs:matrix:check": "node scripts/render-api-matrix.mjs --check",
     "pack:dry": "npm pack --dry-run",
-    "prepack": "node scripts/verify-package.mjs --no-pack"
+    "prepack": "node scripts/verify-package.mjs --no-pack",
+    "audit:permissions": "node scripts/audit-permissions.mjs --check"
   },
   "engines": {
     "node": ">=24.9.0",
