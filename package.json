@@ -69,7 +69,8 @@
     "@deepseek-ai/dsh-scope": ">=0.2.1-rc.2 <0.3.0-0",
     "@deepseek-ai/dsh-typert-protocol": ">=0.2.1-rc.2 <0.3.0-0",
     "@deepseek-ai/schemastery": ">=3.19.0 <4.0.0",
-    "react": "^18.3.1"
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {
@@ -95,6 +96,7 @@
     }
   },
   "dependencies": {
+    "react-dom": "^18.3.1",
     "ws": "^8.22.2"
   },
   "devDependencies": {
@@ -116,6 +118,7 @@
     "@deepseek-ai/schemastery": "3.19.0",
     "@types/node": "^22.20.0",
     "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
     "react": "^18.3.1",
     "rolldown": "1.2.18",
     "tsdown": "0.22.14",
