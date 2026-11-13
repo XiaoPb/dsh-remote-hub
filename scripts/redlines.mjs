@@ -36,9 +36,16 @@ const REDLINE_ENDPOINTS = [
 const neverDelegatedFn = fn(mod, 'isNeverDelegated')
 const allActionsFn = fn(mod, 'allActionsFor')
 const assertNoRedlineFn = fn(mod, 'assertNoRedlineDelegated')
-const namespaces = Array.isArray(val(mod, 'NEVER_DELEGATED_NAMESPACES', undefined))
+const modNamespaces = Array.isArray(val(mod, 'NEVER_DELEGATED_NAMESPACES', undefined))
   ? [...mod.NEVER_DELEGATED_NAMESPACES]
-  : [...readText(PATHS.redlinesSrc).matchAll(/^\s*'([A-Za-z]+\/)'/gmu)].map(m => m[1])
+  : []
+const modBlanket = Array.isArray(val(mod, 'NEVER_DELEGATED_BLANKET', undefined))
+  ? [...mod.NEVER_DELEGATED_BLANKET]
+  : []
+const modEndpoints = Array.isArray(val(mod, 'NEVER_DELEGATED_ENDPOINTS', undefined))
+  ? [...mod.NEVER_DELEGATED_ENDPOINTS]
+  : []
+const namespaces = [...modNamespaces, ...modBlanket]
 const redlineSrc = readText(PATHS.redlinesSrc)
 const capsSrc = readText(PATHS.capabilitiesSrc)
 
@@ -49,10 +56,14 @@ function staticStringArray(src, name) {
 }
 const staticEndpoints = staticStringArray(redlineSrc, 'NEVER_DELEGATED_ENDPOINTS')
 const staticNamespaces = staticStringArray(redlineSrc, 'NEVER_DELEGATED_NAMESPACES')
+const staticBlanket = staticStringArray(redlineSrc, 'NEVER_DELEGATED_BLANKET')
 const staticInternals = staticStringArray(redlineSrc, 'NEVER_DELEGATED_INTERNALS')
+const staticSharedRead = staticStringArray(redlineSrc, 'SHARED_READ_ENDPOINTS')
+// 与 isNeverDelegated() 同序：逐条 → 豁免 → 内部面 → 无豁免前缀 → 带豁免前缀。
 const staticRedline = ep => staticEndpoints.includes(ep)
   || staticInternals.includes(ep)
-  || staticNamespaces.some(prefix => ep.startsWith(prefix))
+  || (staticBlanket.some(prefix => ep.startsWith(prefix)) && !staticSharedRead.includes(ep))
+  || (staticNamespaces.some(prefix => ep.startsWith(prefix)) && !staticSharedRead.includes(ep))
 
 /** All action literals from a named role matrix block. */
 function staticRoleActions(roleConst) {

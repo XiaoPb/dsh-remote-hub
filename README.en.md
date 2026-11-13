@@ -8,7 +8,7 @@
 
 **Dual-role remote takeover for DSH (v0.2.5)**
 
-Docs: [Deployment](docs/DEPLOY.md) ｜ [Architecture](docs/ARCHITECTURE.md) ｜ [Design contract](docs/DESIGN.md) ｜ [Doc index](docs/INDEX.md) ｜ [Changelog](CHANGELOG.md) ｜ [中文](README.md)
+Docs: [Deployment](docs/DEPLOY.md) ｜ [Architecture](docs/ARCHITECTURE.md) ｜ [Design contract](docs/DESIGN.md) ｜ [API permission matrix](docs/API-MATRIX.md) ｜ [Doc index](docs/INDEX.md) ｜ [Changelog](CHANGELOG.md) ｜ [中文](README.md)
 
 A Cordis plugin that lets **one DSH instance operate another**. After pairing, supported business views on the controller point to the target Host — sessions, workspaces, files and jobs live remotely, while Remote Hub device management stays local to the controller.
 
@@ -128,6 +128,7 @@ CI runs exactly these. Releases go through CI/CD only — **no manual local `npm
 | [docs/DEPLOY.md](docs/DEPLOY.md) | Deployment, configuration, tunnel choice, health checks, troubleshooting |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Data paths, identity, authorization, persistence |
 | [docs/DESIGN.md](docs/DESIGN.md) | Role semantics, state ownership, supported boundaries |
+| [docs/API-MATRIX.md](docs/API-MATRIX.md) | **Every endpoint × role permission table** (generated) |
 | [docs/RELEASE.md](docs/RELEASE.md) | CI/CD release process and controls |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 

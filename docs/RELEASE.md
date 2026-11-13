@@ -31,9 +31,11 @@
 7. `node scripts/contract-check.mjs` —— 协议契约对账；
 8. `node scripts/fence.mjs` —— 来源围栏用例；
 9. `node scripts/redlines.mjs` —— 红线 endpoint 对 `full` 角色仍被拒绝；
-10. `node scripts/release-check.mjs` —— 版本在三处写死的地方保持一致；
-11. `npm pack` + 干净目录里像消费者一样安装并校验（consumer 测试）；
-12. 生成一次 release notes 冒烟（确保发布脚本本身没坏）。
+10. `node scripts/render-api-matrix.mjs --check` —— **接口权限分布文档与代码一致**
+    （`docs/API-MATRIX.md` 由脚本从构建产物生成，改权限却忘了重新生成会在这里变红）；
+11. `node scripts/release-check.mjs` —— 版本在三处写死的地方保持一致；
+12. `npm pack` + 干净目录里像消费者一样安装并校验（consumer 测试）；
+13. 生成一次 release notes 冒烟（确保发布脚本本身没坏）。
 
 > 第 11 步是「包能不能被真正装上」的唯一证据：`files` 白名单写错、产物漏打、
 > 依赖装不上，都会在这里暴露，而不是等用户装的时候。
@@ -151,6 +153,6 @@ bash scripts/release-notes.sh /tmp/notes.md
 
 - 用 **pnpm + 锁文件（`--frozen-lockfile`）**，因为本包有真实依赖（`ws`）与 peer 依赖；
 - 自检入口是 `npm run check`，串联本仓库既有的 `version-gate` / `contract-check` / `fence` / `redlines`；
-- 新增 `release-check`（版本三处一致 + 双语 README 互链 + CHANGELOG 条目）与 `verify-package`
-  （包清单契约 + consumer 安装）两个门禁；
+- 新增 `release-check`（版本三处一致 + 双语 README 互链 + CHANGELOG 条目）、`verify-package`
+  （包清单契约 + consumer 安装）与 `render-api-matrix --check`（权限文档不漂移）三个门禁；
 - Node 矩阵只有 24 一条线（`engines.node >= 24.9.0`），不做双版本试探。

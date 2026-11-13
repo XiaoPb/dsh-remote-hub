@@ -28,7 +28,7 @@
  *
  * @module @core/capabilities
  */
-import { SHARED_READ_ENDPOINTS, FULL_ADMIN_ENDPOINTS, NEVER_DELEGATED_ENDPOINTS, isNeverDelegated } from './capabilities-redlines.js'
+import { SHARED_READ_ENDPOINTS, FULL_ADMIN_ENDPOINTS, isNeverDelegated } from './capabilities-redlines.js'
 import { ROLE_CONTROL, ROLE_FULL, ROLE_READ_ONLY, ROLE_NAMES, roleAtMost, type RoleName } from './roles.js'
 
 /** 官方资源种类：`global` 无 id，其余需要具体身份。 */
@@ -372,9 +372,6 @@ export function assertNoRedlineDelegated(): void {
       }
       if (FULL_ADMIN_ENDPOINTS.includes(action) && role !== ROLE_FULL) {
         throw new Error(`capabilities: ${role} must not be granted full administration endpoint ${action}`)
-      }
-      if (NEVER_DELEGATED_ENDPOINTS.includes(action) && !FULL_ADMIN_ENDPOINTS.includes(action)) {
-        throw new Error(`capabilities: ${role} must not be granted redline endpoint ${action}`)
       }
     }
   }

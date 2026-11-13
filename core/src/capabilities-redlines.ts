@@ -5,54 +5,78 @@
  * camelCase —— 文件名不是 namespace）。方法名清单的权威来源是 Typert 注册表；
  * 这里给的是「整条 namespace 一律不给」的前缀式红线，因此不需要逐方法枚举。
  *
- * 为什么整条禁：
+ * 为什么整条禁（DESIGN §8.6.5）：
  * - `credentials/*`：明文凭据写入（`set`/`unset`）与凭据元数据读取（`describe`）。
  * - `settings` 的四个写方法：改宿主配置；`describe` 是只读，不在红线内。
- * - `directoryPicker/*`：`pick` 会在**宿主桌面**弹原生对话框，等于远程操控宿主 UI。
+ * - `directoryPicker/*`：`pick` 会在**宿主桌面**弹原生对话框，等于远程操控宿主 UI；
+ *   `list`/`createDirectory` 同属宿主目录面，一并不外放。
  * - `pluginManager/*`、`pluginMarket/*`：安装/卸载/升级代码 = 远程代码执行。
  * - `pluginInventory/*`：已装插件清单会暴露攻击面。
  * - `account/*`：账号凭据与登录态。
+ * - `dynamicCordisRunner/*`：在宿主里动态执行插件代码，等于远程代码执行。
  * - `remoteAccess/follow`：被 `decide()` **恒放行**，下放等于送出一份能力清单，
  *   且无法用策略拦（必须先在自己的 policy 里再判，见 `policy.ts` 的 `bindings()`
  *   注释）；v1 直接不给。
  * - `$events` / `$events/result`：Gateway 自有面；非 owner 由 `interactions:'none'` 挡住。
+ *
+ * **这些条目对 `read-only`、`control`、`full` 三档角色一律不外放**，包括 `full`：
+ * `full` 是「能传文件、开终端」，不是 DSH owner。
+ *
+ * 红线分四层，`isNeverDelegated()` 是唯一判据，`scripts/redlines.mjs` 与
+ * `test/full-administration.test.mjs` 都只调它：
+ *   1. {@link NEVER_DELEGATED_ENDPOINTS} —— 逐条枚举；
+ *   2. {@link NEVER_DELEGATED_BLANKET} —— 整条 namespace，无豁免；
+ *   3. {@link NEVER_DELEGATED_NAMESPACES} —— 整条 namespace，但允许 {@link SHARED_READ_ENDPOINTS} 里的具名只读；
+ *   4. {@link NEVER_DELEGATED_INTERNALS} —— Gateway 内部面。
  *
  * @module @core/capabilities-redlines
  */
 
 /** Read-only metadata/catalog endpoints shared by every paired role; these never return secret values. */
 export const SHARED_READ_ENDPOINTS: readonly string[] = [
-  'pluginInventory/list',
   'schedule/catalog', 'schedule/history', 'schedule/list',
   'pluginManager/listBundles', 'pluginManager/listPlugins', 'pluginManager/listVersionExemptions', 'pluginManager/registries', 'pluginManager/inspect',
   'pluginMarket/listIndexes', 'pluginMarket/search',
-  'credentials/describe', 'settings/describe', 'directoryPicker/list',
-  'account/getState', 'account/getProfile', 'account/getBalance',
-  'account/watch', 'account/watchExpiry', 'account/getUnnotifiedBonuses', 'account/hasRunningAccountTasks',
-  'dynamicCordisRunner/inventory', 'remoteAccess/follow',
+  'settings/describe',
 ]
 
-/** Full-only mutations and administrative actions. Dynamic execution retains upstream approval checks. */
+/**
+ * Full-only mutations and administrative actions. Dynamic execution retains upstream approval checks.
+ *
+ * 这里**只能放红线以外**的 endpoint：红线条目一律不进任何角色的矩阵，
+ * `assertMatrixIntegrity()` 会在插件加载期拦下这种写法。
+ */
 export const FULL_ADMIN_ENDPOINTS: readonly string[] = [
   'pluginManager/cancelInstall', 'pluginManager/installBundle', 'pluginManager/removeBundle',
   'pluginManager/setBundleEnabled', 'pluginManager/setPluginEnabled', 'pluginManager/setVersionExemption', 'pluginManager/waitForInstall',
   'pluginMarket/setIndexes',
-  'credentials/set', 'credentials/unset',
-  'settings/mutate', 'settings/update', 'settings/replace', 'settings/openSettingsDocument',
-  'directoryPicker/createDirectory',
-  'account/ackBonusNotified', 'account/startSignIn', 'account/cancelSignIn', 'account/signOut',
-  'dynamicCordisRunner/syncInspectManifest', 'dynamicCordisRunner/invoke', 'dynamicCordisRunner/reportClientGuardFailure',
-  'dynamicCordisRunner/reportRenderFailure', 'dynamicCordisRunner/resolveInspectQuery', 'dynamicCordisRunner/resolveRequestRun',
-  'dynamicCordisRunner/runHostHalf', 'dynamicCordisRunner/settleUserRun', 'dynamicCordisRunner/stopFromPanel', 'dynamicCordisRunner/undefineFromPanel',
   'workspace/delete',
 ]
 
-/** Explicit endpoints which remain unavailable to paired devices. */
+/** Explicit endpoints which remain unavailable to paired devices, for every role including Full. */
 export const NEVER_DELEGATED_ENDPOINTS: readonly string[] = [
   'directoryPicker/pick',
+  'directoryPicker/list',
+  'directoryPicker/createDirectory',
+  'pluginInventory/list',
+  'settings/mutate', 'settings/update', 'settings/replace', 'settings/openSettingsDocument',
 ]
 
-/** Namespaces with explicit safe reads and Full-only writes are not blanket redlines. */
+/**
+ * 整组禁用的 namespace 红线（DESIGN §8.6.5）：**没有任何豁免**，整条前缀对全部角色关闭。
+ *
+ * `settings/` 不在这里 —— 它的 `describe` 是显式允许的只读目录，
+ * 因此 `settings` 只按写方法逐条枚举（见 {@link NEVER_DELEGATED_ENDPOINTS}）。
+ */
+export const NEVER_DELEGATED_BLANKET: readonly string[] = [
+  'credentials/',
+  'pluginInventory/',
+  'directoryPicker/',
+  'account/',
+  'dynamicCordisRunner/',
+]
+
+/** 整组禁用、但允许 {@link SHARED_READ_ENDPOINTS} 里具名只读豁免的 namespace。 */
 export const NEVER_DELEGATED_NAMESPACES: readonly string[] = [
   'remoteAccess/', 'pluginManager/', 'pluginMarket/',
 ]
@@ -65,6 +89,11 @@ export const NEVER_DELEGATED_INTERNALS: readonly string[] = [
 
 /**
  * 一个 endpoint 是否落在红线内。
+ *
+ * 判定顺序很重要：**豁免（共享只读）优先于前缀红线**，所以
+ * `pluginManager/listPlugins`（共享只读）不会被 `pluginManager/` 前缀误伤；
+ * 而 `account/*`、`credentials/*`、`dynamicCordisRunner/*` 没有任何豁免，整条关闭。
+ *
  * @param endpoint - `<namespace>/<method>` 或内部名。
  * @returns 命中任一红线时为 true。
  */
@@ -72,12 +101,14 @@ export function isNeverDelegated(endpoint: string): boolean {
   if (NEVER_DELEGATED_ENDPOINTS.includes(endpoint)) return true
   if (SHARED_READ_ENDPOINTS.includes(endpoint) || FULL_ADMIN_ENDPOINTS.includes(endpoint)) return false
   if (NEVER_DELEGATED_INTERNALS.includes(endpoint)) return true
+  if (NEVER_DELEGATED_BLANKET.some(prefix => endpoint.startsWith(prefix))) return true
   return NEVER_DELEGATED_NAMESPACES.some(prefix => endpoint.startsWith(prefix))
 }
 
 /** 扁平的红线清单（文档与断言脚本共用；顺序稳定）。 */
 export const NEVER_DELEGATED: readonly string[] = [
   ...NEVER_DELEGATED_ENDPOINTS,
+  ...NEVER_DELEGATED_BLANKET.map(prefix => `${prefix}*`),
   ...NEVER_DELEGATED_NAMESPACES.map(prefix => `${prefix}*`),
   ...NEVER_DELEGATED_INTERNALS,
 ]

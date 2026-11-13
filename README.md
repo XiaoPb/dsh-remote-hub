@@ -8,7 +8,7 @@
 
 **DSH 双角色远程接管插件（v0.2.5）**
 
-文档：[部署与运维](docs/DEPLOY.md) ｜ [架构](docs/ARCHITECTURE.md) ｜ [设计契约](docs/DESIGN.md) ｜ [文档索引](docs/INDEX.md) ｜ [更新日志](CHANGELOG.md) ｜ [English](README.en.md)
+文档：[部署与运维](docs/DEPLOY.md) ｜ [架构](docs/ARCHITECTURE.md) ｜ [设计契约](docs/DESIGN.md) ｜ [接口权限分布](docs/API-MATRIX.md) ｜ [文档索引](docs/INDEX.md) ｜ [更新日志](CHANGELOG.md) ｜ [English](README.en.md)
 
 一个 Cordis 插件，让**一台 DSH 去操作另一台 DSH**。配对之后，控制端里受支持的业务视图指向目标 Host —— 会话、工作区、文件、任务都在远端；而 Remote Hub 自己的设备管理页仍然留在控制端本地。
 
@@ -127,6 +127,7 @@ CI 跑上面同一套。发布走 CI/CD，**不接受本地手工 `npm publish`*
 | [docs/DEPLOY.md](docs/DEPLOY.md) | 部署、配置项、隧道选型、巡检、故障排查 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 数据通路、身份、授权、持久化 |
 | [docs/DESIGN.md](docs/DESIGN.md) | 角色语义、状态归属、支持边界 |
+| [docs/API-MATRIX.md](docs/API-MATRIX.md) | **全部接口 × 角色权限分布表**（自动生成） |
 | [docs/RELEASE.md](docs/RELEASE.md) | CI/CD 发布流程与管控 |
 | [CHANGELOG.md](CHANGELOG.md) | 版本变更记录 |
 

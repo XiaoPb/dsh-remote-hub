@@ -53,6 +53,8 @@
     "verify": "npm run typecheck && npm run build && npm run test && node scripts/version-gate.mjs && node scripts/contract-check.mjs",
     "check": "node scripts/verify-package.mjs && node scripts/run-all-tests.mjs && node scripts/version-gate.mjs && node scripts/contract-check.mjs && node scripts/fence.mjs && node scripts/redlines.mjs",
     "release:check": "node scripts/release-check.mjs",
+    "docs:matrix": "node scripts/render-api-matrix.mjs",
+    "docs:matrix:check": "node scripts/render-api-matrix.mjs --check",
     "pack:dry": "npm pack --dry-run",
     "prepack": "node scripts/verify-package.mjs --no-pack"
   },
