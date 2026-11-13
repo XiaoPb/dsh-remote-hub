@@ -29,14 +29,15 @@ test('host-native picker and unknown administration remain denied', () => {
   assert.equal(isNeverDelegated('pluginManager/unknownWrite'), true)
 })
 
-test('credentials, account, plugin inventory and host directory surfaces are red lines for every role', () => {
+test('account, plugin inventory and host directory surfaces are red lines for every role', () => {
   const redlines = [
-    'credentials/describe', 'credentials/set', 'credentials/unset',
-    'settings/update', 'settings/replace', 'settings/mutate', 'settings/openSettingsDocument',
+    'settings/openSettingsDocument',
     'directoryPicker/pick', 'directoryPicker/list', 'directoryPicker/createDirectory',
     'pluginInventory/list',
     'account/getState', 'account/getProfile', 'account/getBalance',
     'remoteAccess/follow',
+    // 未登记的 credentials / settings 方法仍然拒绝
+    'credentials/rotate', 'credentials/reveal', 'settings/import',
   ]
   for (const endpoint of redlines) {
     assert.equal(isNeverDelegated(endpoint), true, `${endpoint} must be never-delegated`)
@@ -44,7 +45,38 @@ test('credentials, account, plugin inventory and host directory surfaces are red
       assert.equal(allActionsFor(role).includes(endpoint), false, `${role} must not hold ${endpoint}`)
     }
   }
-  // `full` 是「能传文件、开终端」，不是 DSH owner：它不得持有任何红线 endpoint。
-  const leaked = allActionsFor('full').filter(isNeverDelegated)
-  assert.deepEqual(leaked, [])
+})
+
+test('0.2.6: Full may write configuration, credentials and install plugins', () => {
+  const fullOnly = [
+    'settings/update', 'settings/replace', 'settings/mutate',
+    'credentials/set', 'credentials/unset',
+    'pluginManager/installBundle', 'pluginManager/updateBundle', 'pluginManager/removeBundle',
+    'pluginManager/setPluginEnabled', 'pluginManager/setBundleEnabled',
+    'pluginManager/setVersionExemption', 'pluginManager/cancelInstall', 'pluginManager/waitForInstall',
+    'pluginMarket/setIndexes',
+  ]
+  for (const endpoint of fullOnly) {
+    assert.ok(allActionsFor('full').includes(endpoint), `full must be able to call ${endpoint}`)
+    assert.equal(allActionsFor('control').includes(endpoint), false, `control must not call ${endpoint}`)
+    assert.equal(allActionsFor('read-only').includes(endpoint), false, `read-only must not call ${endpoint}`)
+    assert.equal(isNeverDelegated(endpoint), false, `${endpoint} must not be a red line any more`)
+  }
+})
+
+test('0.2.6: providers and models can be discovered by every role', () => {
+  for (const endpoint of ['llm/listProviders', 'llm/listConfigurableProviders', 'session/modelCatalog', 'settings/describe']) {
+    for (const role of ['read-only', 'control', 'full']) {
+      assert.ok(allActionsFor(role).includes(endpoint), `${role} must be able to call ${endpoint}`)
+    }
+  }
+  // credentials/describe 只返回「是否已设置」，三档都要能看设置页的 Key 行。
+  assert.equal(isNeverDelegated('credentials/describe'), false)
+  assert.ok(allActionsFor('read-only').includes('credentials/describe'))
+})
+
+test('official login state (account/*) stays uncontrollable', () => {
+  for (const endpoint of ['account/getState', 'account/getProfile', 'account/getBalance', 'account/signOut', 'account/startSignIn']) {
+    assert.equal(isNeverDelegated(endpoint), true, `${endpoint} must stay a red line`)
+  }
 })

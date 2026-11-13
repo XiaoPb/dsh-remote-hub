@@ -56,6 +56,11 @@ import { createOutboundTargetStore, outboundTargetView } from '../outbound-targe
 export interface HubServicesDeps {
   streams: StreamEngine
   approvals: ApprovalBridge
+  /**
+   * 敏感写入审批（0.2.6 D-16）。`hub/answerApproval` 同时承载它与工具审批；
+   * 缺席时敏感写入一律 fail-closed（dispatch 侧已拒绝，不会有待答条目）。
+   */
+  sensitiveApprovals?: import('../sensitive-approval.js').SensitiveApprovalGate
   devices: DeviceStore
   tokens: TokenService
   policy: AccessPolicyHandles
@@ -397,6 +402,11 @@ export class HubDevicesService extends TypertRemoteService {  constructor(ctx: C
     const { deviceId, role } = caller(this.ctx)
     if (!allActionsFor(role).includes('hub/answerApproval')) {
       deny('remote-access/denied', 'hub/answerApproval is not granted to this role')
+    }
+    // 同一个回复方法承载两类审批：工具审批（approval-bridge）与敏感写入审批
+    // （sensitive-approval，0.2.6 D-16）。先问敏感审批，命中就不必再进工具桥。
+    if (this.deps.sensitiveApprovals?.answer({ deviceId, requestId, outcome }) === true) {
+      return { ok: true }
     }
     return this.deps.approvals.answer({ deviceId, role, requestId, outcome })
   }

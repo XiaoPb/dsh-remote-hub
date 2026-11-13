@@ -6,7 +6,7 @@
 [![Release](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml/badge.svg)](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml)
 [![npm](https://img.shields.io/npm/v/@xiaopb/dsh-remote-hub?label=npm)](https://www.npmjs.com/package/@xiaopb/dsh-remote-hub)
 
-**DSH 双角色远程接管插件（v0.2.5）**
+**DSH 双角色远程接管插件（v0.2.6）**
 
 文档：[部署与运维](docs/DEPLOY.md) ｜ [架构](docs/ARCHITECTURE.md) ｜ [设计契约](docs/DESIGN.md) ｜ [接口权限分布](docs/API-MATRIX.md) ｜ [文档索引](docs/INDEX.md) ｜ [更新日志](CHANGELOG.md) ｜ [English](README.en.md)
 
@@ -19,8 +19,9 @@
 ## 核心功能
 
 - **扫码或短码配对**：二维码票据与 8 位 Crockford 短码，**TTL 均为 15 秒**，配对成功即签发持久设备令牌。无界面主机用 `dsh-remote-hub-pair` 命令行出码。
-- **三级角色，由 DSH Gateway 强制**：`read-only` / `control` / `full` 绑定到 endpoint 与资源，未知 endpoint **默认拒绝**；`full` **不等于** DSH owner。
-- **红线不可下放**：`credentials/*`、`settings` 写方法、`directoryPicker/*`、`pluginManager/*`、`pluginMarket/*`、`account/*`、`remoteAccess/follow`、`$events` 无论何种角色都不外放，CI 每次构建都用断言复核。
+- **三级角色，由 DSH Gateway 强制**：`read-only` / `control` / `full` 绑定到 endpoint 与资源，未知 endpoint **默认拒绝**；`full` **不等于** DSH owner。**`full` 可以写配置、配置 Provider API Key、安装/启停插件**，但这些写入**每次都要本机 owner 在审批卡上放行**。
+- **红线不可下放**：`account/*`（官方登录态）、`settings/openSettingsDocument`、`directoryPicker/*`、`pluginInventory/*`、`dynamicCordisRunner/*`、`remoteAccess/follow`、`$events` 无论何种角色都不外放；`settings/*`、`credentials/*`、`pluginManager/*`、`pluginMarket/*` 是**前缀红线 + 具名豁免**，未登记的方法一律拒绝。CI 每次构建都用断言复核。
+- **密钥永不明文外流**：写入 API Key 时，审批卡、审计日志、诊断文件里的密钥一律掩码为 `sk-****abcd`；审批超时无人应答 = **拒绝**（fail-closed），不会静默放行。
 - **官方传输接管**：HTTP RPC（`/remote/rpc`）与官方 WebSocket mux（`/remote/ws`）都指向已配对的 Host，不替换 DSH 内核。
 - **默认零暴露**：守卫是**独立**监听，只绑回环字面量（默认 `127.0.0.1:8443`），端口被占时直接报错、**不静默换端口**；未配对设备 fail-closed。隧道默认 `kind: 'none'`。
 - **凭据落点**：出站令牌由控制端本地 Host 保存（`~/.dsh/remote-hub/outbound-targets.json`，POSIX `0600`/`0700`）；浏览器侧只保存不透明 target ID，**不含明文令牌**；目标端设备表只存 `sha256(token)`。
@@ -48,7 +49,7 @@ pnpm run build
 dsh plugin --profile web add link:$PWD
 ```
 
-主包为 `@xiaopb/dsh-remote-hub@0.2.5`，伴生包为 `@xiaopb/dsh-remote-paths@0.2.5`。要求 **Node.js ≥ 24.9.0**、**DSH ≥ 0.2.1-rc.2 < 0.3.0-0**。
+主包为 `@xiaopb/dsh-remote-hub@0.2.6`，伴生包为 `@xiaopb/dsh-remote-paths@0.2.6`。要求 **Node.js ≥ 24.9.0**、**DSH ≥ 0.2.1-rc.2 < 0.3.0-0**。
 
 ---
 

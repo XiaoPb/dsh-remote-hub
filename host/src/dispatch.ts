@@ -29,14 +29,72 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { PeerScope } from '@deepseek-ai/dsh-typert-protocol'
 
-import { ERROR_CODES } from '@core/index.js'
+import { ERROR_CODES, OFFICIAL_ERROR_CODES } from '@core/index.js'
 import type { RoleName } from '@core/index.js'
 
 import { remoteDevicePrincipal } from './principal.js'
+import { requiresApproval, type SensitiveApprovalGate } from './sensitive-approval.js'
 import type { TokenService } from './token.js'
 
 /** 内部主机名；不参与判定，只用来构造合法的 `Request.url`。 */
 export const DISPATCH_ORIGIN = 'http://hub.internal'
+
+/** dispatcher 的可选依赖（0.2.6 起：敏感写入的 owner 审批网关）。 */
+export interface DispatcherOptions {
+  /** 缺席表示本 composition 没有审批能力：敏感写入一律 fail-closed。 */
+  approvals?: SensitiveApprovalGate
+}
+
+/** 从信封里取出 `payload`（官方 `client-request` 外壳的字段名）。 */
+function envelopePayload(envelope: unknown): unknown {
+  if (envelope === null || typeof envelope !== 'object') return null
+  const record = envelope as Record<string, unknown>
+  return record.payload ?? null
+}
+
+/** 从信封里取出 `rpcId`，让拒绝响应能被客户端正确关联。 */
+function envelopeRpcId(envelope: unknown): string {
+  if (envelope === null || typeof envelope !== 'object') return 'unknown'
+  const value = (envelope as Record<string, unknown>).rpcId
+  return typeof value === 'string' && value !== '' ? value : 'unknown'
+}
+
+/**
+ * 请 owner 批准一次敏感写入；被拒时构造官方形状的错误响应。
+ *
+ * 拒绝码用官方的 `remote-access/denied`：客户端的 `carrier.ts` 已经把它渲染成
+ * 「入口不该存在 / 需要授权」的提示，而不是当成网络错误重试。
+ *
+ * @param gate - 审批网关。
+ * @param endpoint - `<namespace>/<method>`。
+ * @param envelope - 官方信封（`payload` 可能含明文密钥）。
+ * @param peer - 发起请求的设备 Peer（principal 里带 `deviceId` / `role`）。
+ * @returns `null` 表示放行；否则是要直接返回的拒绝 `Response`。
+ */
+async function requireOwnerApproval(
+  gate: SensitiveApprovalGate,
+  endpoint: string,
+  envelope: unknown,
+  peer: PeerScope,
+): Promise<Response | null> {
+  const principal = peer.principal as unknown as { deviceId?: unknown, role?: unknown }
+  const deviceId = typeof principal?.deviceId === 'string' ? principal.deviceId : 'unknown'
+  const role = principal?.role as RoleName
+  const decision = await gate.check({ deviceId, role, endpoint, payload: envelopePayload(envelope) })
+  if (decision.allowed) return null
+  return Response.json({
+    type: 'server-response',
+    rpcId: envelopeRpcId(envelope),
+    result: {
+      ok: false,
+      error: {
+        code: OFFICIAL_ERROR_CODES.remoteAccessDenied,
+        message: `remote-hub: ${endpoint} requires owner approval (${decision.reason})`,
+        details: { action: endpoint, reason: decision.reason, approval: 'required' },
+      },
+    },
+  }, { status: 403 })
+}
 
 /** 一个设备的 Peer 条目。 */
 export interface DevicePeer {
@@ -79,10 +137,11 @@ interface ConnectionHandle {
  * 创建 dispatcher。
  * @param ctx - Host Context，必须已注入 `connection`。
  * @param tokens - 令牌服务（订阅吊销/角色变更以自动丢 Peer）。
+ * @param options - 可选依赖（敏感写入的 owner 审批网关）。
  * @returns `Dispatcher`。
  * @throws 当 `ctx.connection` 缺失时（fail loud）。
  */
-export function createDispatcher(ctx: Context, tokens: TokenService): Dispatcher {
+export function createDispatcher(ctx: Context, tokens: TokenService, options: DispatcherOptions = {}): Dispatcher {
   // **必须走 reflect.get 读实例**：reflect.props[name] 是声明元数据而非服务对象
   // （2026-11-11 实机教训，与 policy.ts 同修）。调用点在 ctx.inject 回调里（服务
   // 已就绪），strict=false 宽松读不抛错。
@@ -150,6 +209,12 @@ export function createDispatcher(ctx: Context, tokens: TokenService): Dispatcher
             error: { code: ERROR_CODES.badRequest, message: 'invalid Remote endpoint', details: {} },
           },
         }, { status: 400 })
+      }
+      // 敏感写入（写配置 / 写凭据 / 装插件）必须逐次获得 owner 审批。
+      // 这一步在 sharedFetch 之前：审批不通过就不构造信封、不触达 Gateway。
+      if (options.approvals !== undefined && requiresApproval(endpoint)) {
+        const deny = await requireOwnerApproval(options.approvals, endpoint, envelope, peer)
+        if (deny !== null) return deny
       }
       const request = new Request(`${DISPATCH_ORIGIN}/api/${endpoint}`, {
         method: 'POST',

@@ -55,7 +55,7 @@ export const ENDPOINT_TABLE: Readonly<Record<string, EndpointFact>> = {
     kind: 'global' as const,
     ...(['account/watch', 'account/watchExpiry', 'remoteAccess/follow'].includes(endpoint) ? { stream: true as const } : {}),
   }])),
-  ...Object.fromEntries(['pluginManager/listBundles', 'pluginManager/listPlugins', 'pluginManager/listVersionExemptions', 'pluginManager/registries', 'pluginManager/inspect', 'pluginMarket/listIndexes', 'pluginMarket/search'].map(endpoint => [endpoint, { kind: 'global' as const }])),
+  ...Object.fromEntries(['pluginManager/listBundles', 'pluginManager/listPlugins', 'pluginManager/listVersionExemptions', 'pluginManager/registries', 'pluginManager/inspect', 'pluginManager/listVersions', 'pluginManager/readBundleDetail', 'pluginMarket/listIndexes', 'pluginMarket/search', 'pluginMarket/readEntryDetail'].map(endpoint => [endpoint, { kind: 'global' as const }])),
   'directoryPicker/pick': { kind: 'global' },
   // ── session（`sessionController`，namespace `session`）──────────────────────
   'session/list': { kind: 'global' },
@@ -135,7 +135,7 @@ export const ENDPOINT_TABLE: Readonly<Record<string, EndpointFact>> = {
   'userQuestions/answer': { kind: 'session' },
   'userQuestions/attachWait': { kind: 'session', stream: true },
 
-  // ── settings（只读的 describe；写方法在红线里）────────────────────────────
+  // ── settings（只读 describe；写方法在 FULL_ADMIN_ENDPOINTS，每次调用需审批）────
   'settings/describe': { kind: 'global' },
 
   // ── UI 必需只读目录（2026-11-13 页面 CDP 实测补齐）──────────────────────

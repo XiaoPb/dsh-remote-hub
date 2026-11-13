@@ -143,6 +143,17 @@ export type {
   AnswerApprovalResult,
 } from './approval-bridge.js'
 export {
+  createSensitiveApprovalGate,
+  requiresApproval,
+  summarizeForApproval,
+  APPROVAL_CACHE_MS,
+} from './sensitive-approval.js'
+export type {
+  SensitiveApprovalDecision,
+  SensitiveApprovalGate,
+  SensitiveApprovalRequest,
+} from './sensitive-approval.js'
+export {
   UPLOAD_ENDPOINT,
   PREVIEW_TEXT_ENDPOINT,
   PREVIEW_BINARY_ENDPOINT,

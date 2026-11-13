@@ -25,12 +25,15 @@ const mod = await tryLoadLib()
 const report = createReport('redlines.log')
 
 const REDLINE_ENDPOINTS = [
-  'credentials/describe', 'credentials/set', 'credentials/unset',
-  'settings/update', 'settings/replace', 'settings/mutate', 'settings/openSettingsDocument',
+  // 0.2.6: credentials/describe|set|unset 与 settings 写方法已按 D-16 放开（Full 专属 + 逐次审批），
+  // settings/openSettingsDocument（宿主打开设置文档）仍是红线。
+  'settings/openSettingsDocument',
   'directoryPicker/pick', 'directoryPicker/list', 'directoryPicker/createDirectory',
   'pluginInventory/list',
   'account/getState', 'account/getProfile', 'account/getBalance',
   'remoteAccess/follow',
+  // 未登记的 credentials / settings 方法依旧整条拒绝（前缀红线 + 具名豁免）。
+  'credentials/rotate', 'credentials/reveal', 'settings/import',
 ]
 
 const neverDelegatedFn = fn(mod, 'isNeverDelegated')

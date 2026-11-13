@@ -36,6 +36,7 @@ import { createDispatcher } from './dispatch.js'
 import { remoteDevicePrincipal } from './principal.js'
 import { PAIR_ISSUE_GLOBAL, PAIR_ISSUE_PIN_FILE, startGuard, type GuardDeps, type GuardHandle } from './guard.js'
 import { createGuardMux } from './guard-mux.js'
+import { createSensitiveApprovalGate } from './sensitive-approval.js'
 import { createMetricsCollector } from './metrics.js'
 import { createPairingService } from './pairing.js'
 import { createVisibleResourceTracker, registerDevicePolicy } from './policy.js'
@@ -660,8 +661,19 @@ function assembleRemoteHub(ctx: Context, config: ConfigType): void {
       push(() => approvals.dispose())
 
       // 7. dispatcher（惰性 createPeer；interactions:'none'）
+      //    敏感写入（写配置 / 写凭据 / 装插件）在派发前必须逐次获得 owner 审批（D-16）。
       at('dispatcher')
-      const dispatcher = createDispatcher(ctx, tokens)
+      at('sensitive-approval')
+      const sensitiveApprovals = createSensitiveApprovalGate({
+        streams,
+        config: {
+          approvalBridgeTimeoutMs: config.approvalBridgeTimeoutMs,
+          bridgeApprovals: config.bridgeApprovals,
+        },
+        onAudit: row => { audit('sensitive-approval', row as unknown as Record<string, unknown>) },
+      })
+      push(() => sensitiveApprovals.dispose())
+      const dispatcher = createDispatcher(ctx, tokens, { approvals: sensitiveApprovals })
       push(() => dispatcher.dispose())
 
       /**
@@ -717,6 +729,7 @@ function assembleRemoteHub(ctx: Context, config: ConfigType): void {
       const services = registerRemoteServices(ctx, {
         streams,
         approvals,
+        sensitiveApprovals,
         devices,
         tokens,
         policy,

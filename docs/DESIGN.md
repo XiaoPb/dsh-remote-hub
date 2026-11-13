@@ -1,6 +1,6 @@
 # Design and Security Contract
 
-**Version:** 0.2.5
+**Version:** 0.2.6
 **Status:** Web-to-Web primary path verified; Desktop matrix and several Host-management workflows remain incomplete.
 
 ## Product behavior
@@ -15,9 +15,13 @@ The guard always creates a `remote-device` principal. The target Host binds the 
 
 - `read-only`: inspect authorized resources and read-only catalogs; no mutation or execution.
 - `control`: perform explicitly listed session/workspace actions on bound resources.
-- `full`: additionally perform explicitly listed file/terminal and selected administrative actions.
+- `full`: additionally perform explicitly listed file/terminal and selected administrative actions — **writing configuration, setting provider API keys, and installing/enabling plugins**.
 
-Unknown endpoints deny by default. `full` is not equivalent to DSH owner. Credentials, account/login, arbitrary settings, plugin installation, and dynamic Host code execution require separately reviewed APIs and/or Host approval. The current implementation deliberately keeps those boundaries; UI must explain unavailable operations.
+Unknown endpoints deny by default. `full` is not equivalent to DSH owner.
+
+### Sensitive writes require per-call owner approval (D-16)
+
+Every write to configuration (`settings/{update,replace,mutate}`), credentials (`credentials/{set,unset}`) or plugin lifecycle (`pluginManager/*` writes, `pluginMarket/setIndexes`) is gated a second time by an **owner approval card** raised by the Host before the request reaches the Gateway. An unanswered approval times out to a denial; approvals are cached for 60 s per device and payload, denials never are. Secrets in those payloads are masked (`sk-****abcd`) before they reach the approval card, the audit log or any diagnostic file.
 
 ## State ownership
 

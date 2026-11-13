@@ -98,15 +98,31 @@ const notGranted = allEndpoints.filter(e => !inMatrix.has(e))
 const byKind = kind => granted.filter(e => fact(e).kind === kind)
 
 // 红线中『虽然不在 ENDPOINT_TABLE，但仍在红线清单里』的条目（例如 account/* 的未登记方法）。
-const explicitRedlines = mod.REDLINE_DOC_ENDPOINTS
-  ?? [
-    'credentials/describe', 'credentials/set', 'credentials/unset',
-    'settings/update', 'settings/replace', 'settings/mutate', 'settings/openSettingsDocument',
-    'directoryPicker/pick', 'directoryPicker/list', 'directoryPicker/createDirectory',
-    'pluginInventory/list',
-    'account/getState', 'account/getProfile', 'account/getBalance',
-    'remoteAccess/follow',
-  ]
+const explicitRedlines = [
+  'settings/openSettingsDocument',
+  'directoryPicker/pick', 'directoryPicker/list', 'directoryPicker/createDirectory',
+  'pluginInventory/list',
+  'account/getState', 'account/getProfile', 'account/getBalance',
+  'remoteAccess/follow',
+  'credentials/rotate', 'credentials/reveal', 'settings/import',
+]
+
+/**
+ * 每条红线为什么拒绝。
+ * @param {string} endpoint - endpoint。
+ * @returns {string} 原因。
+ */
+function redlineReason(endpoint) {
+  if (endpoint === 'settings/openSettingsDocument') return '在宿主打开设置文档 = 操控宿主 UI'
+  if (endpoint.startsWith('directoryPicker/')) return '宿主桌面原生对话框/目录面'
+  if (endpoint.startsWith('pluginInventory/')) return '已装插件清单暴露攻击面'
+  // 前缀红线 + 具名豁免：未登记的方法一律拒绝（credentials/ 、settings/ 都适用）
+  if (endpoint.startsWith('credentials/') || endpoint.startsWith('settings/')) {
+    return '未登记的 credentials / settings 方法，前缀红线默认拒绝'
+  }
+  if (endpoint.startsWith('account/')) return '账号凭据与登录态（官方登录态不可控）'
+  return '官方恒放行，下放等于送出能力清单'
+}
 
 const countFor = role => allow[role].size
 
@@ -166,17 +182,21 @@ ${renderGroup(byKind('workspace'), 'workspace')}
 
 | endpoint | 拒绝原因 | 只读 | 控制 | 完全 |
 | --- | --- | :---: | :---: | :---: |
-${explicitRedlines.map(endpoint => {
-  const reason = endpoint.startsWith('credentials/') ? '明文凭据与凭据元数据'
-    : endpoint.startsWith('settings/') ? '改宿主配置'
-      : endpoint.startsWith('directoryPicker/') ? '宿主桌面原生对话框/目录面'
-        : endpoint.startsWith('pluginInventory/') ? '已装插件清单暴露攻击面'
-          : endpoint.startsWith('account/') ? '账号凭据与登录态'
-            : '官方恒放行，下放等于送出能力清单'
-  return `| \`${endpoint}\` | ${reason} | ${cell('read-only', endpoint)} | ${cell('control', endpoint)} | ${cell('full', endpoint)} |`
-}).join('\n')}
+${explicitRedlines.map(endpoint =>
+  `| \`${endpoint}\` | ${redlineReason(endpoint)} | ${cell('read-only', endpoint)} | ${cell('control', endpoint)} | ${cell('full', endpoint)} |`).join('\n')}
 
 整组禁用的 namespace（无豁免）：${(mod.NEVER_DELEGATED_BLANKET ?? []).map(p => `\`${p}*\``).join('、')}。
+
+## 3.1 需要 owner 逐次审批的接口（0.2.6）
+
+下面这些接口**即使 \`full\` 有权限**，每次调用也必须由本机 owner 在审批卡上放行，
+否则返回 \`remote-access/denied\`。审批卡里的密钥一律掩码（\`sk-****abcd\`），
+**超时无人应答 = 拒绝**（fail-closed）。
+
+| endpoint | 审批 | 密钥掩码 |
+| --- | :---: | :---: |
+${(mod.APPROVAL_REQUIRED_ENDPOINTS ?? []).map(endpoint =>
+  `| \`${endpoint}\` | 必须 | ${(mod.SECRET_BEARING_ENDPOINTS ?? []).includes(endpoint) ? '是' : '—'} |`).join('\n')}
 
 ## 4. 未授予任何角色的 endpoint（${notGranted.length} 个）
 

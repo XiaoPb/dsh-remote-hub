@@ -3,6 +3,53 @@
 本文件记录 `@xiaopb/dsh-remote-hub` 与伴生包 `@xiaopb/dsh-remote-paths` 的公开变更。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)；`0.x` 期间的次版本号可能包含不兼容变更。
 
+## [0.2.6] - 2026-11-13
+
+**Full 可以写配置、配置 Provider API Key、安装插件；官方登录态仍不可控。**
+
+### 新增
+
+- **Provider / API Key / 模型配置（远端）**：`full` 现在可以
+  - `credentials/describe`（三档共享只读，只返回「是否已设置/来源/是否可写」，**从不返回密钥值**）
+  - `credentials/set` / `credentials/unset`（仅 `full`）
+  - `settings/update` / `settings/replace` / `settings/mutate`（仅 `full`）
+  远端设置页因此能渲染 API Key 行、保存 Key、选择 Provider 与模型。
+- **插件管理（远端）**：`full` 可以安装 / 升级 / 卸载 / 启停插件与 bundle，
+  以及配置市场源（`pluginMarket/setIndexes`）；插件/市场的只读目录三档共享。
+- **逐次 owner 审批（D-16）**：上面每一项写入，每次调用都会向本机 owner 投递审批卡，
+  未获批准就是 `remote-access/denied`。
+  - **超时无人应答 = 拒绝**（fail-closed），绝不静默放行；
+  - 同一设备 + 同一载荷 60 秒内复用批准，避免一次保存触发多轮审批；**拒绝从不缓存**；
+  - 审批与工具审批复用同一条 `hub/answerApproval` 回复通道与可见性约束。
+- **密钥掩码**：`core/src/redact.ts` 统一脱敏，审批卡 / 审计 / 诊断里密钥显示为
+  `sk-****abcd`；同时识别「字段名像密钥」与「值像凭据」两种情况，避免漏掩码。
+
+### 变更（不兼容）
+
+- `settings/{update,replace,mutate}`、`credentials/{set,unset}` 以及 `pluginManager/*`、
+  `pluginMarket/setIndexes` 的写方法**不再属于红线**，改为 `full` 专属 + 逐次审批。
+  安全模型从「不做」变为「能做，但每次都要 owner 点头」。
+- 前缀红线新增 `credentials/`、`settings/`：**未登记的方法**（如 `credentials/rotate`）
+  仍然默认拒绝；`settings/openSettingsDocument` 保持红线。
+- `SHARED_READ_ENDPOINTS` 新增 `credentials/describe`、`pluginManager/listVersions`、
+  `pluginManager/readBundleDetail`、`pluginMarket/readEntryDetail`。
+
+### 保持不变
+
+- `account/*`（官方登录态与余额）**仍不可控**，按需求保持红线。
+- `directoryPicker/*`、`pluginInventory/*`、`dynamicCordisRunner/*`、`remoteAccess/follow`、`$events` 仍是红线。
+
+### 修复
+
+- 审批超时用的定时器曾 `unref()`，等待期间若事件循环无其他句柄会导致超时永不触发、
+  请求静默挂死；已去掉 `unref()`。
+
+### 工程与发布
+
+- 新增 `test/sensitive-approval.test.mjs`（17 项，含「审批卡/审计不含明文密钥」「超时不放行」
+  「拒绝不缓存」「别的设备不能代答」回归）；`test/full-administration.test.mjs` 覆盖新权限矩阵。
+- `docs/API-MATRIX.md` 新增「需要 owner 逐次审批的接口」一节，CI 断言与代码一致。
+
 ## [0.2.5] - 2026-11-13
 
 首个公开版本，同时作为 CI/CD 发布流水线的基线版本。
