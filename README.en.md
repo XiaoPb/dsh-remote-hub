@@ -6,9 +6,11 @@
 [![Release](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml/badge.svg)](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml)
 [![npm](https://img.shields.io/npm/v/@xiaopb/dsh-remote-hub?label=npm)](https://www.npmjs.com/package/@xiaopb/dsh-remote-hub)
 
-**Dual-role remote takeover for DSH (v0.3.0)**
+**Dual-role remote takeover for DSH (v0.3.1)**
 
 Docs: [Deployment](docs/DEPLOY.md) ｜ [Architecture](docs/ARCHITECTURE.md) ｜ [Design contract](docs/DESIGN.md) ｜ [API permission matrix](docs/API-MATRIX.md) ｜ [Doc index](docs/INDEX.md) ｜ [Changelog](CHANGELOG.md) ｜ [中文](README.md)
+
+> **⚠️ Security warning**: a `full` pairing means remote code execution plus the ability to rewrite host configuration and API keys — and since 0.3.1 there is **no approval step**. Grant `full` only to fully trusted devices. See the security notice below.
 
 A Cordis plugin that lets **one DSH instance operate another**. After pairing, supported business views on the controller point to the target Host — sessions, workspaces, files and jobs live remotely, while Remote Hub device management stays local to the controller.
 
@@ -16,17 +18,69 @@ A Cordis plugin that lets **one DSH instance operate another**. After pairing, s
 
 ---
 
+## ⚠️ Security notice (read this first)
+
+This plugin hands one machine to another. **Pairing is authorisation.** Understand these facts before use.
+
+### 1. A `full` pairing means remote code execution (no approval step since 0.3.1)
+
+| Capability | `read-only` | `control` | `full` |
+| --- | :---: | :---: | :---: |
+| View sessions / workspaces / files / plugin inventory | yes | yes | yes |
+| Drive sessions (prompt, cancel, answer approvals) | no | yes | yes |
+| Upload files, open terminals, browse remote directories | no | no | yes |
+| **Rewrite host configuration / write API keys** | no | no | yes |
+| **Install / remove / enable plugins** | no | no | yes |
+
+Writes from `full` **take effect immediately; the local owner is no longer asked.** That means the paired device can:
+
+- **install arbitrary plugins**, whose code then runs on your machine — equivalent to code execution under your account;
+- **rewrite provider settings and API keys**, pointing your model calls at an endpoint of their choosing or installing their own key;
+- change other host settings and thereby influence every later session.
+
+> **Grant `full` only to fully trusted devices.** When unsure, use `control` (drives sessions, cannot touch configuration or plugins).
+> Outside single-operator or "my own other machine" scenarios, think twice about `full`.
+
+### 2. The token is the identity; a leak is replayable
+
+- Pairing issues a **long-lived device token** (bearer) that can be replayed until revoked;
+- Never screenshot or forward the pairing QR code or short code — the 15-second TTL and single use are mitigations, not screenshot protection;
+- If you suspect a leak, **revoke that device immediately** in "Connected devices" and review the audit log.
+
+### 3. Loopback by default; tunnels must be declared
+
+- The guard binds `127.0.0.1:8443` and denies unpaired devices (fail-closed);
+- Crossing a network requires a tunnel **plus** an explicit `publicAuthorities` entry, otherwise the origin fence rejects every tunnelled request;
+- **Never point a tunnel at `:3080`** (the DSH Web GUI) — that exposes owner-level access publicly. The plugin asserts this while assembling tunnel arguments and refuses to start.
+
+### 4. Secrets and logs
+
+- Audit logs, diagnostics and `host-status.json` **never contain tokens or API keys**; payloads for secret-bearing endpoints are masked (`sk-****abcd`) first;
+- The token files under `~/.dsh/remote-hub/` are **plaintext at rest**, protected only by OS permissions (`0600`/`0700`) — not an OS keychain;
+- While taking over, the **browser** holds the token for the target host. Do not take over from an untrusted machine.
+
+### 5. What is deliberately out of reach
+
+- `account/*` (official login state and balance), `dynamicCordisRunner/*` (dynamic execution),
+  `directoryPicker/pick` (host-native dialog) and `settings/openSettingsDocument` stay **closed to every role**;
+- `full` is **not** DSH owner: host-side plugin lifecycle and credential management remain governed by DSH's own policy and host approval.
+
+The complete per-endpoint matrix is in [API permission matrix](docs/API-MATRIX.md).
+
+---
+
 ## Features
 
 - **Pair by QR or short code**: a QR ticket and an 8-character Crockford code, both with a **15-second TTL**; a successful pair issues a persistent device token. Headless hosts get a CLI: `dsh-remote-hub-pair`.
-- **Three roles enforced by DSH Gateway**: `read-only` / `control` / `full` are bound to endpoints and resources; unknown endpoints **deny by default**; `full` is **not** DSH owner. **`full` may write configuration, set provider API keys, and install/enable/disable plugins** — but every such write **requires the local owner to approve it on an approval card**.
+- **Three roles enforced by DSH Gateway**: `read-only` / `control` / `full` are bound to endpoints and resources; unknown endpoints **deny by default**; `full` is **not** DSH owner. **`full` is fully opened up**: writing configuration, setting provider API keys and installing/removing/enabling plugins all take effect immediately, with no approval card.
 - **Red lines are never delegated**: `account/*` (official login state), `settings/openSettingsDocument`, `directoryPicker/*`, `pluginInventory/*`, `dynamicCordisRunner/*`, `remoteAccess/follow` and `$events` stay host-local for every role; `settings/*`, `credentials/*`, `pluginManager/*` and `pluginMarket/*` are **prefix red lines with named exemptions**, so unregistered methods are always denied. CI re-asserts this on every build.
-- **Secrets never travel in the clear**: when writing an API key, the approval card, audit log and diagnostics show only a masked value (`sk-****abcd`); an unanswered approval times out to **deny** (fail-closed), never a silent pass.
+- **Plugins stay readable on every pairing**: the installed-plugin inventory, plugin/market catalogs, versions and details are open to `read-only`, `control` and `full`.
+- **Secrets never travel in the clear**: when writing an API key, the audit log and diagnostics still show only a masked value (`sk-****abcd`) — dropping the approval step does not weaken redaction.
 - **Official transport takeover**: HTTP RPC (`/remote/rpc`) and the official WebSocket mux (`/remote/ws`) both target the paired Host. The DSH kernel is not replaced.
 - **Zero exposure by default**: the guard is an **independent** listener bound to a loopback literal (default `127.0.0.1:8443`). An occupied port fails loudly — it never silently shifts ports — and unpaired devices are fail-closed. Tunnelling defaults to `kind: 'none'`.
 - **Credential placement**: outbound tokens are stored by the controller's local Host (`~/.dsh/remote-hub/outbound-targets.json`, POSIX `0600`/`0700`). The browser keeps only an opaque target ID — **no bearer token** — and the target-side device table stores only `sha256(token)`.
 - **Disconnect is recoverable**: disconnecting switches back to local but preserves the pairing for one-click reconnect.
-- **Cloud path UI (built in)**: remote directory browsing, creating remote folders, and a chat `+` action that appends cloud workspace files to the message. As of 0.3.0 this is **built into this plugin** — no separate companion package. It only registers UI while takeover is active, so local file picking and dsh-hardssh flows are untouched. Browsing requires a `full` pairing.
+- **Cloud path UI (built in)**: remote directory browsing, creating remote folders, and a chat `+` action that appends cloud workspace files to the message. As of 0.3.1 this is **built into this plugin** — no separate companion package. It only registers UI while takeover is active, so local file picking and dsh-hardssh flows are untouched. Browsing requires a `full` pairing.
 
 ---
 
@@ -50,7 +104,7 @@ pnpm run build
 dsh plugin --profile web add link:$PWD
 ```
 
-The package is `@xiaopb/dsh-remote-hub@0.3.0` (the cloud path UI is built in — no other package needed). Requires **Node.js ≥ 24.9.0** and **DSH ≥ 0.2.1-rc.2 < 0.3.0-0**.
+The package is `@xiaopb/dsh-remote-hub@0.3.1` (the cloud path UI is built in — no other package needed). Requires **Node.js ≥ 24.9.0** and **DSH ≥ 0.2.1-rc.2 < 0.3.0-0**.
 
 ---
 

@@ -1,9 +1,11 @@
 /**
- * 敏感写入审批（0.2.6 / D-16）与密钥掩码的回归测试。
+ * 密钥掩码与敏感写入门禁的回归测试。
  *
- * 两条红线必须由测试守住：
- * 1. **审批卡、审计、诊断里永远没有明文 API Key**；
- * 2. **没人应答就不放行**（fail-closed），不因为超时而静默通过。
+ * 0.3.1 起 **取消逐次 owner 审批**（用户要求 Full 完全放开、直接生效），
+ * 但两条红线必须继续由测试守住：
+ * 1. **审计、诊断、审批帧里永远没有明文 API Key**；
+ * 2. 审批机制与常量保留，且「清单为空 ⇒ 直接放行」这个短路是**显式**的，
+ *    将来要恢复逐次审批只需往 `APPROVAL_REQUIRED_ENDPOINTS` 加一条。
  *
  * @module test/sensitive-approval.test.mjs
  */
@@ -87,133 +89,37 @@ describe('collectSecretValues / containsNoSecret', () => {
   })
 })
 
-describe('审批清单', () => {
-  it('敏感写入都在 APPROVAL_REQUIRED_ENDPOINTS 里', () => {
-    for (const endpoint of SECRET_BEARING_ENDPOINTS) {
-      assert.ok(APPROVAL_REQUIRED_ENDPOINTS.includes(endpoint), `${endpoint} must require approval`)
-    }
-    for (const endpoint of ['credentials/set', 'settings/update', 'pluginManager/installBundle']) {
-      assert.ok(APPROVAL_REQUIRED_ENDPOINTS.includes(endpoint), endpoint)
+describe('审批清单（0.3.1 起为空）', () => {
+  it('不再有任何逐次审批：Full 直接生效', () => {
+    assert.deepEqual([...APPROVAL_REQUIRED_ENDPOINTS], [], '审批清单必须为空')
+    for (const endpoint of ['credentials/set', 'settings/update', 'pluginManager/installBundle', 'pluginMarket/setIndexes']) {
+      assert.equal(APPROVAL_REQUIRED_ENDPOINTS.includes(endpoint), false, `${endpoint} 不该再要求审批`)
+      assert.equal(mod.requiresApproval(endpoint), false, `${endpoint} 不该再要求审批`)
     }
   })
 
-  it('只读目录不需要审批', () => {
-    for (const endpoint of ['credentials/describe', 'settings/describe', 'llm/listProviders', 'session/list']) {
-      assert.equal(APPROVAL_REQUIRED_ENDPOINTS.includes(endpoint), false, endpoint)
+  it('密钥类 endpoint 仍然登记，供审计与掩码使用', () => {
+    for (const endpoint of ['credentials/set', 'settings/update']) {
+      assert.ok(SECRET_BEARING_ENDPOINTS.includes(endpoint), `${endpoint} 仍需掩码`)
     }
   })
 })
 
-describe('createSensitiveApprovalGate', () => {
-  it('不在清单里的 endpoint 直接放行', async () => {
+describe('createSensitiveApprovalGate（机制保留，当前无人被拦）', () => {
+  it('清单为空时，写入类 endpoint 也直接放行且不打扰 owner', async () => {
     const streams = makeStreams()
     const gate = mod.createSensitiveApprovalGate({ streams, config })
-    const decision = await gate.check({ deviceId: 'dev1', role: 'full', endpoint: 'session/list', payload: {} })
-    assert.deepEqual(decision, { allowed: true, reason: 'not-required' })
-    assert.equal(streams.frames.length, 0)
-  })
-
-  it('审批卡只含掩码后的密钥', async () => {
-    const streams = makeStreams()
-    const gate = mod.createSensitiveApprovalGate({ streams, config })
-    const pending = gate.check({
-      deviceId: 'dev1',
-      role: 'full',
-      endpoint: 'credentials/set',
-      payload: { refs: { DEEPSEEK_API_KEY: API_KEY } },
-    })
-    await new Promise(resolve => { setTimeout(resolve, 10) })
-    assert.equal(streams.frames.length, 1)
-    const frame = streams.frames[0].frame
-    const text = JSON.stringify(frame)
-    assert.equal(text.includes(API_KEY), false, '审批卡泄露明文：' + text)
-    assert.ok(text.includes('sk-****'), '应保留可识别前缀与末 4 位')
-    assert.equal(frame.toolName, 'remote-hub:credentials/set')
-
-    // 手动结束，避免测试挂住
-    gate.answer({ deviceId: 'dev1', requestId: frame.requestId, outcome: 'rejected' })
-    await pending
+    for (const endpoint of ['credentials/set', 'settings/update', 'pluginManager/installBundle', 'session/list']) {
+      const decision = await gate.check({ deviceId: 'dev1', role: 'full', endpoint, payload: { key: API_KEY } })
+      assert.deepEqual(decision, { allowed: true, reason: 'not-required' }, endpoint)
+    }
+    assert.equal(streams.frames.length, 0, '不应再向 owner 投递审批卡')
     gate.dispose()
   })
 
-  it('owner 批准后放行，并在窗口内复用批准', async () => {
-    const streams = makeStreams()
-    const gate = mod.createSensitiveApprovalGate({ streams, config })
-    const request = { deviceId: 'dev1', role: 'full', endpoint: 'credentials/set', payload: { key: API_KEY } }
-    const pending = gate.check(request)
-    await new Promise(resolve => { setTimeout(resolve, 10) })
-    gate.answer({ deviceId: 'dev1', requestId: streams.frames[0].frame.requestId, outcome: 'allowed-once' })
-    assert.deepEqual(await pending, { allowed: true, reason: 'approved' })
-
-    const again = await gate.check(request)
-    assert.deepEqual(again, { allowed: true, reason: 'cached' })
-    assert.equal(streams.frames.length, 1, '同一载荷不应重复打扰 owner')
-    gate.dispose()
-  })
-
-  it('owner 拒绝则拒绝，且不缓存拒绝', async () => {
-    const streams = makeStreams()
-    const gate = mod.createSensitiveApprovalGate({ streams, config })
-    const request = { deviceId: 'dev1', role: 'full', endpoint: 'settings/update', payload: { key: API_KEY } }
-    const pending = gate.check(request)
-    await new Promise(resolve => { setTimeout(resolve, 10) })
-    gate.answer({ deviceId: 'dev1', requestId: streams.frames[0].frame.requestId, outcome: 'rejected' })
-    assert.deepEqual(await pending, { allowed: false, reason: 'rejected' })
-
-    // 再调一次必须重新发起审批（不能被上次的拒绝或缓存放过）
-    const pending2 = gate.check(request)
-    await new Promise(resolve => { setTimeout(resolve, 10) })
-    assert.equal(streams.frames.length, 2, '拒绝不得被缓存')
-    gate.answer({ deviceId: 'dev1', requestId: streams.frames[1].frame.requestId, outcome: 'rejected' })
-    assert.deepEqual(await pending2, { allowed: false, reason: 'rejected' })
-    gate.dispose()
-  })
-
-  it('没人应答 → 超时拒绝（fail-closed）', async () => {
-    const streams = makeStreams()
-    const gate = mod.createSensitiveApprovalGate({
-      streams,
-      config: { approvalBridgeTimeoutMs: 30, bridgeApprovals: true },
-    })
-    const decision = await gate.check({ deviceId: 'dev1', role: 'full', endpoint: 'credentials/set', payload: { key: API_KEY } })
-    assert.deepEqual(decision, { allowed: false, reason: 'timeout' })
-    gate.dispose()
-  })
-
-  it('审批桥被关闭 → 直接拒绝', async () => {
-    const streams = makeStreams()
-    const gate = mod.createSensitiveApprovalGate({ streams, config: { ...config, bridgeApprovals: false } })
-    const decision = await gate.check({ deviceId: 'dev1', role: 'full', endpoint: 'credentials/set', payload: { key: API_KEY } })
-    assert.deepEqual(decision, { allowed: false, reason: 'bridge-disabled' })
-    assert.equal(streams.frames.length, 0)
-    gate.dispose()
-  })
-
-  it('别的设备不能替 owner 作答', async () => {
-    const streams = makeStreams()
-    const gate = mod.createSensitiveApprovalGate({ streams, config: { approvalBridgeTimeoutMs: 200, bridgeApprovals: true } })
-    const pending = gate.check({ deviceId: 'dev1', role: 'full', endpoint: 'credentials/set', payload: { key: API_KEY } })
-    await new Promise(resolve => { setTimeout(resolve, 10) })
-    const requestId = streams.frames[0].frame.requestId
-    assert.equal(gate.answer({ deviceId: 'dev2', requestId, outcome: 'allowed-once' }), false, '别的设备不得批准')
-    assert.equal(gate.answer({ deviceId: 'dev1', requestId, outcome: 'unavailable' }), false, 'unavailable 不是合法答复')
-    gate.answer({ deviceId: 'dev1', requestId, outcome: 'cancelled' })
-    assert.deepEqual(await pending, { allowed: false, reason: 'cancelled' })
-    gate.dispose()
-  })
-
-  it('审计行不含明文密钥', async () => {
-    const streams = makeStreams()
-    const rows = []
-    const gate = mod.createSensitiveApprovalGate({
-      streams,
-      config: { approvalBridgeTimeoutMs: 30, bridgeApprovals: true },
-      onAudit: row => { rows.push(row) },
-    })
-    await gate.check({ deviceId: 'dev1', role: 'full', endpoint: 'credentials/set', payload: { key: API_KEY } })
-    assert.ok(rows.length > 0)
-    const text = JSON.stringify(rows)
-    assert.equal(text.includes(API_KEY), false, '审计泄露明文：' + text)
+  it('未知 requestId 不会被误认作待答审批', () => {
+    const gate = mod.createSensitiveApprovalGate({ streams: makeStreams(), config })
+    assert.equal(gate.answer({ deviceId: 'dev1', requestId: 'nope', outcome: 'allowed-once' }), false)
     gate.dispose()
   })
 })

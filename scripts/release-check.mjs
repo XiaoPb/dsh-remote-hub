@@ -95,6 +95,28 @@ check(
 )
 
 // 文档引用的发布流程文件必须真实存在。
+// 安全声明必须两份 README 都有：Full 放开之后，这是用户唯一的前置提醒。
+check(
+  'security-notice: README.md',
+  /## ⚠️ 安全声明/u.test(zhReadme) && /远程代码执行/u.test(zhReadme),
+  'README.md must carry the security declaration (remote code execution / full pairing)',
+)
+check(
+  'security-notice: README.en.md',
+  /## ⚠️ Security notice/u.test(enReadme) && /remote code execution/u.test(enReadme),
+  'README.en.md must carry the security notice',
+)
+check(
+  'security-notice: docs/DEPLOY.md',
+  /安全声明/u.test(read('docs/DEPLOY.md')),
+  'docs/DEPLOY.md must carry the security declaration',
+)
+check(
+  'security-notice: docs/API-MATRIX.md',
+  /安全声明/u.test(read('docs/API-MATRIX.md')),
+  'docs/API-MATRIX.md must carry the security warning',
+)
+
 check('docs-release-present', read('docs/RELEASE.md') !== '', 'docs/RELEASE.md is missing')
 
 // 可选：tag ↔ version

@@ -38,30 +38,34 @@
  * `credentials/describe` 在这里：它**只返回引用是否已设置、来源与是否可写**，
  * 从不返回密钥值（官方契约），因此与 `settings/describe` 同属元数据；
  * 远端设置页渲染 API Key 行需要它来显示「已设置 / 未设置」。
+ *
+ * 0.3.1：`pluginInventory/list`（已装插件清单）也放进共享只读——插件页在
+ * 只读配对下也要能渲染清单；它只返回 Loader 条目与显示元数据，不含任何凭据。
  */
 export const SHARED_READ_ENDPOINTS: readonly string[] = [
   'schedule/catalog', 'schedule/history', 'schedule/list',
   'pluginManager/listBundles', 'pluginManager/listPlugins', 'pluginManager/listVersionExemptions', 'pluginManager/registries', 'pluginManager/inspect',
   'pluginManager/listVersions', 'pluginManager/readBundleDetail',
   'pluginMarket/listIndexes', 'pluginMarket/search', 'pluginMarket/readEntryDetail',
+  'pluginInventory/list',
   'settings/describe',
   'credentials/describe',
 ]
 
 /**
- * Full-only mutations and administrative actions. Dynamic execution retains upstream approval checks.
+ * Full-only mutations and administrative actions.
  *
  * 这里**只能放红线以外**的 endpoint：红线条目一律不进任何角色的矩阵，
  * `assertMatrixIntegrity()` 会在插件加载期拦下这种写法。
  *
- * ## 0.2.6：Full 允许写配置与安装插件
+ * ## 权限演进
  *
- * - `settings/{update,replace,mutate}`：远端配置 Provider / API Key / 模型需要写宿主设置。
- * - `pluginManager/*` 的全部写方法与 `pluginMarket/setIndexes`：远端管理插件与市场源。
- * - `credentials/{set,unset}`：写入/清除 Provider API Key。
- *
- * 这些动作**每次调用都要 owner 审批**（见 {@link APPROVAL_REQUIRED_ENDPOINTS}），
- * 审批不通过就不放行；密钥值在审批卡、审计与诊断里一律掩码。
+ * - 0.2.6：Full 允许写配置与安装插件（`settings/{update,replace,mutate}`、
+ *   `credentials/{set,unset}`、`pluginManager/*` 写方法、`pluginMarket/setIndexes`）。
+ * - 0.3.0：`directoryPicker/{list,createDirectory}` 给 Full（内置云端路径 UI）。
+ * - 0.3.1：**取消 owner 逐次审批**（用户明确要求 Full 完全放开、直接生效）。
+ *   这些动作现在只要配对角色是 `full` 就会真正执行；
+ *   **密钥掩码与审计不变**（见 `core/redact.ts` 与各 `onAudit`）。
  */
 export const FULL_ADMIN_ENDPOINTS: readonly string[] = [
   'pluginManager/cancelInstall', 'pluginManager/installBundle', 'pluginManager/removeBundle', 'pluginManager/updateBundle',
@@ -76,20 +80,21 @@ export const FULL_ADMIN_ENDPOINTS: readonly string[] = [
 ]
 
 /**
- * 每次调用都必须经 **owner 审批** 才能放行的 endpoint（0.2.6 D-16）。
+ * 每次调用都必须经 **owner 审批** 才能放行的 endpoint。
  *
- * 与 {@link FULL_ADMIN_ENDPOINTS} 的区别：那是「谁能调」，这是「调了之后还得谁点头」。
- * 审批由 `host/src/dispatch.ts` 在 `sharedFetch` 之前拦截，走与工具审批相同的
- * `hub/answerApproval` 通道；无人应答时 **fail-closed 拒绝**（不是放行）。
+ * ## 0.3.1：已清空（默认不拦截任何人）
+ *
+ * 用户明确要求 Full **完全放开**、直接生效，因此原先的 13 个审批项全部取消，
+ * 插件安装/卸载/启停与写配置/写 API Key 现在**只要角色是 Full 就直接执行**。
+ *
+ * 保留这个常量与 `host/src/sensitive-approval.ts` 整套机制，是为了：
+ * 1. 需要时可以只往这里加一条就恢复逐次审批（不用改 dispatch 与测试结构）；
+ * 2. 审计与**密钥掩码**照旧生效——写入类 endpoint 仍走脱敏后再落审计。
+ *
+ * ⚠️ 安全代价（写在这里，不要删除）：Full 配对 = 远程代码执行 + 可写宿主配置与凭据。
+ * 只给可信设备发放 `full`；不确定时用 `control`。
  */
-export const APPROVAL_REQUIRED_ENDPOINTS: readonly string[] = [
-  'settings/update', 'settings/replace', 'settings/mutate',
-  'credentials/set', 'credentials/unset',
-  'pluginManager/installBundle', 'pluginManager/updateBundle', 'pluginManager/removeBundle',
-  'pluginManager/cancelInstall', 'pluginManager/setBundleEnabled', 'pluginManager/setPluginEnabled',
-  'pluginManager/setVersionExemption',
-  'pluginMarket/setIndexes',
-]
+export const APPROVAL_REQUIRED_ENDPOINTS: readonly string[] = []
 
 /**
  * 载荷里含**明文密钥**的 endpoint：审批卡、审计、诊断都必须先把这些字段掩码。
@@ -107,21 +112,19 @@ export const NEVER_DELEGATED_ENDPOINTS: readonly string[] = [
   // 宿主桌面上的**原生弹框**：等于远程操控宿主 UI，永不下放。
   // （云端目录浏览走 `directoryPicker/list|createDirectory`，由 Full 使用。）
   'directoryPicker/pick',
-  'pluginInventory/list',
   'settings/openSettingsDocument',
 ]
 
 /**
  * 整组禁用的 namespace 红线（DESIGN §8.6.5）：**没有任何豁免**，整条前缀对全部角色关闭。
  *
- * `settings/` 与 `credentials/` 不在这里 —— 它们各有显式放行的条目
- * （`settings/describe` 共享只读、`settings/{update,replace,mutate}` Full 专属；
- * `credentials/describe` 共享只读、`credentials/{set,unset}` Full 专属），
- * 因此改为「前缀红线 + 具名豁免」，未登记的方法仍然拒绝，
- * 见 {@link NEVER_DELEGATED_ENDPOINTS} 与 {@link NEVER_DELEGATED_NAMESPACES}。
+ * `settings/`、`credentials/`、`pluginInventory/` 不在这里 —— 它们各有显式放行的条目
+ * （`settings/describe` 与 `pluginInventory/list` 共享只读、`settings/{update,replace,mutate}`
+ * 与 `credentials/{set,unset}` 为 Full 专属），因此改为「前缀红线 + 具名豁免」，
+ * 未登记的方法仍然拒绝，见 {@link NEVER_DELEGATED_ENDPOINTS} 与
+ * {@link NEVER_DELEGATED_NAMESPACES}。
  */
 export const NEVER_DELEGATED_BLANKET: readonly string[] = [
-  'pluginInventory/',
   'account/',
   'dynamicCordisRunner/',
 ]
@@ -129,11 +132,11 @@ export const NEVER_DELEGATED_BLANKET: readonly string[] = [
 /**
  * 整组禁用、但允许具名豁免的 namespace。
  *
- * `directoryPicker/` 在这里（豁免 `list` / `createDirectory`），这样**宿主原生弹框**
- * `directoryPicker/pick` 与任何未来新增的 picker 方法都默认拒绝。
+ * - `directoryPicker/`：豁免 `list` / `createDirectory`，宿主原生弹框 `pick` 与未来新增方法仍默认拒绝；
+ * - `pluginInventory/`：豁免 `list`（三档共享只读），未登记方法默认拒绝。
  */
 export const NEVER_DELEGATED_NAMESPACES: readonly string[] = [
-  'remoteAccess/', 'pluginManager/', 'pluginMarket/', 'credentials/', 'settings/', 'directoryPicker/',
+  'remoteAccess/', 'pluginManager/', 'pluginMarket/', 'credentials/', 'settings/', 'directoryPicker/', 'pluginInventory/',
 ]
 
 /** Gateway 自有面（不是 `<ns>/<method>` 形状，单独列出以便断言）。 */

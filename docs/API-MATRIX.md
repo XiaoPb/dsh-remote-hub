@@ -1,5 +1,9 @@
 # 接口权限分布（角色 × endpoint）
 
+> **⚠️ 安全声明**：`full` 配对 = 远程代码执行 + 可写宿主配置与 API Key；0.3.1 起这些写入
+> **直接生效、不再有 owner 审批**。只给完全可信设备发放 `full`，其余用 `control`。
+> 详见仓库根目录 `README.md` 的「安全声明」与 `docs/DEPLOY.md` §0.0。
+>
 > 本文件由 `scripts/render-api-matrix.mjs` **从构建产物自动生成**，请勿手改。
 > 修改权限后执行 `node scripts/render-api-matrix.mjs` 重新生成；CI 用
 > `--check` 模式断言文档与代码完全一致。
@@ -13,9 +17,9 @@
 
 | 角色 | 中文 | 能做什么 | 不能做什么 | 授权数量 |
 | --- | --- | --- | --- | ---: |
-| `read-only` | 只读 | 看列表、历史、状态、文件内容、任务面板、只读目录 | 任何写入、执行、上传 | 53 |
-| `control` | 控制 | 只读 + 驱动会话（prompt / cancel / create / fork / rename / 队列）、审批与提问 | 碰文件系统与终端 | 78 |
-| `full` | 完全 | 控制 + 上传文件、工作区文件读写、终端、`job/kill` | **不等于 DSH owner**：凭据、账号、插件安装、动态执行仍然全部拒绝 | 104 |
+| `read-only` | 只读 | 看列表、历史、状态、文件内容、任务面板、只读目录 | 任何写入、执行、上传 | 54 |
+| `control` | 控制 | 只读 + 驱动会话（prompt / cancel / create / fork / rename / 队列）、审批与提问 | 碰文件系统与终端 | 79 |
+| `full` | 完全 | 控制 + 上传文件、工作区文件读写、终端、`job/kill` | **不等于 DSH owner**：凭据、账号、插件安装、动态执行仍然全部拒绝 | 105 |
 
 **未知 endpoint 一律拒绝（fail-closed）**。三档角色严格包含：`read-only ⊆ control ⊆ full`。
 
@@ -33,12 +37,12 @@
 | 红线（前缀） | `NEVER_DELEGATED_NAMESPACES`：整条关闭，但共享只读目录可豁免 |
 | 红线（Gateway 内部面） | `$events` / `$events/result`，非 owner 由 `interactions:'none'` 挡住 |
 
-## 2. 已授权接口（104 个）
+## 2. 已授权接口（105 个）
 
 按资源种类分组。资源种类决定 binding 挂法：没有参数指明资源时是 `global`，
 由 `sessionId` / `workspaceFileScopeId` / `agentId` 解析出来的是 `session`。
 
-### 2.1 global 资源（68 个）
+### 2.1 global 资源（69 个）
 
 | endpoint | 资源 | 形式 | 只读 | 控制 | 完全 | 判定依据 |
 | --- | --- | --- | :---: | :---: | :---: | --- |
@@ -67,6 +71,7 @@
 | `llm/listConfigurableProviders` | global | 一元 | ✓ | ✓ | ✓ | 只读业务 |
 | `llm/listProviders` | global | 一元 | ✓ | ✓ | ✓ | 只读业务 |
 | `permissionPresets/catalog` | global | 一元 | ✓ | ✓ | ✓ | 只读业务 |
+| `pluginInventory/list` | global | 一元 | ✓ | ✓ | ✓ | 共享只读目录 |
 | `pluginManager/cancelInstall` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `pluginManager/inspect` | global | 一元 | ✓ | ✓ | ✓ | 共享只读目录 |
 | `pluginManager/installBundle` | global | 一元 | — | — | ✓ | Full 专属管理面 |
@@ -159,16 +164,13 @@
 
 ## 3. 红线接口（所有角色均拒绝）
 
-下面 12 条是 DESIGN §8.6.5 点名的红线，**`full` 也拿不到**。
+下面 10 条是 DESIGN §8.6.5 点名的红线，**`full` 也拿不到**。
 `scripts/redlines.mjs` 每次 CI 都逐条断言「红线成立 且 不在 full 矩阵里」。
 
 | endpoint | 拒绝原因 | 只读 | 控制 | 完全 |
 | --- | --- | :---: | :---: | :---: |
 | `settings/openSettingsDocument` | 在宿主打开设置文档 = 操控宿主 UI | — | — | — |
 | `directoryPicker/pick` | 宿主桌面原生对话框/目录面 | — | — | — |
-| `directoryPicker/list` | 宿主桌面原生对话框/目录面 | — | — | ✓ |
-| `directoryPicker/createDirectory` | 宿主桌面原生对话框/目录面 | — | — | ✓ |
-| `pluginInventory/list` | 已装插件清单暴露攻击面 | — | — | — |
 | `account/getState` | 账号凭据与登录态（官方登录态不可控） | — | — | — |
 | `account/getProfile` | 账号凭据与登录态（官方登录态不可控） | — | — | — |
 | `account/getBalance` | 账号凭据与登录态（官方登录态不可控） | — | — | — |
@@ -176,30 +178,21 @@
 | `credentials/rotate` | 未登记的 credentials / settings 方法，前缀红线默认拒绝 | — | — | — |
 | `credentials/reveal` | 未登记的 credentials / settings 方法，前缀红线默认拒绝 | — | — | — |
 | `settings/import` | 未登记的 credentials / settings 方法，前缀红线默认拒绝 | — | — | — |
+| `directoryPicker/pickDirectory` | 宿主桌面原生对话框/目录面 | — | — | — |
 
-整组禁用的 namespace（无豁免）：`pluginInventory/*`、`account/*`、`dynamicCordisRunner/*`。
+整组禁用的 namespace（无豁免）：`account/*`、`dynamicCordisRunner/*`。
 
-## 3.1 需要 owner 逐次审批的接口（0.2.6）
+## 3.1 需要 owner 逐次审批的接口（0.3.1 起已取消）
 
-下面这些接口**即使 `full` 有权限**，每次调用也必须由本机 owner 在审批卡上放行，
-否则返回 `remote-access/denied`。审批卡里的密钥一律掩码（`sk-****abcd`），
-**超时无人应答 = 拒绝**（fail-closed）。
+**当前没有任何接口需要 owner 逐次审批。** 只要配对角色是 `full`，
+写配置、写 API Key、安装/卸载/启停插件都会**直接生效**。
 
-| endpoint | 审批 | 密钥掩码 |
-| --- | :---: | :---: |
-| `settings/update` | 必须 | 是 |
-| `settings/replace` | 必须 | 是 |
-| `settings/mutate` | 必须 | 是 |
-| `credentials/set` | 必须 | 是 |
-| `credentials/unset` | 必须 | 是 |
-| `pluginManager/installBundle` | 必须 | — |
-| `pluginManager/updateBundle` | 必须 | — |
-| `pluginManager/removeBundle` | 必须 | — |
-| `pluginManager/cancelInstall` | 必须 | — |
-| `pluginManager/setBundleEnabled` | 必须 | — |
-| `pluginManager/setPluginEnabled` | 必须 | — |
-| `pluginManager/setVersionExemption` | 必须 | — |
-| `pluginMarket/setIndexes` | 必须 | — |
+> 安全代价：`full` 配对 = 远程代码执行 + 可写宿主配置与凭据。只给可信设备发放 `full`；
+> 不确定时用 `control`（只读 + 驱动会话）。
+>
+> 审计与**密钥掩码**仍然生效：写入类 endpoint 的载荷在落审计/诊断前经过 `core/src/redact.ts`，
+> 明文密钥不会出现在日志里。审批机制本身保留在 `host/src/sensitive-approval.ts`，
+> 需要恢复时只需往 `APPROVAL_REQUIRED_ENDPOINTS` 加回条目。
 
 ## 4. 未授予任何角色的 endpoint（3 个）
 

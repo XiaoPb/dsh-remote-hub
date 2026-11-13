@@ -3,6 +3,30 @@
 本文件记录 `@xiaopb/dsh-remote-hub` 与伴生包 `@xiaopb/dsh-remote-paths` 的公开变更。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)；`0.x` 期间的次版本号可能包含不兼容变更。
 
+## [0.3.1] - 2026-11-13
+
+**插件权限：`full` 完全放开、不再审批；其他角色也能完整读取插件。**
+
+### 变更（不兼容 / 安全边界调整）
+
+- **取消 owner 逐次审批**：`APPROVAL_REQUIRED_ENDPOINTS` 清空。
+  以下 13 个接口现在只要配对角色是 `full` 就**直接生效**，不再弹批准卡，也不再有超时拒绝：
+  - 插件：`pluginManager/{installBundle,updateBundle,removeBundle,cancelInstall,setBundleEnabled,setPluginEnabled,setVersionExemption}`、`pluginMarket/setIndexes`
+  - 配置与凭据：`settings/{update,replace,mutate}`、`credentials/{set,unset}`
+
+  > **安全代价（务必知晓）**：`full` 配对 = 远程代码执行 + 可写宿主配置与 API Key。
+  > 只给可信设备发放 `full`；不确定时用 `control`。
+- **插件清单改为三档共享只读**：`pluginInventory/list` 从红线移入 `SHARED_READ_ENDPOINTS`，
+  `read-only` / `control` / `full` 都能读取已装插件清单；`pluginInventory/` 改为「前缀红线 + 具名豁免」，
+  未登记方法仍默认拒绝。
+
+### 保持不变
+
+- **密钥掩码与审计照旧**：写入类 endpoint 的载荷在落审计/诊断前仍经过 `core/src/redact.ts`，
+  明文 API Key 不会出现在日志里。审批机制代码保留在 `host/src/sensitive-approval.ts`，
+  需要恢复时往 `APPROVAL_REQUIRED_ENDPOINTS` 加回条目即可。
+- `account/*`（官方登录态）、`dynamicCordisRunner/*`、`directoryPicker/pick`、
+  `settings/openSettingsDocument`、`remoteAccess/follow` 仍是红线。
 ## [0.3.0] - 2026-11-13
 
 **云端路径 UI 内置进本插件；`full` 开放云端目录浏览与新建目录。**

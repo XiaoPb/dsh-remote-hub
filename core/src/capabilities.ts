@@ -55,7 +55,7 @@ export const ENDPOINT_TABLE: Readonly<Record<string, EndpointFact>> = {
     kind: 'global' as const,
     ...(['account/watch', 'account/watchExpiry', 'remoteAccess/follow'].includes(endpoint) ? { stream: true as const } : {}),
   }])),
-  ...Object.fromEntries(['pluginManager/listBundles', 'pluginManager/listPlugins', 'pluginManager/listVersionExemptions', 'pluginManager/registries', 'pluginManager/inspect', 'pluginManager/listVersions', 'pluginManager/readBundleDetail', 'pluginMarket/listIndexes', 'pluginMarket/search', 'pluginMarket/readEntryDetail'].map(endpoint => [endpoint, { kind: 'global' as const }])),
+  ...Object.fromEntries(['pluginManager/listBundles', 'pluginManager/listPlugins', 'pluginManager/listVersionExemptions', 'pluginManager/registries', 'pluginManager/inspect', 'pluginManager/listVersions', 'pluginManager/readBundleDetail', 'pluginMarket/listIndexes', 'pluginMarket/search', 'pluginMarket/readEntryDetail', 'pluginInventory/list'].map(endpoint => [endpoint, { kind: 'global' as const }])),
   'directoryPicker/pick': { kind: 'global' },
   // ── session（`sessionController`，namespace `session`）──────────────────────
   'session/list': { kind: 'global' },

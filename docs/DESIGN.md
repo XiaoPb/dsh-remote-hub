@@ -1,6 +1,6 @@
 # Design and Security Contract
 
-**Version:** 0.3.0
+**Version:** 0.3.1
 **Status:** Web-to-Web primary path verified; Desktop matrix and several Host-management workflows remain incomplete.
 
 ## Product behavior
@@ -19,9 +19,15 @@ The guard always creates a `remote-device` principal. The target Host binds the 
 
 Unknown endpoints deny by default. `full` is not equivalent to DSH owner.
 
-### Sensitive writes require per-call owner approval (D-16)
+### Full writes take effect directly (0.3.1, D-16 retired)
 
-Every write to configuration (`settings/{update,replace,mutate}`), credentials (`credentials/{set,unset}`) or plugin lifecycle (`pluginManager/*` writes, `pluginMarket/setIndexes`) is gated a second time by an **owner approval card** raised by the Host before the request reaches the Gateway. An unanswered approval times out to a denial; approvals are cached for 60 s per device and payload, denials never are. Secrets in those payloads are masked (`sk-****abcd`) before they reach the approval card, the audit log or any diagnostic file.
+Configuration (`settings/{update,replace,mutate}`), credentials (`credentials/{set,unset}`) and plugin lifecycle (`pluginManager/*` writes, `pluginMarket/setIndexes`) are **Full-only and take effect immediately**. The per-call owner approval card was removed at the operator's request: `APPROVAL_REQUIRED_ENDPOINTS` is empty and the Host no longer blocks these writes.
+
+The cost is explicit: a `full` pairing is remote code execution plus the ability to rewrite host configuration and provider API keys. Grant `full` only to trusted devices; use `control` otherwise.
+
+Redaction is **not** retired: payloads for secret-bearing endpoints still pass through `core/src/redact.ts` before they reach the audit log or any diagnostic file, so plaintext API keys never appear in logs. The approval machinery remains in `host/src/sensitive-approval.ts`; re-enabling it means adding endpoints back to `APPROVAL_REQUIRED_ENDPOINTS`.
+
+Plugin surfaces are readable on every pairing: `pluginInventory/list` plus the plugin/market catalogs are shared read endpoints, so a `read-only` or `control` device can render the plugin pages.
 
 ## State ownership
 

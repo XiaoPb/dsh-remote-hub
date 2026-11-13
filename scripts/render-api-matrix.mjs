@@ -100,11 +100,10 @@ const byKind = kind => granted.filter(e => fact(e).kind === kind)
 // 红线中『虽然不在 ENDPOINT_TABLE，但仍在红线清单里』的条目（例如 account/* 的未登记方法）。
 const explicitRedlines = [
   'settings/openSettingsDocument',
-  'directoryPicker/pick', 'directoryPicker/list', 'directoryPicker/createDirectory',
-  'pluginInventory/list',
+  'directoryPicker/pick',
   'account/getState', 'account/getProfile', 'account/getBalance',
   'remoteAccess/follow',
-  'credentials/rotate', 'credentials/reveal', 'settings/import',
+  'credentials/rotate', 'credentials/reveal', 'settings/import', 'directoryPicker/pickDirectory',
 ]
 
 /**
@@ -128,6 +127,10 @@ const countFor = role => allow[role].size
 
 const doc = `# 接口权限分布（角色 × endpoint）
 
+> **⚠️ 安全声明**：\`full\` 配对 = 远程代码执行 + 可写宿主配置与 API Key；0.3.1 起这些写入
+> **直接生效、不再有 owner 审批**。只给完全可信设备发放 \`full\`，其余用 \`control\`。
+> 详见仓库根目录 \`README.md\` 的「安全声明」与 \`docs/DEPLOY.md\` §0.0。
+>
 > 本文件由 \`scripts/render-api-matrix.mjs\` **从构建产物自动生成**，请勿手改。
 > 修改权限后执行 \`node scripts/render-api-matrix.mjs\` 重新生成；CI 用
 > \`--check\` 模式断言文档与代码完全一致。
@@ -187,16 +190,22 @@ ${explicitRedlines.map(endpoint =>
 
 整组禁用的 namespace（无豁免）：${(mod.NEVER_DELEGATED_BLANKET ?? []).map(p => `\`${p}*\``).join('、')}。
 
-## 3.1 需要 owner 逐次审批的接口（0.2.6）
+## 3.1 需要 owner 逐次审批的接口（0.3.1 起已取消）
 
-下面这些接口**即使 \`full\` 有权限**，每次调用也必须由本机 owner 在审批卡上放行，
-否则返回 \`remote-access/denied\`。审批卡里的密钥一律掩码（\`sk-****abcd\`），
-**超时无人应答 = 拒绝**（fail-closed）。
+${(mod.APPROVAL_REQUIRED_ENDPOINTS ?? []).length === 0
+  ? `**当前没有任何接口需要 owner 逐次审批。** 只要配对角色是 \`full\`，
+写配置、写 API Key、安装/卸载/启停插件都会**直接生效**。
 
-| endpoint | 审批 | 密钥掩码 |
+> 安全代价：\`full\` 配对 = 远程代码执行 + 可写宿主配置与凭据。只给可信设备发放 \`full\`；
+> 不确定时用 \`control\`（只读 + 驱动会话）。
+>
+> 审计与**密钥掩码**仍然生效：写入类 endpoint 的载荷在落审计/诊断前经过 \`core/src/redact.ts\`，
+> 明文密钥不会出现在日志里。审批机制本身保留在 \`host/src/sensitive-approval.ts\`，
+> 需要恢复时只需往 \`APPROVAL_REQUIRED_ENDPOINTS\` 加回条目。`
+  : `| endpoint | 审批 | 密钥掩码 |
 | --- | :---: | :---: |
-${(mod.APPROVAL_REQUIRED_ENDPOINTS ?? []).map(endpoint =>
-  `| \`${endpoint}\` | 必须 | ${(mod.SECRET_BEARING_ENDPOINTS ?? []).includes(endpoint) ? '是' : '—'} |`).join('\n')}
+${mod.APPROVAL_REQUIRED_ENDPOINTS.map(endpoint =>
+    `| \`${endpoint}\` | 必须 | ${(mod.SECRET_BEARING_ENDPOINTS ?? []).includes(endpoint) ? '是' : '—'} |`).join('\n')}`}
 
 ## 4. 未授予任何角色的 endpoint（${notGranted.length} 个）
 

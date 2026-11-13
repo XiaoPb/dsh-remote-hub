@@ -28,9 +28,9 @@ const REDLINE_ENDPOINTS = [
   // 0.2.6: credentials/{set,unset} 与 settings 写方法按 D-16 放开（Full 专属 + 逐次审批）。
   // 0.3.0: directoryPicker/{list,createDirectory} 放开给 Full（内置云端路径 UI），
   //        但宿主原生弹框 directoryPicker/pick 仍是红线。
+  // 0.3.1: pluginInventory/list 改为三档共享只读（插件页在只读配对下也要能渲染清单）。
   'settings/openSettingsDocument',
   'directoryPicker/pick',
-  'pluginInventory/list',
   'account/getState', 'account/getProfile', 'account/getBalance',
   'remoteAccess/follow',
   // 未登记的 credentials / settings / directoryPicker 方法依旧整条拒绝（前缀红线 + 具名豁免）。
