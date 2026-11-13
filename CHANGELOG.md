@@ -3,6 +3,40 @@
 本文件记录 `@xiaopb/dsh-remote-hub` 与伴生包 `@xiaopb/dsh-remote-paths` 的公开变更。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)；`0.x` 期间的次版本号可能包含不兼容变更。
 
+## [0.3.5] - 2026-11-14
+
+**权限补齐：完全接管 `dynamicCordisRunner` 端点权限管理。**
+
+### 修复
+
+- **补齐 `dynamicCordisRunner/*` 权限**：将 `dynamicCordisRunner` 从红线（`NEVER_DELEGATED_BLANKET`）中移出，
+  改为由权限矩阵完整管理，确保所有端点都被声明和授权。
+- **只读端点共享**：`dynamicCordisRunner/list` 与 `dynamicCordisRunner/syncInspectManifest` 加入 `SHARED_READ_ENDPOINTS`，
+  所有角色（read-only / control / full）均可查询已定义的动态包列表与检查清单。
+- **写入端点仅限 Full**：`dynamicCordisRunner/define`、`run`、`stop`、`undefine`、`getDefinition`、`queryRunning` 
+  仅在 Full 角色授权，通过 `FULL_ADMIN_ENDPOINTS` 声明。
+
+### 被控 Host 权限端点覆盖
+
+| 端点 | read-only | control | full | 说明 |
+| --- | :---: | :---: | :---: | --- |
+| `dynamicCordisRunner/list` | ✓ | ✓ | ✓ | 列出已定义的动态包 |
+| `dynamicCordisRunner/syncInspectManifest` | ✓ | ✓ | ✓ | 同步检查清单 |
+| `dynamicCordisRunner/define` | ✗ | ✗ | ✓ | 定义新动态包 |
+| `dynamicCordisRunner/run` | ✗ | ✗ | ✓ | 运行动态包 |
+| `dynamicCordisRunner/stop` | ✗ | ✗ | ✓ | 停止运行 |
+| `dynamicCordisRunner/undefine` | ✗ | ✗ | ✓ | 取消定义 |
+| `dynamicCordisRunner/getDefinition` | ✗ | ✗ | ✓ | 查询定义详情 |
+| `dynamicCordisRunner/queryRunning` | ✗ | ✗ | ✓ | 查询运行状态 |
+
+### 检查清单
+
+- ✓ `core/capabilities.ts`：`ENDPOINT_TABLE` 补齐 8 个 `dynamicCordisRunner/*` 端点声明
+- ✓ `core/capabilities-redlines.ts`：从 `NEVER_DELEGATED_BLANKET` 移出 `dynamicCordisRunner/`
+- ✓ `core/capabilities-redlines.ts`：`FULL_ADMIN_ENDPOINTS` 补齐 6 个写入端点
+- ✓ `core/capabilities-redlines.ts`：`SHARED_READ_ENDPOINTS` 补齐 2 个只读端点
+- ✓ 文档注释已更新，说明 Full 权限完全管理 `dynamicCordisRunner`
+
 ## [0.3.4] - 2026-11-14
 
 **修复局域网配对 403 错误：私有地址 Origin 现在自动放行。**

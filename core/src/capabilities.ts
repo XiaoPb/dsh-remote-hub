@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 能力矩阵：三档角色 × 官方 endpoint 的 allow-list，**按资源种类分层**。
  *
  * 这是「哪个角色能调哪个 endpoint」的**唯一真源**：host 的
@@ -183,6 +183,16 @@ export const ENDPOINT_TABLE: Readonly<Record<string, EndpointFact>> = {
   // Full 维护类
   'schedule/deleteInactive': { kind: 'global' },
   'messageFeedback/delete': { kind: 'global' },
+
+   // ── dynamicCordisRunner（`dynamicCordisRunner`，Full 权限专属）──────────────
+   'dynamicCordisRunner/define': { kind: 'global' },
+   'dynamicCordisRunner/run': { kind: 'global' },
+   'dynamicCordisRunner/stop': { kind: 'global' },
+   'dynamicCordisRunner/undefine': { kind: 'global' },
+   'dynamicCordisRunner/list': { kind: 'global' },
+   'dynamicCordisRunner/syncInspectManifest': { kind: 'global' },
+   'dynamicCordisRunner/getDefinition': { kind: 'global' },
+   'dynamicCordisRunner/queryRunning': { kind: 'global' },
 
   // ── 本插件自己的 hub/* 方法（同过 decide()，与官方 endpoint 等权）──────────
   'hub/devices': { kind: 'global', hub: true },
@@ -524,3 +534,5 @@ export function isWriteAction(endpoint: string): boolean {
 }
 
 assertMatrixIntegrity()
+
+

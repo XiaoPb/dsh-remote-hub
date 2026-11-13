@@ -13,7 +13,7 @@
  * - `pluginManager/*`、`pluginMarket/*`：安装/卸载/升级代码 = 远程代码执行。
  * - `pluginInventory/*`：已装插件清单会暴露攻击面。
  * - `account/*`：账号凭据与登录态。
- * - `dynamicCordisRunner/*`：在宿主里动态执行插件代码，等于远程代码执行。
+ * - `dynamicCordisRunner/*`（已移出红线，0.3.2+）：由 Full 权限完全管理，所有方法仅允许 Full 角色调用。
  * - `remoteAccess/follow`：被 `decide()` **恒放行**，下放等于送出一份能力清单，
  *   且无法用策略拦（必须先在自己的 policy 里再判，见 `policy.ts` 的 `bindings()`
  *   注释）；v1 直接不给。
@@ -41,6 +41,10 @@
  *
  * 0.3.1：`pluginInventory/list`（已装插件清单）也放进共享只读——插件页在
  * 只读配对下也要能渲染清单；它只返回 Loader 条目与显示元数据，不含任何凭据。
+ *
+ * 0.3.2：`dynamicCordisRunner/list` 与 `dynamicCordisRunner/syncInspectManifest` 为只读探测——
+ * 前者列出已定义的动态包（供管理面展示），后者同步检查清单（供注册表发现）；
+ * 写入操作（define/run/stop/undefine）仅限 Full 角色。
  */
 export const SHARED_READ_ENDPOINTS: readonly string[] = [
   'schedule/catalog', 'schedule/history', 'schedule/list',
@@ -50,6 +54,7 @@ export const SHARED_READ_ENDPOINTS: readonly string[] = [
   'pluginInventory/list',
   'settings/describe',
   'credentials/describe',
+  'dynamicCordisRunner/list', 'dynamicCordisRunner/syncInspectManifest',
 ]
 
 /**
@@ -77,6 +82,9 @@ export const FULL_ADMIN_ENDPOINTS: readonly string[] = [
   // 宿主原生弹框 `directoryPicker/pick` 仍是红线。
   'directoryPicker/list', 'directoryPicker/createDirectory',
   'workspace/delete',
+  // 0.3.2：动态 Cordis 包管理（Full 权限专属）。
+  'dynamicCordisRunner/define', 'dynamicCordisRunner/run', 'dynamicCordisRunner/stop', 'dynamicCordisRunner/undefine',
+  'dynamicCordisRunner/list', 'dynamicCordisRunner/syncInspectManifest', 'dynamicCordisRunner/getDefinition', 'dynamicCordisRunner/queryRunning',
 ]
 
 /**
@@ -126,7 +134,6 @@ export const NEVER_DELEGATED_ENDPOINTS: readonly string[] = [
  */
 export const NEVER_DELEGATED_BLANKET: readonly string[] = [
   'account/',
-  'dynamicCordisRunner/',
 ]
 
 /**
@@ -150,7 +157,8 @@ export const NEVER_DELEGATED_INTERNALS: readonly string[] = [
  *
  * 判定顺序很重要：**豁免（共享只读 / Full 专属）优先于前缀红线**，所以
  * `pluginManager/listPlugins`、`pluginManager/installBundle`、`credentials/set`
- * 都不会被前缀误伤；而 `account/*`、`dynamicCordisRunner/*` 没有任何豁免，整条关闭；
+ * 都不会被前缀误伤；而 `account/*` 没有任何豁免，整条关闭；
+ * `dynamicCordisRunner/*` 所有方法由 Full 专属管理，见 capabilities.ts；
  * 未登记的 `credentials/*`、`settings/*` 方法依旧拒绝。
  *
  * @param endpoint - `<namespace>/<method>` 或内部名。
