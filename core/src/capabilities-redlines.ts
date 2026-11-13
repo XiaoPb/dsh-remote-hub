@@ -141,10 +141,14 @@ export const NEVER_DELEGATED_BLANKET: readonly string[] = [
  * 整组禁用、但允许具名豁免的 namespace。
  *
  * - `directoryPicker/`：豁免 `list` / `createDirectory`，宿主原生弹框 `pick` 与未来新增方法仍默认拒绝；
- * - `pluginInventory/`：豁免 `list`（三档共享只读），未登记方法默认拒绝。
+ * - `pluginInventory/`：豁免 `list`（三档共享只读），未登记方法默认拒绝；
+ * - `hub/localPluginManager/`：本机插件管理直连通道的**事实名册**（只在 `ENDPOINT_TABLE` 登记，
+ *   用于让「存在但永不授权」可被静态检查），整条前缀对它永不放开。真正的强制点是
+ *   `capabilities.ts` 的 `assertLocalPluginNotDelegated()` 与 owner-only 路由。
  */
 export const NEVER_DELEGATED_NAMESPACES: readonly string[] = [
   'remoteAccess/', 'pluginManager/', 'pluginMarket/', 'credentials/', 'settings/', 'directoryPicker/', 'pluginInventory/',
+  'hub/localPluginManager/',
 ]
 
 /** Gateway 自有面（不是 `<ns>/<method>` 形状，单独列出以便断言）。 */
