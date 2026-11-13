@@ -83,8 +83,9 @@ export const FULL_ADMIN_ENDPOINTS: readonly string[] = [
   'directoryPicker/list', 'directoryPicker/createDirectory',
   'workspace/delete',
   // 0.3.2：动态 Cordis 包管理（Full 权限专属）。
+  // 注：list 和 syncInspectManifest 是只读的，不在这里；见 SHARED_READ_ENDPOINTS。
   'dynamicCordisRunner/define', 'dynamicCordisRunner/run', 'dynamicCordisRunner/stop', 'dynamicCordisRunner/undefine',
-  'dynamicCordisRunner/list', 'dynamicCordisRunner/syncInspectManifest', 'dynamicCordisRunner/getDefinition', 'dynamicCordisRunner/queryRunning',
+  'dynamicCordisRunner/getDefinition', 'dynamicCordisRunner/queryRunning',
 ]
 
 /**
