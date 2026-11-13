@@ -100,6 +100,18 @@ jobs:
           npm init -y > /dev/null
           # 宿主提供的包（cordis / DSH 各包）走 peer，消费端不需要真的拉下来。
           npm install --no-audit --no-fund --legacy-peer-deps "$GITHUB_WORKSPACE/$TARBALL"
+          # 但真正的 DSH 宿主必然有这些 peer（Config schema、原子写、Typert 协议是运行期依赖），
+          # 这里把 tarball 声明的全部 peer 都按宿主版本装上，模拟宿主环境，
+          # 这样 host 入口才能被真正 import 进来。
+          PEERS="$(node -e "
+            const p = require('$GITHUB_WORKSPACE/package.json');
+            const host = { '@deepseek-ai/cordis': '4.1.0', '@deepseek-ai/schemastery': '3.19.0' };
+            const specs = Object.entries(p.peerDependencies || {}).map(([name]) =>
+              host[name] ? name + '@' + host[name] : name + '@0.2.2-rc.1');
+            process.stdout.write(specs.join(' '));
+          ")"
+          echo "host peers: $PEERS"
+          npm install --no-audit --no-fund --legacy-peer-deps --no-save $PEERS
           PKG="$RUNNER_TEMP/consumer/node_modules/$PACKAGE_NAME"
           node --input-type=module -e "
             import { readFileSync } from 'node:fs';
