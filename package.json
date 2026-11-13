@@ -1,6 +1,6 @@
 {
   "name": "@xiaopb/dsh-remote-hub",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": false,
   "description": "DSH dual-role remote-access plugin. One package, two Cordis entries: the host half exposes this machine behind a device-authenticated guard (QR/short-code pairing, per-device bearer tokens, roles enforced inside DSH's own decide()); the client half takes over another machine's Host by supplying the official __DSH_TRANSPORT__ (unary RPC over /remote/rpc, Remote stream mux over /remote/ws), so the sidebar, sessions and workspaces all show the remote Host.",
   "type": "module",
