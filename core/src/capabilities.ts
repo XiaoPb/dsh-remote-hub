@@ -146,6 +146,12 @@ export const ENDPOINT_TABLE: Readonly<Record<string, EndpointFact>> = {
   /** 模型设置配置目录（只返回 provider/config metadata）。 */
   'llm/listConfigurableProviders': { kind: 'global' },
   'llm/listProviders': { kind: 'global' },
+  /**
+   * 模型探测：按 `settingsNs` 让目标主机去问对应 Provider 有哪些模型。
+   * 只读、无副作用（官方实现是 `remoteDiscoverModels` 远端适配器），
+   * 「+ 添加模型 / 选择模型」在远端设置页需要它。
+   */
+  'llm/discoverModels': { kind: 'global' },
   'permissionPresets/catalog': { kind: 'global' },
   'agentPresets/list': { kind: 'global' },
   // Composer discovery is read-only and session-scoped; include every source
@@ -188,7 +194,7 @@ const READ_ONLY: RoleMatrix = {
     'goals/get',
     'settings/describe',
     ...SHARED_READ_ENDPOINTS,
-    'llm/listConfigurableProviders', 'llm/listProviders', 'permissionPresets/catalog', 'agentPresets/list',
+    'llm/listConfigurableProviders', 'llm/listProviders', 'llm/discoverModels', 'permissionPresets/catalog', 'agentPresets/list',
     // ── Remote Hub 自有只读状态流 ──────────────────────────────────────────
     'hub/stream.open',
     'hub/stream.next',

@@ -77,7 +77,7 @@ test('0.2.6: Full may write configuration, credentials and install plugins', () 
 })
 
 test('0.2.6: providers and models can be discovered by every role', () => {
-  for (const endpoint of ['llm/listProviders', 'llm/listConfigurableProviders', 'session/modelCatalog', 'settings/describe']) {
+  for (const endpoint of ['llm/listProviders', 'llm/listConfigurableProviders', 'llm/discoverModels', 'session/modelCatalog', 'settings/describe']) {
     for (const role of ['read-only', 'control', 'full']) {
       assert.ok(allActionsFor(role).includes(endpoint), `${role} must be able to call ${endpoint}`)
     }
