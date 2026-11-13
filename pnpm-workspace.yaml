@@ -1,4 +1,3 @@
 packages:
   - .
-  - companions/*
 nodeLinker: hoisted

@@ -20,6 +20,7 @@ import type { Context } from '@deepseek-ai/cordis'
 // 本入口只负责插件本身的装配，不再触发 carrier。
 
 import { applyRemoteHubClient, getRemoteHubClient, type ClientAssemblyOptions } from './plugin.js'
+import { applyCloudPaths } from './paths/mount.js'
 
 export { applyRemoteHubClient, getRemoteHubClient }
 export { installCarrier, createCarrier, isApiRequest, isIdentityFailure } from './carrier.js'
@@ -41,6 +42,10 @@ export type { QrMatrix } from './panel/qr.js'
 export { renderNavIcon } from './panel/NavIcon.js'
 export { ApprovalSheet, OUTCOME_OPTIONS } from './ui/ApprovalSheet.js'
 export type { ApprovalCardProps } from './ui/ApprovalSheet.js'
+// 云端路径 UI（0.3.0 起内置，原独立伴生包 @xiaopb/dsh-remote-paths）。
+export { applyCloudPaths } from './paths/mount.js'
+export { cloudPathContext, pathRpc, OPEN_REMOTE_FILES, RemoteFilesDialog, RemoteDirectoryFlow } from './paths/index.js'
+export type { CloudPathContext, DirectoryListing, WorkspaceListing, PathEntry } from './paths/context.js'
 
 /**
  * 必需服务。
@@ -60,4 +65,7 @@ export const inject: string[] = []
  */
 export function apply(ctx: Context, options: ClientAssemblyOptions = {}): void {
   applyRemoteHubClient(ctx, options)
+  // 云端路径 UI 内置（0.3.0）：等 slots/commandUi/sessions/conversation 就绪再注册，
+  // 本机模式下它自身不注册任何槽位。
+  applyCloudPaths(ctx)
 }

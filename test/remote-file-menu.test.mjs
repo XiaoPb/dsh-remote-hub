@@ -2,8 +2,10 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { registerAlias } from './panel-alias-loader.mjs'
 await registerAlias()
-const { quoteRemoteFile } = await import('../companions/remote-paths/src/files.js')
-const { pathRpc } = await import('../companions/remote-paths/src/context.js')
+// 云端路径 UI 自 0.3.0 起内置在 client/src/paths；测试与其他 client 测试一样
+// 读 tsc 产物（.build/client），避免在 node 里直接解析 .tsx。
+const { quoteRemoteFile } = await import('../.build/client/client/src/paths/files.js')
+const { pathRpc } = await import('../.build/client/client/src/paths/context.js')
 test('cloud references retain whitespace paths without local upload conversion', () => {
  assert.equal(quoteRemoteFile('src/main.ts'),'@src/main.ts')
  assert.equal(quoteRemoteFile('资料/说明 文档.md'),'@"资料/说明 文档.md"')

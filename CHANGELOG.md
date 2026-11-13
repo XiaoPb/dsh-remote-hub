@@ -3,6 +3,35 @@
 本文件记录 `@xiaopb/dsh-remote-hub` 与伴生包 `@xiaopb/dsh-remote-paths` 的公开变更。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)；`0.x` 期间的次版本号可能包含不兼容变更。
 
+## [0.3.0] - 2026-11-13
+
+**云端路径 UI 内置进本插件；`full` 开放云端目录浏览与新建目录。**
+
+### 变更（不兼容）
+
+- **`@xiaopb/dsh-remote-paths` 不再作为独立包发布**。云端目录浏览 / 新建目录 / 「云端文件」菜单
+  已内置到 `@xiaopb/dsh-remote-hub`，只需安装这一个包。
+  - 源码移到 `client/src/paths/`，随主 `lib/client.js` 一起编译；
+  - 由 `client/src/index.ts → applyCloudPaths()` 在主插件装配时注册，等
+    `slots` / `commandUi` / `sessions` / `conversation` 就绪后生效；
+  - 仓库不再有 `companions/` workspace，`pnpm-workspace.yaml` 只保留根包。
+- **为什么不能做成同一包的第二条 roster**：DSH 的 `dsh.client` 声明按**包**生效
+  （`resolveMeta` 只认包名根 specifier，且固定读 `exports["./client"]`），
+  子路径 roster 的 specifier 会被 `exactPackageSpecifier()` 判为 undefined，
+  客户端 bundle 根本不会被加载。因此只能并入主 bundle，按载体激活与否在运行期决定是否注册。
+
+### 新增
+
+- `directoryPicker/list`、`directoryPicker/createDirectory` 开放给 `full`（云端路径 UI 使用），
+  `workspaceFiles/list` 三档共享不变。
+- `directoryPicker/` 改为**前缀红线 + 具名豁免**：宿主原生弹框 `directoryPicker/pick`
+  与任何未登记的 picker 方法仍然默认拒绝。
+
+### 保持不变
+
+- 本机模式下云端路径 UI **不注册任何槽位**，原生目录选择与 dsh-hardssh 流程不受影响。
+- `account/*`（官方登录态）仍是红线。
+
 ## [0.2.6] - 2026-11-13
 
 **Full 可以写配置、配置 Provider API Key、安装插件；官方登录态仍不可控。**

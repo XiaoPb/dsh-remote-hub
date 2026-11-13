@@ -5,11 +5,20 @@
 #   - 导出 "./client" → browser 半边（dsh.client 声明在 package.json，
 #                      产物 lib/client.js 由 __ModuleLoader__ 作为 closure factory 载入）
 #
+# 云端路径 UI（云端目录浏览 / 新建目录 / 选云端文件加入消息）自 0.3.0 起**内置**，
+# 不再是独立的 @xiaopb/dsh-remote-paths 包，也不需要第二条 roster：
+# DSH 的 `dsh.client` 声明按**包**生效（resolveMeta 只认包名根 specifier，
+# 且固定读 exports["./client"]），所以子路径 roster 拿不到自己的 client bundle。
+# 内置 UI 统一在 lib/client.js 里，由 client/src/index.ts → applyCloudPaths() 装配，
+# 服务（slots / commandUi / sessions / conversation）就绪后才注册；本机模式下不注册任何槽位。
+#
 # 安装（本地联调）：
 #   dsh plugin --profile web add link:E:/Code/DSH/plugins/dsh-remote-hub
 #
 # 注意：守卫默认只绑 127.0.0.1:8443 且对未配对设备 fail-closed；
 # 在把隧道接上去之前，本插件不会扩大任何网络暴露面。
+#
+# roster id 固定为 `remote-hub`，**不随版本改变**（改名会让旧配置的入口悬空）。
 - insert:
     - id: remote-hub
       name: '@xiaopb/dsh-remote-hub'

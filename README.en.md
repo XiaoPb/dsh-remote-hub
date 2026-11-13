@@ -6,7 +6,7 @@
 [![Release](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml/badge.svg)](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml)
 [![npm](https://img.shields.io/npm/v/@xiaopb/dsh-remote-hub?label=npm)](https://www.npmjs.com/package/@xiaopb/dsh-remote-hub)
 
-**Dual-role remote takeover for DSH (v0.2.6)**
+**Dual-role remote takeover for DSH (v0.3.0)**
 
 Docs: [Deployment](docs/DEPLOY.md) ｜ [Architecture](docs/ARCHITECTURE.md) ｜ [Design contract](docs/DESIGN.md) ｜ [API permission matrix](docs/API-MATRIX.md) ｜ [Doc index](docs/INDEX.md) ｜ [Changelog](CHANGELOG.md) ｜ [中文](README.md)
 
@@ -26,7 +26,7 @@ A Cordis plugin that lets **one DSH instance operate another**. After pairing, s
 - **Zero exposure by default**: the guard is an **independent** listener bound to a loopback literal (default `127.0.0.1:8443`). An occupied port fails loudly — it never silently shifts ports — and unpaired devices are fail-closed. Tunnelling defaults to `kind: 'none'`.
 - **Credential placement**: outbound tokens are stored by the controller's local Host (`~/.dsh/remote-hub/outbound-targets.json`, POSIX `0600`/`0700`). The browser keeps only an opaque target ID — **no bearer token** — and the target-side device table stores only `sha256(token)`.
 - **Disconnect is recoverable**: disconnecting switches back to local but preserves the pairing for one-click reconnect.
-- **Optional Remote Paths companion**: `@xiaopb/dsh-remote-paths` adds remote directory browsing and a cloud-file action in the chat `+` menu. Local file picking and dsh-hardssh remain separate and untouched.
+- **Cloud path UI (built in)**: remote directory browsing, creating remote folders, and a chat `+` action that appends cloud workspace files to the message. As of 0.3.0 this is **built into this plugin** — no separate companion package. It only registers UI while takeover is active, so local file picking and dsh-hardssh flows are untouched. Browsing requires a `full` pairing.
 
 ---
 
@@ -50,7 +50,7 @@ pnpm run build
 dsh plugin --profile web add link:$PWD
 ```
 
-The main package is `@xiaopb/dsh-remote-hub@0.2.6`; the companion is `@xiaopb/dsh-remote-paths@0.2.6`. Requires **Node.js ≥ 24.9.0** and **DSH ≥ 0.2.1-rc.2 < 0.3.0-0**.
+The package is `@xiaopb/dsh-remote-hub@0.3.0` (the cloud path UI is built in — no other package needed). Requires **Node.js ≥ 24.9.0** and **DSH ≥ 0.2.1-rc.2 < 0.3.0-0**.
 
 ---
 

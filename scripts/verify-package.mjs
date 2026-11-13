@@ -105,6 +105,7 @@ check(
   'type declarations (lib/types/**) must be listed in files',
 )
 
+
 // ---------- 3. 构建产物确实存在 ----------
 for (const artifact of ['lib/index.js', 'lib/client.js', 'lib/carrier-boot.js', 'cordis.patch.yml', 'bin/dsh-remote-hub-pair.mjs']) {
   check(`artifact-present: ${artifact}`, existsSync(join(ROOT, artifact)), `${artifact} is missing — run \`pnpm run build\` first`)
@@ -112,6 +113,18 @@ for (const artifact of ['lib/index.js', 'lib/client.js', 'lib/carrier-boot.js', 
 
 // ---------- 4. 开发内容不会进包 ----------
 const manifestText = JSON.stringify({ files, exports: pkg.exports, main: pkg.main, bin: pkg.bin })
+
+// 0.3.0：云端路径 UI 内置，必须随包发布且不能再有独立伴生包。
+check(
+  'cloud-paths-inlined',
+  !manifestText.includes('@xiaopb/dsh-remote-paths') && !existsSync(join(ROOT, 'companions')),
+  'cloud paths must be built into this package, not shipped as @xiaopb/dsh-remote-paths',
+)
+check(
+  'no-workspace-subpackages',
+  !existsSync(join(ROOT, 'companions')) && typeof pkg.workspaces === 'undefined',
+  'the repository must not declare a companion workspace dependency',
+)
 for (const devDir of ['test/', 'scripts/', 'docs/', '.github/', 'dev/', 'node_modules/']) {
   check(
     `dev-content-excluded: ${devDir}`,

@@ -29,7 +29,7 @@ dsh plugin --profile web list
 
 ### 1.1 版本与兼容门
 
-当前插件版本为 `0.2.6`。
+当前插件版本为 `0.3.0`。
 `package.json` 的 `engines.dsh` 是**唯一**被 DSH 读取的兼容门：
 
 ```jsonc

@@ -6,7 +6,7 @@
 [![Release](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml/badge.svg)](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml)
 [![npm](https://img.shields.io/npm/v/@xiaopb/dsh-remote-hub?label=npm)](https://www.npmjs.com/package/@xiaopb/dsh-remote-hub)
 
-**DSH 双角色远程接管插件（v0.2.6）**
+**DSH 双角色远程接管插件（v0.3.0）**
 
 文档：[部署与运维](docs/DEPLOY.md) ｜ [架构](docs/ARCHITECTURE.md) ｜ [设计契约](docs/DESIGN.md) ｜ [接口权限分布](docs/API-MATRIX.md) ｜ [文档索引](docs/INDEX.md) ｜ [更新日志](CHANGELOG.md) ｜ [English](README.en.md)
 
@@ -26,7 +26,7 @@
 - **默认零暴露**：守卫是**独立**监听，只绑回环字面量（默认 `127.0.0.1:8443`），端口被占时直接报错、**不静默换端口**；未配对设备 fail-closed。隧道默认 `kind: 'none'`。
 - **凭据落点**：出站令牌由控制端本地 Host 保存（`~/.dsh/remote-hub/outbound-targets.json`，POSIX `0600`/`0700`）；浏览器侧只保存不透明 target ID，**不含明文令牌**；目标端设备表只存 `sha256(token)`。
 - **断连可恢复**：断开只切换回本地，配对记录保留，一键重连。
-- **可选伴生包 Remote Paths**：`@xiaopb/dsh-remote-paths` 提供远端目录浏览与聊天 `+` 菜单的云文件动作；本地文件选择与 dsh-hardssh 保持独立、不受影响。
+- **云端路径 UI（内置）**：云端目录浏览、新建目录、以及聊天 `+` 菜单把云端工作区文件加入消息——从 0.3.0 起**内置在本插件内**，不再需要单独安装伴生包。它只在接管生效时注册 UI，本机文件选择与 dsh-hardssh 流程完全不受影响。目录浏览需要 `full` 配对。
 
 ---
 
@@ -49,7 +49,7 @@ pnpm run build
 dsh plugin --profile web add link:$PWD
 ```
 
-主包为 `@xiaopb/dsh-remote-hub@0.2.6`，伴生包为 `@xiaopb/dsh-remote-paths@0.2.6`。要求 **Node.js ≥ 24.9.0**、**DSH ≥ 0.2.1-rc.2 < 0.3.0-0**。
+主包为 `@xiaopb/dsh-remote-hub@0.3.0`（云端路径 UI 已内置，无需其它包）。要求 **Node.js ≥ 24.9.0**、**DSH ≥ 0.2.1-rc.2 < 0.3.0-0**。
 
 ---
 

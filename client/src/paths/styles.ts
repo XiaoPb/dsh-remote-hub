@@ -1,3 +1,4 @@
+/** 云端路径对话框样式（含主插件与内置云端路径 UI 共用的 rhp-* 类）。 */
 export const pathStyles = `
 .rhp-mask{position:fixed;inset:0;z-index:10000;display:grid;place-items:center;padding:20px;background:var(--dsw-alias-bg-mask-1);font-family:var(--dsw-font-family);color:var(--dsw-alias-label-primary)}
 .rhp-dialog{box-sizing:border-box;width:min(680px,100%);max-height:88dvh;display:flex;flex-direction:column;gap:16px;padding:24px;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l2);border-radius:var(--dsw-radius-xl);box-shadow:var(--dsw-shadow-lv3);font-size:14px;line-height:1.5;overflow:auto}
@@ -15,7 +16,12 @@ export const pathStyles = `
 .rhp-file-row{display:flex;align-items:center;gap:10px;min-height:38px;padding:6px 10px;border-radius:var(--dsw-radius-xs);cursor:pointer;overflow-wrap:anywhere}.rhp-file-row:hover{background:var(--dsw-alias-interactive-bg-hover)}.rhp-file-row input{accent-color:var(--dsw-alias-button-info-fill)}
 @media(max-width:520px){.rhp-mask{padding:12px}.rhp-dialog{padding:18px;gap:12px}.rhp-row{flex-wrap:wrap}.rhp-input{flex-basis:180px}}
 `
-export function installPathStyles(document) {
+
+/**
+ * 注入一次云端路径对话框样式（幂等）。
+ * @param document - 目标文档；缺席时静默返回。
+ */
+export function installPathStyles(document: Document | undefined): void {
   if (!document || document.getElementById('remote-paths-styles')) return
   const style = document.createElement('style')
   style.id = 'remote-paths-styles'

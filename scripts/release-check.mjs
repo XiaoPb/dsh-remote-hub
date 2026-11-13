@@ -45,16 +45,18 @@ function check(name, ok, detail) {
 
 const pkg = JSON.parse(read('package.json'))
 const version = String(pkg.version)
-const companion = JSON.parse(read('companions/remote-paths/package.json') || '{}')
 const semver = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u
 
 check('version-semver', semver.test(version), `package.json version "${version}" is not SemVer`)
 
-// 主包与伴生包必须同版本发布：README、release notes、安装指引都假设它们一致。
+// 0.3.0：云端路径 UI 已内置，仓库里**不应**再有伴生 workspace 包。
+// 曾经这里断言「伴生包版本与主包一致」；现在改成断言它确实不存在，
+// 防止有人把 companinons 悄悄加回来导致版本再次分叉。
+const companionsDir = read('companions/remote-paths/package.json')
 check(
-  'companion-version-in-sync',
-  companion.version === version,
-  `companions/remote-paths version ${String(companion.version)} != ${version}`,
+  'cloud-paths-inlined',
+  companionsDir === '' && pkg.workspaces === undefined,
+  'companions/remote-paths must be gone (cloud paths are built into this package)',
 )
 
 // 文档里写死的版本号（"v0.2.5" / "**Current release: `0.2.5`**"）。

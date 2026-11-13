@@ -69,6 +69,9 @@ export const FULL_ADMIN_ENDPOINTS: readonly string[] = [
   'pluginMarket/setIndexes',
   'settings/update', 'settings/replace', 'settings/mutate',
   'credentials/set', 'credentials/unset',
+  // 0.3.0：云端路径浏览/新建目录（内置的 remote-paths UI 使用）。只给 Full；
+  // 宿主原生弹框 `directoryPicker/pick` 仍是红线。
+  'directoryPicker/list', 'directoryPicker/createDirectory',
   'workspace/delete',
 ]
 
@@ -101,9 +104,9 @@ export const SECRET_BEARING_ENDPOINTS: readonly string[] = [
 
 /** Explicit endpoints which remain unavailable to paired devices, for every role including Full. */
 export const NEVER_DELEGATED_ENDPOINTS: readonly string[] = [
+  // 宿主桌面上的**原生弹框**：等于远程操控宿主 UI，永不下放。
+  // （云端目录浏览走 `directoryPicker/list|createDirectory`，由 Full 使用。）
   'directoryPicker/pick',
-  'directoryPicker/list',
-  'directoryPicker/createDirectory',
   'pluginInventory/list',
   'settings/openSettingsDocument',
 ]
@@ -119,20 +122,18 @@ export const NEVER_DELEGATED_ENDPOINTS: readonly string[] = [
  */
 export const NEVER_DELEGATED_BLANKET: readonly string[] = [
   'pluginInventory/',
-  'directoryPicker/',
   'account/',
   'dynamicCordisRunner/',
 ]
 
 /**
- * 整组禁用、但允许 {@link SHARED_READ_ENDPOINTS} / {@link FULL_ADMIN_ENDPOINTS} 里具名豁免的 namespace。
+ * 整组禁用、但允许具名豁免的 namespace。
  *
- * 判定顺序保证豁免优先：`pluginManager/listPlugins`（共享只读）与
- * `pluginManager/installBundle`（Full 专属 + 需审批）都不会被前缀误伤；
- * 而 `pluginManager/unknownWrite`、`credentials/rotate` 这类未登记方法仍然拒绝。
+ * `directoryPicker/` 在这里（豁免 `list` / `createDirectory`），这样**宿主原生弹框**
+ * `directoryPicker/pick` 与任何未来新增的 picker 方法都默认拒绝。
  */
 export const NEVER_DELEGATED_NAMESPACES: readonly string[] = [
-  'remoteAccess/', 'pluginManager/', 'pluginMarket/', 'credentials/', 'settings/',
+  'remoteAccess/', 'pluginManager/', 'pluginMarket/', 'credentials/', 'settings/', 'directoryPicker/',
 ]
 
 /** Gateway 自有面（不是 `<ns>/<method>` 形状，单独列出以便断言）。 */

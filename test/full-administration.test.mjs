@@ -29,10 +29,11 @@ test('host-native picker and unknown administration remain denied', () => {
   assert.equal(isNeverDelegated('pluginManager/unknownWrite'), true)
 })
 
-test('account, plugin inventory and host directory surfaces are red lines for every role', () => {
+test('account, plugin inventory and host-native picker are red lines for every role', () => {
   const redlines = [
     'settings/openSettingsDocument',
-    'directoryPicker/pick', 'directoryPicker/list', 'directoryPicker/createDirectory',
+    // 宿主桌面原生弹框：永不下放（云端浏览走 directoryPicker/list|createDirectory）
+    'directoryPicker/pick',
     'pluginInventory/list',
     'account/getState', 'account/getProfile', 'account/getBalance',
     'remoteAccess/follow',
@@ -44,6 +45,17 @@ test('account, plugin inventory and host directory surfaces are red lines for ev
     for (const role of ['read-only', 'control', 'full']) {
       assert.equal(allActionsFor(role).includes(endpoint), false, `${role} must not hold ${endpoint}`)
     }
+  }
+})
+
+test('0.3.0: built-in cloud paths need Full to browse and create remote directories', () => {
+  for (const endpoint of ['directoryPicker/list', 'directoryPicker/createDirectory', 'workspaceFiles/list']) {
+    assert.ok(allActionsFor('full').includes(endpoint), `full must be able to call ${endpoint}`)
+    assert.equal(isNeverDelegated(endpoint), false, `${endpoint} must not be a red line`)
+  }
+  for (const endpoint of ['directoryPicker/list', 'directoryPicker/createDirectory']) {
+    assert.equal(allActionsFor('control').includes(endpoint), false, `control must not call ${endpoint}`)
+    assert.equal(allActionsFor('read-only').includes(endpoint), false, `read-only must not call ${endpoint}`)
   }
 })
 

@@ -15,7 +15,7 @@
 | --- | --- | --- | --- | ---: |
 | `read-only` | 只读 | 看列表、历史、状态、文件内容、任务面板、只读目录 | 任何写入、执行、上传 | 53 |
 | `control` | 控制 | 只读 + 驱动会话（prompt / cancel / create / fork / rename / 队列）、审批与提问 | 碰文件系统与终端 | 78 |
-| `full` | 完全 | 控制 + 上传文件、工作区文件读写、终端、`job/kill` | **不等于 DSH owner**：凭据、账号、插件安装、动态执行仍然全部拒绝 | 102 |
+| `full` | 完全 | 控制 + 上传文件、工作区文件读写、终端、`job/kill` | **不等于 DSH owner**：凭据、账号、插件安装、动态执行仍然全部拒绝 | 104 |
 
 **未知 endpoint 一律拒绝（fail-closed）**。三档角色严格包含：`read-only ⊆ control ⊆ full`。
 
@@ -33,12 +33,12 @@
 | 红线（前缀） | `NEVER_DELEGATED_NAMESPACES`：整条关闭，但共享只读目录可豁免 |
 | 红线（Gateway 内部面） | `$events` / `$events/result`，非 owner 由 `interactions:'none'` 挡住 |
 
-## 2. 已授权接口（102 个）
+## 2. 已授权接口（104 个）
 
 按资源种类分组。资源种类决定 binding 挂法：没有参数指明资源时是 `global`，
 由 `sessionId` / `workspaceFileScopeId` / `agentId` 解析出来的是 `session`。
 
-### 2.1 global 资源（66 个）
+### 2.1 global 资源（68 个）
 
 | endpoint | 资源 | 形式 | 只读 | 控制 | 完全 | 判定依据 |
 | --- | --- | --- | :---: | :---: | :---: | --- |
@@ -46,6 +46,8 @@
 | `credentials/describe` | global | 一元 | ✓ | ✓ | ✓ | 共享只读目录 |
 | `credentials/set` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `credentials/unset` | global | 一元 | — | — | ✓ | Full 专属管理面 |
+| `directoryPicker/createDirectory` | global | 一元 | — | — | ✓ | Full 专属管理面 |
+| `directoryPicker/list` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `goals/clear` | global | 一元 | — | — | ✓ | 文件/终端 |
 | `goals/complete` | global | 一元 | — | ✓ | ✓ | 会话驱动 |
 | `goals/create` | global | 一元 | — | ✓ | ✓ | 会话驱动 |
@@ -164,8 +166,8 @@
 | --- | --- | :---: | :---: | :---: |
 | `settings/openSettingsDocument` | 在宿主打开设置文档 = 操控宿主 UI | — | — | — |
 | `directoryPicker/pick` | 宿主桌面原生对话框/目录面 | — | — | — |
-| `directoryPicker/list` | 宿主桌面原生对话框/目录面 | — | — | — |
-| `directoryPicker/createDirectory` | 宿主桌面原生对话框/目录面 | — | — | — |
+| `directoryPicker/list` | 宿主桌面原生对话框/目录面 | — | — | ✓ |
+| `directoryPicker/createDirectory` | 宿主桌面原生对话框/目录面 | — | — | ✓ |
 | `pluginInventory/list` | 已装插件清单暴露攻击面 | — | — | — |
 | `account/getState` | 账号凭据与登录态（官方登录态不可控） | — | — | — |
 | `account/getProfile` | 账号凭据与登录态（官方登录态不可控） | — | — | — |
@@ -175,7 +177,7 @@
 | `credentials/reveal` | 未登记的 credentials / settings 方法，前缀红线默认拒绝 | — | — | — |
 | `settings/import` | 未登记的 credentials / settings 方法，前缀红线默认拒绝 | — | — | — |
 
-整组禁用的 namespace（无豁免）：`pluginInventory/*`、`directoryPicker/*`、`account/*`、`dynamicCordisRunner/*`。
+整组禁用的 namespace（无豁免）：`pluginInventory/*`、`account/*`、`dynamicCordisRunner/*`。
 
 ## 3.1 需要 owner 逐次审批的接口（0.2.6）
 

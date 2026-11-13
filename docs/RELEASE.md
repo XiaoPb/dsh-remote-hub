@@ -66,7 +66,7 @@ npm pack + SHA-256
 ```
 
 **版本门禁**：`package.json` 必须是 SemVer，且 tag 必须严格等于 `v<version>`。
-tag 写错（例如 `v0.2.6` 却忘了改 `package.json`）时流水线在第一步就失败，不会产生一个错的包。
+tag 写错（例如 `v0.3.0` 却忘了改 `package.json`）时流水线在第一步就失败，不会产生一个错的包。
 
 **发布后校验**：`scripts/publish-npm.sh` 不信任 `npm publish` 的退出码。npm 可能在
 「接受请求」后进入自动校验（`status: validating`）或 staged 审批，此时退出码是 0 但版本并未可见。
@@ -115,11 +115,11 @@ node scripts/release-check.mjs
 pnpm run typecheck && pnpm run build && npm run check
 
 # 3) 提交并推 main，等 CI 绿
-git add -A && git commit -m "release: prepare remote hub 0.2.6"
+git add -A && git commit -m "release: prepare remote hub 0.3.0"
 git push origin main
 
 # 4) 打 tag 触发发布
-git tag v0.2.6 && git push origin v0.2.6
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
 ### 4.2 只验证发布脚本（不真的发布）
