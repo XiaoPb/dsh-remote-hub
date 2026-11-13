@@ -56,31 +56,6 @@ const INTENTIONAL_GAPS = Object.freeze({
   'officeToPdf/render': 'Office 转 PDF：需要在宿主读 Office 文件并起渲染进程，尚未评审',
   'officeToPdf/generation': 'Office 转 PDF 的缓存世代探测，随 render 一起',
   'sessionFeedback/record': '会话质量反馈写回，属于宿主侧产品的反馈闭环，尚未评审',
-
-  // ── dynamicCordisRunner/*：由 @deepseek-ai/dsh-cordis-host-runner 提供 ─────
-  // 该插件尚未在当前 profile 激活，但权限设计已完成（0.3.5）：
-  // - list, syncInspectManifest: 三档共享只读（SHARED_READ_ENDPOINTS）
-  // - define, run, stop, undefine, getDefinition, queryRunning: Full 专属（FULL_ADMIN_ENDPOINTS）
-  // 其他方法（getClientCode/invoke/等）由 cordis-host-runner 内部使用，不外放。
-  'dynamicCordisRunner/define': '动态包定义（0.3.5 已授权给 Full），等待 cordis-host-runner 激活',
-  'dynamicCordisRunner/run': '动态包运行（0.3.5 已授权给 Full），等待 cordis-host-runner 激活',
-  'dynamicCordisRunner/stop': '动态包停止（0.3.5 已授权给 Full），等待 cordis-host-runner 激活',
-  'dynamicCordisRunner/undefine': '动态包取消定义（0.3.5 已授权给 Full），等待 cordis-host-runner 激活',
-  'dynamicCordisRunner/list': '列出动态包（0.3.5 已授权三档共享），等待 cordis-host-runner 激活',
-  'dynamicCordisRunner/syncInspectManifest': '同步清单（0.3.5 已授权三档共享），等待 cordis-host-runner 激活',
-  'dynamicCordisRunner/getDefinition': '查询定义（0.3.5 已授权给 Full），等待 cordis-host-runner 激活',
-  'dynamicCordisRunner/queryRunning': '查询运行状态（0.3.5 已授权给 Full），等待 cordis-host-runner 激活',
-  'dynamicCordisRunner/getClientCode': 'cordis-host-runner 内部方法，非远端功能',
-  'dynamicCordisRunner/inventory': 'cordis-host-runner 内部方法，非远端功能',
-  'dynamicCordisRunner/invoke': 'cordis-host-runner 内部方法，非远端功能',
-  'dynamicCordisRunner/reportClientGuardFailure': 'cordis-host-runner 内部方法，非远端功能',
-  'dynamicCordisRunner/reportRenderFailure': 'cordis-host-runner 内部方法，非远端功能',
-  'dynamicCordisRunner/resolveInspectQuery': 'cordis-host-runner 内部方法，非远端功能',
-  'dynamicCordisRunner/resolveRequestRun': 'cordis-host-runner 内部方法，非远端功能',
-  'dynamicCordisRunner/runHostHalf': 'cordis-host-runner 内部方法，非远端功能',
-  'dynamicCordisRunner/settleUserRun': 'cordis-host-runner 内部方法，非远端功能',
-  'dynamicCordisRunner/stopFromPanel': 'cordis-host-runner 内部方法，非远端功能',
-  'dynamicCordisRunner/undefineFromPanel': 'cordis-host-runner 内部方法，非远端功能',
 })
 
 // ── 1. 官方注册表 ────────────────────────────────────────────────────────

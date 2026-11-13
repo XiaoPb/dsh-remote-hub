@@ -41,10 +41,6 @@
  *
  * 0.3.1：`pluginInventory/list`（已装插件清单）也放进共享只读——插件页在
  * 只读配对下也要能渲染清单；它只返回 Loader 条目与显示元数据，不含任何凭据。
- *
- * 0.3.2：`dynamicCordisRunner/list` 与 `dynamicCordisRunner/syncInspectManifest` 为只读探测——
- * 前者列出已定义的动态包（供管理面展示），后者同步检查清单（供注册表发现）；
- * 写入操作（define/run/stop/undefine）仅限 Full 角色。
  */
 export const SHARED_READ_ENDPOINTS: readonly string[] = [
   'schedule/catalog', 'schedule/history', 'schedule/list',
@@ -54,7 +50,6 @@ export const SHARED_READ_ENDPOINTS: readonly string[] = [
   'pluginInventory/list',
   'settings/describe',
   'credentials/describe',
-  'dynamicCordisRunner/list', 'dynamicCordisRunner/syncInspectManifest',
 ]
 
 /**
@@ -82,10 +77,15 @@ export const FULL_ADMIN_ENDPOINTS: readonly string[] = [
   // 宿主原生弹框 `directoryPicker/pick` 仍是红线。
   'directoryPicker/list', 'directoryPicker/createDirectory',
   'workspace/delete',
-  // 0.3.2：动态 Cordis 包管理（Full 权限专属）。
-  // 注：list 和 syncInspectManifest 是只读的，不在这里；见 SHARED_READ_ENDPOINTS。
+  // 0.3.2：动态 Cordis 包管理（Full 权限专属）- 所有方法完全开放给 Full。
   'dynamicCordisRunner/define', 'dynamicCordisRunner/run', 'dynamicCordisRunner/stop', 'dynamicCordisRunner/undefine',
+  'dynamicCordisRunner/list', 'dynamicCordisRunner/syncInspectManifest',
   'dynamicCordisRunner/getDefinition', 'dynamicCordisRunner/queryRunning',
+  'dynamicCordisRunner/getClientCode', 'dynamicCordisRunner/inventory', 'dynamicCordisRunner/invoke',
+  'dynamicCordisRunner/reportClientGuardFailure', 'dynamicCordisRunner/reportRenderFailure',
+  'dynamicCordisRunner/resolveInspectQuery', 'dynamicCordisRunner/resolveRequestRun',
+  'dynamicCordisRunner/runHostHalf', 'dynamicCordisRunner/settleUserRun',
+  'dynamicCordisRunner/stopFromPanel', 'dynamicCordisRunner/undefineFromPanel',
 ]
 
 /**
