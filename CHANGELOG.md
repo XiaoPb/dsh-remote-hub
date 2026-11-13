@@ -3,6 +3,34 @@
 本文件记录 `@xiaopb/dsh-remote-hub` 与伴生包 `@xiaopb/dsh-remote-paths` 的公开变更。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)；`0.x` 期间的次版本号可能包含不兼容变更。
 
+## [0.3.4] - 2026-11-14
+
+**修复局域网配对 403 错误：私有地址 Origin 现在自动放行。**
+
+### 问题
+
+局域网模式（`network: 'lan'`）下，主控端浏览器（如 `http://127.0.0.1:13091`）向被控端守卫
+（如 `http://192.168.0.17:8443`）发起跨域配对请求时，`Origin` 头是私有地址但与 `Host` 不同源，
+被 fence 的第三段（Origin 检查）拦截为 403 "Origin does not match Host authority"。
+
+之前需要在被控端手动配置 `allowedOrigins` 白名单才能通过，但这要求用户预先知道所有可能的端口。
+
+### 修复
+
+- **`allowPrivateOrigin`**：`checkSource()` 新增选项，当值为 `true` 且 Origin 是私有地址
+  （RFC 1918 / 链路本地 / ULA）时，即使与 Host 不同源也放行。
+- **自动启用**：`network === 'lan'` 时，`guard.ts` 自动传入 `allowPrivateOrigin: true`，
+  无需手动配置。
+- 公网 Origin 仍然拒绝（`isPrivateHostname()` 对公网地址返回 `false`）。
+- **移除 `allowedOrigins` workaround**：之前的手动白名单配置不再需要。
+
+### 测试
+
+- `test/fence.test.mjs` 新增专项测试，覆盖 `127.0.0.1`、`localhost`、`10.x`、`172.16-31.x`、
+  `192.168.x` 等私有地址 Origin。
+- 端到端验证：testhub（`127.0.0.1:13091`）成功配对到 Debian（`192.168.0.17:8443`），
+  无需 `allowedOrigins` 配置。
+
 ## [0.3.2] - 2026-11-13
 
 **权限全面复核：补上 19 个漏登记的官方 endpoint，并把「漏登记」变成 CI 断言。**

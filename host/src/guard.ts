@@ -444,6 +444,9 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
         allowLoopbackCrossPortOrigin: ADMIN_ROUTE_SET.has(path),
         // 跨机接管：主控端页面的 origin 必须被显式放行（默认空 = fail-closed）。
         allowedOrigins: config.allowedOrigins,
+        // lan 模式：自动放行来自私有地址的 Origin（主控端页面在对端机器上，
+        // origin 是对端的 DSH web 地址，不可能预先枚举）。
+        allowPrivateOrigin: config.network === 'lan',
       })
       if (!fence.ok) {
         audit('source-rejected', { path, reason: fence.reason })

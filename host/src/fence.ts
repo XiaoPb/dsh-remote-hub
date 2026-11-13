@@ -65,6 +65,22 @@ export interface SourceOptions {
    * 跨站页面盗用。
    */
   allowedOrigins?: readonly string[]
+  /**
+   * 局域网 Origin 自动放行：为 true 时，来自**私有地址** Origin（RFC1918 /
+   * 链路本地 / IPv6 ULA）的请求无需出现在 `allowedOrigins` 白名单中即可通过。
+   *
+   * ## 使用场景
+   *
+   * `network: 'lan'` 模式下，接管方的浏览器页面 origin 是对端机器的 DSH web
+   * 地址（例如 `http://192.168.0.106:13091`）——它是私有地址，每台机器不同，
+   * 不可能提前枚举写入 `allowedOrigins`。开启此选项后，守卫自动信任同网段
+   * 的 Origin，无需为每台主控端机器手动配置。
+   *
+   * **安全语义**：与 `allowPrivate`（放行私有地址 Host）对称。真正的身份校验
+   * 仍由设备令牌承担；围栏只防 CSRF，私有地址之间的 CSRF 风险极低。
+   * 公网 Origin（非私有地址）**永不**因此项被放行。
+   */
+  allowPrivateOrigin?: boolean
 }
 
 export type SourceVerdict =
@@ -214,7 +230,11 @@ export function checkSource(req: FenceRequest, options: SourceOptions): SourceVe
       const canonicalOriginValue = canonicalOrigin(origin)
       return canonicalEntry !== undefined && canonicalEntry === canonicalOriginValue
     })
-    if (!sameAuthority && !loopbackCrossPort && !explicitlyAllowed) {
+    // 局域网 Origin 自动放行：私有地址 Origin（RFC1918/链路本地/ULA）在 lan 模式下免白名单。
+    // 公网 Origin 永不受益于此项（isPrivateHostname 对公网地址返回 false）。
+    const privateOriginAllowed = options.allowPrivateOrigin === true
+      && isPrivateHostname(originUrl.hostname)
+    if (!sameAuthority && !loopbackCrossPort && !explicitlyAllowed && !privateOriginAllowed) {
       return { ok: false, reason: 'Origin does not match Host authority' }
     }
   }
