@@ -36,6 +36,7 @@ import { createDispatcher } from './dispatch.js'
 import { remoteDevicePrincipal } from './principal.js'
 import { PAIR_ISSUE_GLOBAL, PAIR_ISSUE_PIN_FILE, startGuard, type GuardDeps, type GuardHandle } from './guard.js'
 import { createGuardMux } from './guard-mux.js'
+import { applyLocalPluginManager } from './local-plugin-manager/index.js'
 import { createSensitiveApprovalGate } from './sensitive-approval.js'
 import { createMetricsCollector } from './metrics.js'
 import { createPairingService } from './pairing.js'
@@ -871,6 +872,14 @@ function assembleRemoteHub(ctx: Context, config: ConfigType): void {
       },
     }
     ;(ctx as unknown as { remoteHubHost?: RemoteHubHost }).remoteHubHost = handle
+
+    // ── 本地插件管理直连通道（独立于守卫，守卫装配失败也照常尝试）─────────────
+    //
+    // 它只依赖 `pluginManager`（本机 profile 插件管理）+ `connection`（精确路径路由）
+    // + `webServer`（事件通道升级）。任意一项缺席都静默不挂：本机插件页只是不可用，
+    // 绝不影响守卫、接管与官方页。
+    const localPlugins = applyLocalPluginManager(ctx)
+    push(() => localPlugins.dispose())
 
     return () => handle.dispose()
   }, 'dsh-remote-hub: full assembly')

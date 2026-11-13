@@ -218,6 +218,32 @@ export {
 } from './tunnel.js'
 export type { TunnelHandle, BackoffState } from './tunnel.js'
 
+// ── host：本地插件管理直连服务（不经 RPC，owner-only）───────────────────────
+export {
+  LocalPluginManagerService,
+  LocalPluginError,
+  asLocalPluginError,
+  badRequest,
+  unavailable,
+  failureBody,
+  readService,
+  resolveLocalPluginUpstreams,
+} from './local-plugin-manager/service.js'
+export type {
+  LocalPluginCallContext,
+  LocalPluginUpstreams,
+} from './local-plugin-manager/service.js'
+export {
+  applyLocalPluginManager,
+  assertOwnerPeer,
+  rejectUpgrade,
+} from './local-plugin-manager/index.js'
+export type { LocalPluginChannelHandle } from './local-plugin-manager/index.js'
+export { LocalPluginEventBus, EVENT_KINDS } from './local-plugin-manager/events.js'
+export type { LocalPluginEventBusOptions, LocalPluginEventName } from './local-plugin-manager/events.js'
+export { createDetailFileHandler, readBundleImageAtRuntime, DETAIL_LIMITS } from './local-plugin-manager/detail-file.js'
+export { detailImageResponse } from './local-plugin-manager/response.js'
+
 // ── 插件入口 ──────────────────────────────────────────────────────────────────
 export { applyRemoteHub, probeServices, name, hostInstanceId, assertGuardPortFree, resolveGuardPort, MAX_PORT_SCAN, HOST_STATUS_FILE } from './plugin.js'
 export type { RemoteHubHost } from './plugin.js'
