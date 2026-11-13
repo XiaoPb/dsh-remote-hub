@@ -69,9 +69,24 @@ describe('守卫端口占用预检（assertGuardPortFree）', () => {
   })
 
   it('端口空闲 → 不抛错', async () => {
-    await assert.doesNotReject(() => mod.assertGuardPortFree({ ...mod.DEFAULT_CONFIG, guardPort: 1 }))
+    // 不能假定固定端口空闲：Linux runner 上 1024 以下端口对非 root 的 bind 会失败，
+    // 结果与「端口被占」无法区分。这里先拿到一个真正空闲的端口再断言。
+    const idle = await findFreePort()
+    await assert.doesNotReject(() => mod.assertGuardPortFree({ ...mod.DEFAULT_CONFIG, guardPort: idle }))
   })
 })
+
+/**
+ * 向系统要一个当前空闲的端口（bind 到 0 再立刻释放）。
+ * @returns {Promise<number>} 空闲端口号。
+ */
+async function findFreePort() {
+  const probe = createServer()
+  await new Promise(resolve => { probe.listen(0, '127.0.0.1', () => { resolve() }) })
+  const port = probe.address().port
+  await new Promise(resolve => { probe.close(() => { resolve() }) })
+  return port
+}
 
 /**
  * 最小 cordis ctx 桩：`applyRemoteHub` 需要 `inject` / `effect` / `logger`。
