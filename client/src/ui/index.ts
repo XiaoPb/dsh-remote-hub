@@ -111,6 +111,10 @@ export function renderPanel(options: RemotePanelOptions): React.ReactNode {
 /**
  * 挂载面板。
  *
+ * 官方契约：槽位注册必须包在 `ctx.slots.inject(name, () => ctx.slots.register(...))`
+ * 里（dsh-cordis-client-runner 内置文档的权威示例；dsh-mobile-compose 同款）。
+ * 旧实现裸调 `slots.register(...)` 是面板从未出现的根因。
+ *
  * `slots` 缺席时**不静默失败**：抛明确错误（同源模式要求
  * `@deepseek-ai/dsh-client-ui-slots` 已装配）。返回句柄的 `dispose()` 会执行所有
  * disposer，且顺序与注册相反。
@@ -124,14 +128,24 @@ export function mountRemotePanel(ctx: unknown, options: RemotePanelOptions): Rem
   // `injectWhenReady` 的注入作用域取值后传入（见 plugin.ts）。
   const slots = options.slots
   const disposers: (() => void)[] = []
+  const injectable = ctx as { slots?: { inject?: (name: string, setup: () => void) => unknown } }
 
   if (slots !== undefined && typeof slots.register === 'function') {
-    // `shell.overlay` 是 list/root 槽：注册一个条目而不替换别人的条目。
-    disposers.push(slots.register({
-      name: 'shell.overlay',
-      id: 'remote-hub-panel',
-      order: 100,
-    }, () => renderPanel(options)))
+    const register = (): void => {
+      // `shell.overlay` 是官方 AppFrame 渲染的 frame 级 overlay 槽。
+      disposers.push(slots.register({
+        name: 'shell.overlay',
+        id: 'remote-hub-panel',
+        order: 100,
+      }, () => renderPanel(options)))
+    }
+    // 官方契约：inject 声明渲染授权；register 只有在 inject 的 setup 里执行
+    // 才会被槽位 ledger 接受。
+    if (typeof injectable.slots?.inject === 'function') {
+      injectable.slots.inject('shell.overlay', register)
+    } else {
+      register() // 测试桩无 inject 时退化为直接注册（行为等价）。
+    }
   } else {
     throw new Error(
       'dsh-remote-hub: ctx.slots is unavailable; the panel requires @deepseek-ai/dsh-client-ui-slots',

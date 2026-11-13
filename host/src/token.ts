@@ -111,6 +111,21 @@ export function createTokenService(deps: TokenServiceDeps): TokenService {
   const now = deps.now ?? (() => new Date())
   const revokedListeners = new Set<(deviceId: string) => void>()
   const roleListeners = new Set<(deviceId: string, role: DeviceRecord['role']) => void>()
+  /** 心跳节流：每设备 60s 最多写一次 `lastSeenAt`（页面据此分级在线/空闲/离线）。 */
+  const lastTouch = new Map<string, number>()
+  const TOUCH_THROTTLE_MS = 60_000
+
+  async function touchSeen(deviceId: string): Promise<void> {
+    const at = now().getTime()
+    const previous = lastTouch.get(deviceId) ?? 0
+    if (at - previous < TOUCH_THROTTLE_MS) return
+    lastTouch.set(deviceId, at)
+    try {
+      await devices.update(deviceId, { lastSeenAt: new Date(at).toISOString() })
+    } catch {
+      // 心跳写失败不影响认证结果。
+    }
+  }
 
   return {
     async issue(options) {
@@ -133,6 +148,7 @@ export function createTokenService(deps: TokenServiceDeps): TokenService {
       for (const device of devices.list()) {
         if (device.revokedAt !== null) continue
         if (verifyTokenHash(token, device.tokenHash)) {
+          void touchSeen(device.deviceId)
           return { deviceId: device.deviceId, role: device.role }
         }
       }

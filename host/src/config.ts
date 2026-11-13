@@ -43,6 +43,17 @@ export interface Config {
    */
   publicAuthorities: string[]
   /**
+   * 额外放行的**完整 origin**（`scheme://host[:port]`），用于跨机接管。
+   *
+   * 主控端页面跑在自己的机器上（例如 `http://127.0.0.1:3091`），守卫在另一台
+   * 机器上；浏览器发的 `Origin` 与守卫的 `Host` 天然不同源，若不显式放行，
+   * 所有 RPC 都会得到 `403 source not allowed`（实测：会话创建/模型列表/
+   * 权限目录/目录选择器全部 403）。
+   *
+   * 默认空数组 = fail-closed。身份校验仍由设备令牌承担，这里只做 CSRF 围栏。
+   */
+  allowedOrigins: string[]
+  /**
    * DSH 自己的 origin。**只用于静态资源透传（如有），不参与 API 派发。**
    * 一元调用不是「代理到 upstream」，而是守卫用 `peer` 身份在进程内走
    * `connection.createSharedFetchHandler('/api').fetch(request, peer)`。
@@ -76,6 +87,19 @@ export interface Config {
   approvalBridgeTimeoutMs: number
   /** 是否把审批请求投给远端设备（安全评审否决时可整体关掉，见 ROADMAP M2 的 Plan B）。 */
   bridgeApprovals: boolean
+  /**
+   * 单控策略：新设备配对成功时，自动吊销**其它所有**已配对设备，保证任何时刻
+   * 只有一台设备能控制本机（避免多控）。默认开启。
+   */
+  singleController: boolean
+  /**
+   * 信任域：`loopback`（默认，只有本机可连）或 `lan`（同一局域网内可直连）。
+   *
+   * 公网访问**不**由本选项提供：`lan` 只放行私网/链路本地来源，公网仍需隧道
+   * 转发（`tunnel`）或 VPN 打通局域网。绑定地址、来源围栏、socket 对端三重
+   * 判据都按这个值切换。
+   */
+  network: 'loopback' | 'lan'
   /** 隧道。 */
   tunnel: TunnelConfig
 }
@@ -131,6 +155,57 @@ function canonicalAuthority(entry: string): string | undefined {
 }
 
 /**
+ * 私有地址判定（RFC1918 + 链路本地 + IPv6 ULA/链路本地）。
+ *
+ * 局域网信任域只接受这些地址：它们不可从公网路由，所以「允许私网 authority」
+ * 不等于「对公网开放」。公网访问必须经隧道（本插件 `tunnel`）或 VPN。
+ * @param address - 裸 IP 字面量（v4 或 v6）。
+ * @returns 属于私网/链路本地时为 true。
+ */
+export function isPrivateAddress(address: string): boolean {
+  const value = address.trim().toLowerCase().replace(/^\[|\]$/gu, '')
+  if (value === '::1' || value === 'localhost') return true
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(value)
+  if (v4 !== null) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])]
+    if ([Number(v4[1]), Number(v4[2]), Number(v4[3]), Number(v4[4])].some(part => part > 255)) return false
+    if (a === 127 || a === 10) return true
+    if (a === 192 && b === 168) return true
+    if (a === 172 && b >= 16 && b <= 31) return true
+    if (a === 169 && b === 254) return true // 链路本地（无 DHCP 的直连）
+    return false
+  }
+  // IPv6：ULA fc00::/7、链路本地 fe80::/10、回环。
+  if (/^f[cd][0-9a-f]{2}:/u.test(value)) return true
+  if (/^fe[89ab][0-9a-f]:/u.test(value)) return true
+  return false
+}
+
+/**
+ * 局域网模式下的绑定地址断言。
+ *
+ * - `loopback`（默认）：必须是回环字面量，行为与 v0.1 完全一致。
+ * - `lan`：允许 `0.0.0.0` / `::` 或**私有**地址字面量；**公网地址一律拒绝**
+ *   （公网暴露必须走隧道或 VPN，不能靠改绑定地址实现）。
+ * @param host - `guardHost`。
+ * @param network - 信任域。
+ * @throws 不合法时，错误文本含具体原因。
+ */
+export function assertBindableHost(host: string, network: 'loopback' | 'lan'): void {
+  if (network === 'loopback') {
+    assertLoopbackLiteral(host)
+    return
+  }
+  if (host === '0.0.0.0' || host === '::' || host === '[::]') return
+  if (isLoopbackLiteral(host) || isPrivateAddress(host)) return
+  throw new Error(
+    `dsh-remote-hub: guardHost ${JSON.stringify(host)} is not a private address literal; `
+    + 'LAN mode may bind 0.0.0.0/:: or a private (RFC1918 / IPv6 ULA) address only — '
+    + 'public exposure must go through the tunnel or a VPN',
+  )
+}
+
+/**
  * 加载期断言：每个 `publicAuthorities` 项都是裸 authority。
  * @param entries - 配置里的数组。
  * @throws 指名第一个不合格的项。
@@ -159,6 +234,7 @@ export const Config: z<Config> = z.object({
   guardHost: z.string().default('127.0.0.1'),
   guardPort: z.number().min(1).max(65_535).default(8443),
   publicAuthorities: z.array(z.string()).default([]),
+  allowedOrigins: z.array(z.string()).default([]),
   upstreamUrl: z.string().default('http://127.0.0.1:3080'),
   defaultRole: z.union([z.const(ROLE_READ_ONLY), z.const(ROLE_CONTROL), z.const(ROLE_FULL)]).default(ROLE_CONTROL),
   deviceTablePath: z.string().default('~/.dsh/remote-hub/devices.json'),
@@ -174,6 +250,8 @@ export const Config: z<Config> = z.object({
   maxStreamsPerDevice: z.number().min(1).max(64).default(LIMITS.maxStreamsPerDevice),
   approvalBridgeTimeoutMs: z.number().min(1_000).default(STREAM_BUDGET.readTimeoutMs),
   bridgeApprovals: z.boolean().default(true),
+  singleController: z.boolean().default(true),
+  network: z.union([z.const('loopback'), z.const('lan')]).default('loopback'),
   tunnel: z.object({
     kind: z.union([z.const('none'), z.const('cloudflared')]).default('none'),
     command: z.string(),
@@ -187,6 +265,7 @@ export const DEFAULT_CONFIG: Config = {
   guardHost: '127.0.0.1',
   guardPort: 8443,
   publicAuthorities: [],
+  allowedOrigins: [],
   upstreamUrl: 'http://127.0.0.1:3080',
   defaultRole: ROLE_CONTROL,
   deviceTablePath: '~/.dsh/remote-hub/devices.json',
@@ -202,6 +281,8 @@ export const DEFAULT_CONFIG: Config = {
   maxStreamsPerDevice: LIMITS.maxStreamsPerDevice,
   approvalBridgeTimeoutMs: STREAM_BUDGET.readTimeoutMs,
   bridgeApprovals: true,
+  singleController: true,
+  network: 'loopback',
   tunnel: { kind: 'none', restart: 'on-failure' },
 }
 
@@ -214,7 +295,7 @@ export const DEFAULT_CONFIG: Config = {
  * @throws 当任一约束不成立。
  */
 export function validateConfig(config: Config): void {
-  assertLoopbackLiteral(config.guardHost)
+  assertBindableHost(config.guardHost, config.network)
   assertPublicAuthorities(config.publicAuthorities)
   if (!isRoleName(config.defaultRole)) {
     throw new Error(`dsh-remote-hub: defaultRole ${JSON.stringify(config.defaultRole)} is not a known role`)

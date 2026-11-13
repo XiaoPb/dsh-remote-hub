@@ -30,6 +30,41 @@ export interface SourceOptions {
   publicAuthorities: readonly string[]
   /** 监听器协议；决定默认端口如何规范化。默认 `'http:'`。 */
   protocol?: 'http:' | 'https:'
+  /**
+   * 局域网信任域：为 true 时额外放行**私有地址** authority（RFC1918 / 链路本地 /
+   * IPv6 ULA）。公网地址**永不**因为这一项被放行 —— 公网访问只能经隧道
+   * （`publicAuthorities` 显式声明）或 VPN（届时来源是私网地址）。
+   */
+  allowPrivate?: boolean
+  /**
+   * 允许「回环主机、不同端口」的 Origin（仅用于本机管理端点）。
+   *
+   * 本机页面由 DSH web 在 `127.0.0.1:<webPort>` 提供，守卫在
+   * `127.0.0.1:<guardPort>` —— 同主机不同端口在浏览器眼里是**跨源**，
+   * 因此真实请求的 `Origin` authority 永远不等于 `Host` authority。
+   * 这些端点另有「socket 回环 + 进程内 pairIssueToken」双条件，Origin 只作为
+   * 额外的 CSRF 防护，所以对回环 origin 放宽端口是安全的；**非回环 origin 不放宽**。
+   */
+  allowLoopbackCrossPortOrigin?: boolean
+  /**
+   * 额外放行的**完整 origin**（`scheme://authority`，例如
+   * `http://127.0.0.1:3091`）。
+   *
+   * ## 为什么需要它（2026-11-12 两机实测）
+   *
+   * 跨机接管时，主控端页面跑在自己的机器上（例如沙箱的
+   * `http://127.0.0.1:3091`），而守卫在**另一台**机器的
+   * `http://192.168.0.17:8443`。浏览器发的 `Origin` 是主控端页面的 origin，
+   * 与守卫的 `Host` authority 天然不等 —— 即使 `network: 'lan'` 放行了私有
+   * 地址 authority，`Origin` 与 `Host` 的**同源判定**仍会失败，于是所有 RPC
+   * 都得到 `403 source not allowed`（实测：会话创建 / 模型列表 / 权限目录 /
+   * 目录选择器全部 403）。
+   *
+   * 这是**显式**放行：只有被管理员写进配置的 origin 才通过，默认仍是空数组
+   * （fail-closed）。真正的身份校验仍由设备令牌承担，围栏只防 CSRF 与
+   * 跨站页面盗用。
+   */
+  allowedOrigins?: readonly string[]
 }
 
 export type SourceVerdict =
@@ -61,6 +96,31 @@ export function isLoopbackHostname(hostname: string): boolean {
   return parts.length === 4
     && parts[0] === '127'
     && parts.every(part => /^\d{1,3}$/u.test(part) && Number(part) <= 255)
+}
+
+/**
+ * 私有地址判定（与 `config.isPrivateAddress` 同判据；本文件保持零依赖，
+ * 因为它要被测试单独注入）。
+ * @param address - 裸 IP 字面量（可带方括号）。
+ * @returns RFC1918 / 链路本地 / IPv6 ULA 时为 true。
+ */
+export function isPrivateHostname(address: string): boolean {
+  const value = address.trim().toLowerCase().replace(/^\[|\]$/gu, '')
+  if (value === '::1' || value === 'localhost') return true
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(value)
+  if (v4 !== null) {
+    const parts = [Number(v4[1]), Number(v4[2]), Number(v4[3]), Number(v4[4])]
+    if (parts.some(part => part > 255)) return false
+    const [a, b] = [parts[0]!, parts[1]!]
+    if (a === 127 || a === 10) return true
+    if (a === 192 && b === 168) return true
+    if (a === 172 && b >= 16 && b <= 31) return true
+    if (a === 169 && b === 254) return true
+    return false
+  }
+  if (/^f[cd][0-9a-f]{2}:/u.test(value)) return true // ULA fc00::/7
+  if (/^fe[89ab][0-9a-f]:/u.test(value)) return true // 链路本地 fe80::/10
+  return false
 }
 
 /**
@@ -119,7 +179,9 @@ export function checkSource(req: FenceRequest, options: SourceOptions): SourceVe
   const hostname = host.split(':')[0] ?? ''
   const loopback = isLoopbackHostname(hostname)
   const declared = options.publicAuthorities.some(entry => canonicalAuthority(entry) === canonical)
-  if (!loopback && !declared) return { ok: false, reason: 'Host is not allowed' }
+  // 局域网模式：私有地址 authority 放行（公网地址仍必须显式声明 publicAuthorities）。
+  const privateAllowed = options.allowPrivate === true && isPrivateHostname(hostname)
+  if (!loopback && !privateAllowed && !declared) return { ok: false, reason: 'Host is not allowed' }
 
   // ② 跨站标记一律拒（无论 Origin 是否存在）。
   if (header(req, 'sec-fetch-site') === 'cross-site') {
@@ -140,10 +202,63 @@ export function checkSource(req: FenceRequest, options: SourceOptions): SourceVe
       : originUrl.protocol === 'http:' ? 'http:' : undefined
     if (scheme === undefined) return { ok: false, reason: 'Origin scheme is not http(s)' }
     const originHost = authorityOf(originUrl.host, scheme)
-    if (originHost === undefined || originHost !== host) {
+    const sameAuthority = originHost !== undefined && originHost === host
+    // 本机管理端点：允许「同回环主机、不同端口」（web 页面 ↔ 守卫）。
+    const loopbackCrossPort = options.allowLoopbackCrossPortOrigin === true
+      && isLoopbackHostname(originUrl.hostname)
+      && isLoopbackHostname(hostname)
+    // 显式白名单：跨机接管时主控端页面的 origin（见 SourceOptions.allowedOrigins）。
+    // 按 canonical `scheme://authority` 精确比较，不做前缀/通配匹配。
+    const explicitlyAllowed = (options.allowedOrigins ?? []).some((entry) => {
+      const canonicalEntry = canonicalOrigin(entry)
+      const canonicalOriginValue = canonicalOrigin(origin)
+      return canonicalEntry !== undefined && canonicalEntry === canonicalOriginValue
+    })
+    if (!sameAuthority && !loopbackCrossPort && !explicitlyAllowed) {
       return { ok: false, reason: 'Origin does not match Host authority' }
     }
   }
+  return { ok: true }
+}
+
+/**
+ * 把 `scheme://host[:port]` 规范化成可精确比较的形式。
+ *
+ * 只用 `http:` / `https:`；其余 scheme 返回 undefined（**不**放行）。
+ * 端口会被规范成显式形式（`https:` 的 443、`http:` 的 80 视为默认端口）。
+ * @param value - 原始 origin 字符串。
+ * @returns 规范化后的 `scheme://authority`，或 undefined。
+ */
+export function canonicalOrigin(value: string): string | undefined {
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return undefined
+  }
+  const scheme = parsed.protocol
+  if (scheme !== 'http:' && scheme !== 'https:') return undefined
+  if (parsed.username !== '' || parsed.password !== '') return undefined
+  if (parsed.pathname !== '/' || parsed.search !== '' || parsed.hash !== '') return undefined
+  const host = parsed.hostname.toLowerCase()
+  const port = parsed.port === '' ? (scheme === 'https:' ? '443' : '80') : parsed.port
+  return `${scheme}//${host}:${port}`
+}
+
+/**
+ * 局域网模式的对端判定：socket peer 必须是回环或**私有**地址。
+ *
+ * 这是「公网必须走隧道/VPN」的最后一道防线：即使有人把本机端口直接映射到
+ * 公网（家宽端口转发），来自公网的对端地址也不在私网段，请求会被 403 拒绝。
+ * @param remoteAddress - `req.socket.remoteAddress`（可能是 `::ffff:a.b.c.d`）。
+ * @returns 通过或带原因的拒绝（原因只进日志）。
+ */
+export function checkPrivatePeer(remoteAddress: string | undefined): { ok: true } | { ok: false; reason: string } {
+  if (typeof remoteAddress !== 'string' || remoteAddress === '') {
+    return { ok: false, reason: 'socket peer is unknown' }
+  }
+  const normalized = remoteAddress.replace(/^::ffff:/u, '')
+  if (!isPrivateHostname(normalized)) return { ok: false, reason: 'socket peer is not private' }
   return { ok: true }
 }
 

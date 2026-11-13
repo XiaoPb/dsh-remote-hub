@@ -8,9 +8,22 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 
+// Carrier 安装：**不在 factory 内**。
+//
+// ⚠️ 2026-11-12 页面实测：整个 bundle 被包在 `__ModuleLoader__.load({factory})` 里，
+// factory 由 DSH 启动 cordis 时才调用，而官方 `connection.apply()` 在同一次启动里
+// **同步**读取 `__DSH_TRANSPORT__` 并闭包捕获 fetch。CDP 时序探针实测：
+//   connection 54ms 读取（undefined），carrier 125ms 才写入 → 接管失效。
+//
+// 现在 carrier 由 tsdown 单独打成 `lib/carrier-boot.js`（IIFE），并在
+// `lib/client.js` 的 **banner** 里同步内联执行——位置在 factory 之前。
+// 本入口只负责插件本身的装配，不再触发 carrier。
+
 import { applyRemoteHubClient, getRemoteHubClient, type ClientAssemblyOptions } from './plugin.js'
 
 export { applyRemoteHubClient, getRemoteHubClient }
+export { installCarrier, createCarrier, isApiRequest, isIdentityFailure } from './carrier.js'
+export type { CarrierInstallResult, CarrierOptions, CarrierFallback } from './carrier.js'
 export { createTransport } from './transport.js'
 export type { RemoteTransport, TransportOptions, ClientRequestEnvelope, ServerResponseEnvelope, StreamNextValue } from './transport.js'
 export { createAccessStore } from './access.js'
@@ -19,6 +32,13 @@ export { mountRemote } from './mount.js'
 export type { MountedRemote, RemoteTarget } from './mount.js'
 export { mountRemotePanel, renderPanel, visibleEndpoints } from './ui/index.js'
 export type { RemotePanel, RemotePanelOptions } from './ui/index.js'
+export { renderRemoteHubPage, createRemoteHubPageComponent, createSettingsActions, classifyPairSecret, normalizeOrigin, remainingSeconds, buildPairLink, parsePairLink, PAIR_LINK_MARKER } from './panel/RemoteHubPage.js'
+export type { RemoteHubPageState, RemoteHubPageActions, RemoteHubPageDeps, CloudDeviceRow, GuardStatus, IssuedPairing, HubInjected } from './panel/RemoteHubPage.js'
+export { encodeQr, encodeCodewords, QR_SIZE, QR_MAX_BYTES } from './panel/qr.js'
+export { decodeQrGray, decodeQrMatrix } from './panel/qr-decode.js'
+export { QrScanner } from './panel/QrScanner.js'
+export type { QrMatrix } from './panel/qr.js'
+export { renderNavIcon } from './panel/NavIcon.js'
 export { ApprovalSheet, OUTCOME_OPTIONS } from './ui/ApprovalSheet.js'
 export type { ApprovalCardProps } from './ui/ApprovalSheet.js'
 

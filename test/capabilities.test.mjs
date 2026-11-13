@@ -32,6 +32,10 @@ const actionsFor = role => (allActionsFor
     ...(role === 'full' ? staticRoleActions(capsSrc, 'FULL') : []),
   ])])
 
+test('remote model settings can read configurable provider declarations', () => {
+  assert.ok(actionsFor('read-only').includes('llm/listConfigurableProviders'))
+  assert.equal(ENDPOINT_TABLE?.['llm/listConfigurableProviders']?.kind, 'global')
+})
 test('role containment: read-only subset control subset full', () => {
   if (assertRoleContainment) assert.doesNotThrow(() => assertRoleContainment())
   const ro = new Set(actionsFor('read-only'))
@@ -68,8 +72,7 @@ test('allow-list ∩ red-lines = empty', () => {
     ? isNeverDelegated(action)
     : endpoints.includes(action) || namespaces.some(prefix => action.startsWith(prefix)))
   for (const action of actionsFor('full')) assert.equal(redline(action), false, `${action} is a red-line`)
-  assert.ok(namespaces.includes('pluginManager/'))
-  assert.ok(namespaces.includes('pluginMarket/'))
+  assert.ok(namespaces.includes('remoteAccess/'))
 })
 
 test('openableStreams(read-only) contains only stream methods', () => {

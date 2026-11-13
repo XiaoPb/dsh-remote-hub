@@ -83,13 +83,13 @@ interface ConnectionHandle {
  * @throws 当 `ctx.connection` 缺失时（fail loud）。
  */
 export function createDispatcher(ctx: Context, tokens: TokenService): Dispatcher {
-  // 走 reflect.props 读（与 probeServices 同理由）：插件 fiber 的裸读会抛
-  // `cannot get property … without inject`，而这里的调用点在 ctx.inject 回调里
-  // （服务已就绪），裸读理论上安全——但统一走注册表读取，杜绝时序边缘。
+  // **必须走 reflect.get 读实例**：reflect.props[name] 是声明元数据而非服务对象
+  // （2026-11-11 实机教训，与 policy.ts 同修）。调用点在 ctx.inject 回调里（服务
+  // 已就绪），strict=false 宽松读不抛错。
   const connection = (ctx as unknown as {
-    reflect?: { props?: Record<string, unknown> }
-  }).reflect?.props?.connection as ConnectionHandle | undefined
-  if (connection === undefined) {
+    reflect?: { get?: (name: string, strict?: boolean) => unknown }
+  }).reflect?.get?.('connection', false) as ConnectionHandle | undefined
+  if (connection === undefined || typeof connection.createSharedFetchHandler !== 'function') {
     throw new Error(
       'dsh-remote-hub: ctx.connection is unavailable; the web profile must mount '
       + '@deepseek-ai/dsh-client-connection before this plugin starts',

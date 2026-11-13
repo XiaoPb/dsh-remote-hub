@@ -18,8 +18,24 @@ export interface DeviceRecord {
   tokenHash: string
   createdAt: string
   lastSeenAt: string | null
-  /** `revoke()` 设置；已吊销记录在**路由之前**被拒。 */
+  /**
+   * `revoke()` 设置；已吊销记录在**路由之前**被拒。
+   *
+   * **语义边界（2026-11-12 修订）**：只有「用户明确删除配对」才设它。
+   * 单控模式下被新设备挤下线**不**吊销 —— 那只是断开连接，
+   * 令牌仍然有效，device 仍是「已配对」状态。
+   */
   revokedAt: string | null
+  /**
+   * 被单控策略挤下线的时间（**仍保留配对**）。
+   *
+   * 与 `revokedAt` 的区别：
+   * - `displacedAt`：连接被踢，令牌有效，可以重新连上（状态「已配对」）
+   * - `revokedAt`：配对被删，令牌失效（状态「配对失效」）
+   *
+   * 缺省（旧记录）视为 `null`。
+   */
+  displacedAt?: string | null
 }
 
 /** 落盘的设备表。文件的机密性只是纵深防御的一层。 */
@@ -33,6 +49,8 @@ export interface IssuedDeviceToken {
   deviceId: string
   token: string
   role: RoleName
+  /** 单控模式下被本次配对踢下线的设备（只断连接，配对仍保留）。 */
+  displacedDevices?: { deviceId: string; label: string }[]
 }
 
 /**

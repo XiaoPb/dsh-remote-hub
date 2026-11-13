@@ -28,7 +28,7 @@
  *
  * @module @core/capabilities
  */
-import { NEVER_DELEGATED_ENDPOINTS, isNeverDelegated } from './capabilities-redlines.js'
+import { SHARED_READ_ENDPOINTS, FULL_ADMIN_ENDPOINTS, NEVER_DELEGATED_ENDPOINTS, isNeverDelegated } from './capabilities-redlines.js'
 import { ROLE_CONTROL, ROLE_FULL, ROLE_READ_ONLY, ROLE_NAMES, roleAtMost, type RoleName } from './roles.js'
 
 /** 官方资源种类：`global` 无 id，其余需要具体身份。 */
@@ -51,6 +51,12 @@ export interface EndpointFact {
  * `kind` 的判据见文件头第 2 条：由该方法的 lookup 参数决定，不是猜的。
  */
 export const ENDPOINT_TABLE: Readonly<Record<string, EndpointFact>> = {
+  ...Object.fromEntries([...SHARED_READ_ENDPOINTS, ...FULL_ADMIN_ENDPOINTS].map(endpoint => [endpoint, {
+    kind: 'global' as const,
+    ...(['account/watch', 'account/watchExpiry', 'remoteAccess/follow'].includes(endpoint) ? { stream: true as const } : {}),
+  }])),
+  ...Object.fromEntries(['pluginManager/listBundles', 'pluginManager/listPlugins', 'pluginManager/listVersionExemptions', 'pluginManager/registries', 'pluginManager/inspect', 'pluginMarket/listIndexes', 'pluginMarket/search'].map(endpoint => [endpoint, { kind: 'global' as const }])),
+  'directoryPicker/pick': { kind: 'global' },
   // ── session（`sessionController`，namespace `session`）──────────────────────
   'session/list': { kind: 'global' },
   'session/search': { kind: 'global' },
@@ -132,6 +138,25 @@ export const ENDPOINT_TABLE: Readonly<Record<string, EndpointFact>> = {
   // ── settings（只读的 describe；写方法在红线里）────────────────────────────
   'settings/describe': { kind: 'global' },
 
+  // ── UI 必需只读目录（2026-11-13 页面 CDP 实测补齐）──────────────────────
+  // 这些方法只枚举被控 Host 已配置的选择项，无写入/执行副作用；缺失会导致
+  // 新会话 composer、设置中的 Agent preset/命令/技能选择器报 remote-access/denied。
+  // Credentials / plugin inventory / dynamicCordisRunner 不在这里：它们分别涉及
+  // 凭据元数据、宿主插件攻击面、动态插件执行，必须走单独的窄化管理设计。
+  /** 模型设置配置目录（只返回 provider/config metadata）。 */
+  'llm/listConfigurableProviders': { kind: 'global' },
+  'llm/listProviders': { kind: 'global' },
+  'permissionPresets/catalog': { kind: 'global' },
+  'agentPresets/list': { kind: 'global' },
+  // Composer discovery is read-only and session-scoped; include every source
+  // consulted by @ candidate rendering, not only the candidate RPC itself.
+  'fileReferences/list': { kind: 'session' },
+  'messageFeedback/list': { kind: 'session' },
+  'sessionReferenceResolver/candidates': { kind: 'session' },
+  'commands/list': { kind: 'session' },
+  /** request.sessionId 由 Gateway default sessionId resource field 提取。 */
+  'skills/list': { kind: 'session' },
+
   // ── 本插件自己的 hub/* 方法（同过 decide()，与官方 endpoint 等权）──────────
   'hub/devices': { kind: 'global', hub: true },
   'hub/revoke': { kind: 'global', hub: true },
@@ -162,6 +187,9 @@ const READ_ONLY: RoleMatrix = {
     'job/follow',
     'goals/get',
     'settings/describe',
+    ...SHARED_READ_ENDPOINTS,
+    'llm/listConfigurableProviders', 'llm/listProviders', 'permissionPresets/catalog', 'agentPresets/list',
+    // ── Remote Hub 自有只读状态流 ──────────────────────────────────────────
     'hub/stream.open',
     'hub/stream.next',
     'hub/stream.cancel',
@@ -190,6 +218,13 @@ const READ_ONLY: RoleMatrix = {
     'terminal/shells',
     'terminal/environment',
     'terminal/retain',
+    // commands/list 使用 agentId lookup（官方 resource=session）；skills/list
+    // 需要 request.sessionId。两者是只读目录，按当前 session 可见性过滤。
+    'commands/list',
+    'fileReferences/list',
+    'messageFeedback/list',
+    'sessionReferenceResolver/candidates',
+    'skills/list',
   ],
   workspace: [],
 }
@@ -232,7 +267,7 @@ const CONTROL: RoleMatrix = {
     'userQuestions/answer',
     'userQuestions/attachWait',
   ],
-  workspace: [],
+  workspace: ['session/create'],
 }
 
 /**
@@ -245,6 +280,8 @@ const CONTROL: RoleMatrix = {
 const FULL: RoleMatrix = {
   global: [
     ...CONTROL.global,
+    ...SHARED_READ_ENDPOINTS,
+    ...FULL_ADMIN_ENDPOINTS,
     'job/kill',
     'goals/clear',
     'hub/revoke',
@@ -263,7 +300,7 @@ const FULL: RoleMatrix = {
     'terminal/close',
     'terminal/rename',
   ],
-  workspace: [],
+  workspace: ['session/create'],
 }
 
 /** 三档角色 → 三资源种类的矩阵。 */
@@ -333,7 +370,10 @@ export function assertNoRedlineDelegated(): void {
       if (isNeverDelegated(action)) {
         throw new Error(`capabilities: ${role} must not be granted redline endpoint ${action}`)
       }
-      if (NEVER_DELEGATED_ENDPOINTS.includes(action)) {
+      if (FULL_ADMIN_ENDPOINTS.includes(action) && role !== ROLE_FULL) {
+        throw new Error(`capabilities: ${role} must not be granted full administration endpoint ${action}`)
+      }
+      if (NEVER_DELEGATED_ENDPOINTS.includes(action) && !FULL_ADMIN_ENDPOINTS.includes(action)) {
         throw new Error(`capabilities: ${role} must not be granted redline endpoint ${action}`)
       }
     }

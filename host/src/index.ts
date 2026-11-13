@@ -36,9 +36,14 @@ export type { Config as ConfigShape } from './config.js'
 import type { Config as ConfigShape } from './config.js'
 import { DEFAULT_CONFIG, applyRemoteHub } from './plugin.js'
 
+// ── host：profile 出站配对档案 ────────────────────────────────────────────────
+export { createOutboundTargetStore, outboundTargetView } from './outbound-targets.js'
+export type { OutboundTargetRecord, OutboundTargetView } from './outbound-targets.js'
+
 // ── host：设备表与令牌 ────────────────────────────────────────────────────────
 export {
   createDeviceStore,
+  dshHome,
   expandHome,
   parseDeviceRecord,
   parseDeviceTable,
@@ -54,6 +59,16 @@ export {
   TOKEN_HASH_LENGTH,
 } from './token.js'
 export type { TokenService, TokenServiceDeps } from './token.js'
+
+// ── host：运行指标与运行时配置（页面 ③④ 区的数据源）────────────────────────
+export { createMetricsCollector } from './metrics.js'
+export type { HubMetrics, MetricsCollector } from './metrics.js'
+export {
+  createRuntimeConfigStore,
+  CONFIG_WRITABLE_KEYS,
+  CONFIG_READONLY_KEYS,
+} from './runtime-config.js'
+export type { RuntimeConfigStore, ConfigSnapshot, ConfigWritableKey } from './runtime-config.js'
 
 // ── host：配对 ────────────────────────────────────────────────────────────────
 export {
@@ -87,9 +102,15 @@ export type { RemoteDevicePrincipal } from './principal.js'
 export {
   registerDevicePolicy,
   visibleResourceIdsFromContext,
+  createVisibleResourceTracker,
   filterVisible,
 } from './policy.js'
-export type { AccessPolicyHandles, DevicePolicyDeps } from './policy.js'
+export type {
+  AccessPolicyHandles,
+  DevicePolicyDeps,
+  VisibleResourceTracker,
+  VisibleResourceTrackerDeps,
+} from './policy.js'
 export { createDispatcher, DISPATCH_ORIGIN } from './dispatch.js'
 export type { Dispatcher, DevicePeer } from './dispatch.js'
 
@@ -136,8 +157,46 @@ export {
 export type { PreviewTextArgs, PreviewBinaryArgs } from './files.js'
 
 // ── host：自有 Remote 面 / 隧道 ──────────────────────────────────────────────
-export { registerRemoteServices, HubStreamsService, HubDevicesService } from './services/index.js'
-export type { HubServicesDeps, RemoteServicesHandle } from './services/index.js'
+export { registerRemoteServices, HubStreamsService, HubDevicesService, HubAdminService, lanAddresses, readCarrierFile, writeCarrierFile } from './services/index.js'
+
+// WebSocket 帧层（RFC 6455 子集；守卫的 /remote/ws 用它做纯转发）。
+export {
+  OPCODE,
+  MAX_FRAME_BYTES,
+  WS_GUID,
+  WsProtocolError,
+  FrameParser,
+  computeAccept,
+  handshakeResponse,
+  encodeFrame,
+  decodeFrame,
+  closePayload,
+} from './ws-frame.js'
+
+// 守卫 WebSocket 端点（A3 形态：校验 + 认领 + 移交）。
+export {
+  GUARD_WS_PATH,
+  HUB_WS_TARGET_PARAM,
+  DEFAULT_WS_TARGET,
+  ALLOWED_TARGET_PREFIXES,
+  createGuardWsRoute,
+} from './guard-ws.js'
+
+// 守卫侧 Remote 流 mux 承载（路线 β：复用 ws@8，行为与官方 gateway 一致）。
+export {
+  createGuardMux,
+  parseClientFrame,
+  UplinkInbox,
+  MUX_PATH,
+  MUX_HEARTBEAT_MS,
+  MUX_MAX_MISSED_HEARTBEATS,
+  MUX_UPLINK_BYTES,
+  WS_CLOSE_POLICY,
+} from './guard-mux.js'
+
+// 测试与外部工具用：`ws` 的 WebSocket 客户端（守卫 mux 内部同源依赖）。
+export { WebSocket } from 'ws'
+export type { HubServicesDeps, RemoteServicesHandle, AdminDeps } from './services/index.js'
 export {
   startTunnel,
   tunnelArgv,
@@ -149,7 +208,7 @@ export {
 export type { TunnelHandle, BackoffState } from './tunnel.js'
 
 // ── 插件入口 ──────────────────────────────────────────────────────────────────
-export { applyRemoteHub, probeServices, name } from './plugin.js'
+export { applyRemoteHub, probeServices, name, hostInstanceId, assertGuardPortFree, resolveGuardPort, MAX_PORT_SCAN, HOST_STATUS_FILE } from './plugin.js'
 export type { RemoteHubHost } from './plugin.js'
 
 /**

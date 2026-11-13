@@ -9,6 +9,7 @@
  * assertion when that export is missing (never a silent skip).
  */
 import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   PATHS,
   allSourceFiles,
@@ -236,11 +237,18 @@ report.check(
 // 6. No WebSocket / EventSource / upgrade handlers anywhere, no `ws` dep
 // ---------------------------------------------------------------------------
 
+// WebSocket 红线（2026-11-12 修订，路线 β）：
+//
+// 整机接管**必须**有 WS（架构说明 D-3 新版）。约束从「禁止能力」改为
+// 「限定实现方式与依赖」：
+//
+//   ❌ 不得用 EventSource 自建事件通道
+//   ✅ 可用 `ws`（DSH 已有传递依赖；与官方 gateway 同库同版本，行为一致）
+//   ✅ 守卫是独立 http server，必须自己监听 upgrade（官方 webServer.registerUpgrade
+//      只覆盖 Host 自己的 server，覆盖不到守卫的独立监听）
+//   ❌ 守卫不得自己解 mux 业务协议（交给 guard-mux 的 wireStream 适配）
 const forbiddenSource = [
-  /\bnew\s+WebSocket\b/u,
   /\bEventSource\b/u,
-  /\bregisterUpgrade\b/u,
-  /\bon\s*\(\s*['"`]upgrade['"`]/u,
 ]
 const sourceHits = []
 for (const file of allTs) {
@@ -255,11 +263,29 @@ const depKeys = [
   ...Object.keys(pkg.peerDependencies ?? {}),
 ]
 report.check(
-  'ws-absent: ok',
-  () => allTs.length > 0
-    && sourceHits.length === 0
-    && !depKeys.includes('ws'),
-  `ws/EventSource/upgrade hits: ${sourceHits.join(', ') || 'none'}; ws dep: ${depKeys.includes('ws')}`,
+  'event-source-absent: ok',
+  () => allTs.length > 0 && sourceHits.length === 0,
+  `EventSource hits: ${sourceHits.join(', ') || 'none'}`,
+)
+report.check(
+  'ws-declared-for-takeover: ok',
+  () => {
+    // 路线 β：ws 必须是**声明过的**依赖（不是靠传递依赖碰运气）。
+    const declared = Object.keys(pkg.dependencies ?? {}).includes('ws')
+    return declared && readText(PATHS.hostSrc + '/guard-mux.ts').replace(/\\/g, '/').includes('guard-mux')
+  },
+  'ws must be a declared dependency (route β); takeover relies on it for the mux carrier',
+)
+report.check(
+  'ws-via-official-api: ok',
+  () => {
+    const guardSrc = readText(join(PATHS.hostSrc, 'guard-ws.ts'))
+    // 守卫必须只做「校验 + 移交」，不得自己解帧或建上游连接。
+    return !guardSrc.includes('new WebSocket')
+      && !guardSrc.includes('FrameParser')
+      && guardSrc.includes('handoff')
+  },
+  'guard-ws must validate + hand off only (no upstream WebSocket, no frame parsing)',
 )
 
 // ---------------------------------------------------------------------------
@@ -290,6 +316,201 @@ report.check(
   'no-dsh-client-runtime: ok',
   () => runtimeHits.length === 0,
   `dsh-client-runtime dependency/import hits: ${runtimeHits.join(', ') || 'none'}`,
+)
+
+// ---------------------------------------------------------------------------
+// 7b. Carrier 契约（路线 A）：fetch 改道不改写信封、错误码透传、模式键稳定。
+// ---------------------------------------------------------------------------
+
+const carrierSrc = readText(`${PATHS.clientSrc}/carrier.ts`)
+const carrierEntrySrc = readText(`${PATHS.clientSrc}/carrier-entry.ts`)
+const carrierTransportSrc = readText(`${PATHS.clientSrc}/carrier-transport.ts`)
+const contractCarrierSrc = readText(`${PATHS.coreSrc}/carrier-contract.ts`)
+
+report.check(
+  'carrier-envelope-passthrough: ok',
+  () => carrierSrc.includes('...init')
+    && carrierSrc.includes('GUARD_ROUTES.rpc')
+    && carrierSrc.includes('isApiRequest'),
+  'carrier must forward the official client-request envelope byte-identical to /remote/rpc',
+)
+report.check(
+  'carrier-error-transparency: ok',
+  () => !carrierSrc.includes("code: '")
+    || (carrierSrc.includes('isIdentityFailure') && carrierSrc.includes('ERROR_CODES.deviceRevoked')),
+  'carrier must pass official error codes through untouched (only identity failure triggers fallback)',
+)
+report.check(
+  'carrier-install-timing: ok',
+  () => carrierEntrySrc.includes('installCarrierResolvingMode')
+    && carrierEntrySrc.includes('__DSH_BOOT_READY__')
+    && carrierEntrySrc.includes('admin.carrier')
+    && carrierSrc.includes('__DSH_TRANSPORT__'),
+  'carrier must install __DSH_TRANSPORT__ AFTER desktop boot resolves '
+    + '(the desktop shell writes { ownsHost, streamBaseUrl } during boot and would overwrite an earlier install)',
+)
+report.check(
+  'carrier-ws-contract: ok',
+  () => ['createWebSocket', 'streamBaseUrl', 'ownsHost'].every(field => carrierSrc.includes(field))
+    && !/openStream:\s*options\.openStream\s*\?\?/.test(carrierSrc)
+    && !carrierSrc.includes('openStream: options.openStream'),
+  'carrier transport must expose createWebSocket + streamBaseUrl + ownsHost, '
+    + 'and MUST NOT provide openStream under ANY option (a present rpc.open makes the official Remote mux never start)',
+)
+report.check(
+  'carrier-fallback-persists-before-reload: ok',
+  () => carrierSrc.includes('persistLocal') && carrierSrc.includes('then(() => reload())')
+    && carrierEntrySrc.includes('persistLocal: persistLocalMode'),
+  'identity failure must persist local mode to disk BEFORE reloading '
+    + '(disk is the boot-time source of truth; clearing only localStorage causes a 401 reload loop)',
+)
+report.check(
+  'carrier-stream-mapping: ok',
+  () => ['streamOpen', 'streamNext', 'streamCancel'].every(method => carrierTransportSrc.includes(`HUB_METHODS.${method}`))
+    && carrierTransportSrc.includes('yield item'),
+  'openStream contract must map to hub/stream.{open,next,cancel} with flat per-item yields',
+)
+report.check(
+  'carrier-mode-key: ok',
+  () => contractCarrierSrc.includes("MODE_KEY = 'remote-hub.mode'")
+    && contractCarrierSrc.includes("value.mode !== 'cloud'"),
+  'mode state must live at the stable localStorage key with fail-closed local fallback',
+)
+
+// 设备管理路由必须与签发端同门控（回环 + 进程内令牌），不得成为裸管理面。
+const guardSrc = readText(PATHS.guardSrc)
+report.check(
+  'device-admin-loopback-gated: ok',
+  () => guardSrc.includes('GUARD_ROUTES.devicesRevoke')
+    && guardSrc.includes('device admin is loopback-only')
+    && (guardSrc.match(/checkLoopback\(req\)/gu) ?? []).length >= 2,
+  'device admin routes must require loopback + pairIssueToken (same gate as pairing issue)',
+)
+report.check(
+  'ws-no-privilege-escalation: ok',
+  () => {
+    const pluginSrc = readText(PATHS.pluginSrc ?? `${PATHS.hostSrc}/plugin.ts`)
+    // WS 的 Peer 必须用 remote-device（角色矩阵生效），不得再用 owner 升权。
+    // 官方事实（api-gateway/lib/index.js）：$events 只要求 interactions=answer，
+    // 只有 $events/result 才强制 owner——所以非 owner 能看事件流。
+    const admitBlock = pluginSrc.slice(
+      pluginSrc.indexOf('admit: (request, device)'),
+      pluginSrc.indexOf('admit: (request, device)') + 1200,
+    )
+    return admitBlock.includes('remoteDevicePrincipal')
+      && admitBlock.includes("interactions: 'answer'")
+      && !/principal:\s*\{\s*kind:\s*'owner'\s*\}/u.test(pluginSrc)
+  },
+  'WS Peer must speak for remote-device with the device role (not owner); '
+    + 'the role matrix must apply to the long connection too',
+)
+report.check(
+  'ws-device-connections-droppable: ok',
+  () => {
+    const muxSrc = readText(`${PATHS.hostSrc}/guard-mux.ts`)
+    const pluginSrc = readText(PATHS.pluginSrc ?? `${PATHS.hostSrc}/plugin.ts`)
+    return muxSrc.includes('closeDevice') && muxSrc.includes('byDevice')
+      && pluginSrc.includes('dropDevice')
+      && pluginSrc.includes("dropDevice(deviceId, 'revoked')")
+      && pluginSrc.includes("dropDevice(deviceId, 'displaced')")
+      && pluginSrc.includes("dropDevice(deviceId, 'role-changed')")
+  },
+  'revoke / displace / role-change must close that device\'s existing WS and Peer '
+    + '(tokens are checked at handshake, so a live socket never expires by itself)',
+)
+report.check(
+  'guard-port-auto-shift: ok',
+  () => {
+    const pluginSrc = readText(PATHS.pluginSrc ?? `${PATHS.hostSrc}/plugin.ts`)
+    // 端口被占必须**自动顺延**而不是整体失败；同时保留严格模式供调用方选择。
+    return pluginSrc.includes('export async function resolveGuardPort')
+      && pluginSrc.includes('MAX_PORT_SCAN')
+      && pluginSrc.includes('export async function assertGuardPortFree')
+      && /resolvedPort !== requestedPort/u.test(pluginSrc)
+  },
+  'guard port must auto-shift to the next free port instead of failing the whole assembly '
+    + '(tunnel and pair links derive from guard.origin, so a shift is safe)',
+)
+report.check(
+  'dsh-home-respected: ok',
+  () => {
+    const devicesSrc = readText(PATHS.devicesSrc ?? `${PATHS.hostSrc}/devices.ts`)
+    const servicesSrc = readText(PATHS.servicesSrc ?? `${PATHS.hostSrc}/services/index.ts`)
+    return devicesSrc.includes('export function dshHome')
+      && devicesSrc.includes('process.env.DSH_HOME')
+      && servicesSrc.includes('dshHome()')
+  },
+  'persistence paths must honor DSH_HOME (dsh-box/multi-instance isolation); '
+    + 'hardcoding homedir() writes sandbox state into the real ~/.dsh',
+)
+report.check(
+  'duplicate-load-fails-closed: ok',
+  () => {
+    const policySrc = readText(`${PATHS.hostSrc}/policy.ts`)
+    const servicesSrc = readText(`${PATHS.hostSrc}/services/index.ts`)
+    return !policySrc.includes('onDuplicatePolicy')
+      && !servicesSrc.includes('alreadyRegistered')
+      && servicesSrc.includes('new HubStreamsService(ctx, deps.streams)')
+      && servicesSrc.includes('new HubDevicesService(ctx, deps)')
+  },
+  'duplicate policy/service registration must fail rather than reuse another assembly\'s dependencies',
+)
+report.check(
+  'single-controller-enforced: ok',
+  () => guardSrc.includes('config.singleController')
+    // 2026-11-12 修订：单控只**踢连接**（displaceOthers，标记 displacedAt），
+    // 不再吊销配对（旧实现调 tokens.revoke，会让被挤设备必须重新扫码）。
+    && guardSrc.includes('displaceOthers')
+    && guardSrc.includes('displacedAt')
+    && !guardSrc.includes('revokeOthers')
+    && readText(PATHS.configSrc).includes('singleController'),
+  'single-controller must DISPLACE (drop the connection, keep the pairing) rather than revoke, and be configurable',
+)
+report.check(
+  'pairing-qr-encoder: ok',
+  () => {
+    const qrSrc = readText(`${PATHS.clientSrc}/panel/qr.ts`)
+    return qrSrc.includes('QR_MAX_BYTES = 106')
+      && qrSrc.includes('export function encodeQr')
+      && qrSrc.includes('rsRemainder')
+  },
+  'pairing page must ship its own QR encoder (no network dependency at runtime)',
+)
+
+// 局域网信任域：只放宽到私网，公网必须走隧道/VPN。
+const fenceSrc = readText(PATHS.fenceSrc)
+const configSrc = readText(PATHS.configSrc)
+report.check(
+  'lan-private-only: ok',
+  () => configSrc.includes('assertBindableHost')
+    && configSrc.includes('function isPrivateAddress')
+    && fenceSrc.includes('allowPrivate')
+    && fenceSrc.includes('checkPrivatePeer'),
+  'LAN mode must accept private authorities only (RFC1918/ULA) and keep public access tunnel/VPN-gated',
+)
+report.check(
+  'lan-no-public-bind: ok',
+  () => {
+    // lan 模式的绑定断言必须显式拒绝公网字面量。
+    const body = configSrc.slice(configSrc.indexOf('export function assertBindableHost'))
+    const fn = body.slice(0, body.indexOf('\n}\n') + 3)
+    return fn.includes('isPrivateAddress') && fn.includes('public exposure must go through the tunnel')
+  },
+  'binding a public address must be refused even in LAN mode',
+)
+
+// 扫码：必须能在没有 BarcodeDetector 的 Windows/Electron 上工作（自研解码器）。
+report.check(
+  'scanner-self-contained: ok',
+  () => {
+    const scannerSrc = readText(`${PATHS.clientSrc}/panel/QrScanner.ts`)
+    const decoderSrc = readText(`${PATHS.clientSrc}/panel/qr-decode.ts`)
+    return scannerSrc.includes('getUserMedia')
+      && scannerSrc.includes('getTracks')
+      && decoderSrc.includes('export function decodeQrGray')
+      && decoderSrc.includes('export function decodeQrMatrix')
+  },
+  'camera scanning must ship its own QR decoder (Electron on Windows lacks BarcodeDetector)',
 )
 
 // ---------------------------------------------------------------------------
@@ -351,7 +572,9 @@ report.check(
       && !methodVocabulary.test(contractText)
       && !contractText.includes('REMOTE_METHODS')
       && !contractText.includes('HUB_METHODS')
-      && Object.keys(guardRoutes).length === 5
+      // 7 条基础路由（health/pairTicket/pairCode/pair/rpc/devices/devicesRevoke）
+      // + 2 条管理端点（stats/config；2026-11-11 四区改造新增）= 9。
+      && Object.keys(guardRoutes).length === 9
       && Object.keys(streamBudget).length === 6
   },
   'out/contract.json must have exactly six keys and no method-name vocabulary',

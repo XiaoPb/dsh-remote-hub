@@ -15,16 +15,37 @@
  */
 import { mkdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
 
 import { DEVICE_TABLE_VERSION, LIMITS, isRoleName } from '@core/index.js'
 import type { DeviceRecord, DeviceTable, RoleName } from '@core/index.js'
 
-/** `~/.dsh/...` → 绝对路径。其它写法原样 resolve。 */
+/**
+ * DSH 的数据根目录（**优先 `DSH_HOME`**）。
+ *
+ * 为什么必须尊重 `DSH_HOME`：dsh-box / 多实例工具靠它隔离整个档案柜。
+ * 插件若硬用 `homedir()`，沙箱实例就会写进用户**真实**的 `~/.dsh`——
+ * 既污染主环境，也让「沙箱里的测试」根本测不到隔离语义（实测踩过）。
+ *
+ * @returns `DSH_HOME` 指定的目录；未设置时退回 `~/.dsh`。
+ */
+export function dshHome(): string {
+  const configured = process.env.DSH_HOME
+  if (typeof configured === 'string' && configured.trim() !== '') return resolve(configured.trim())
+  return join(homedir(), '.dsh')
+}
+
+/** `~/.dsh/...`（或 `~` 开头）→ 绝对路径。其它写法原样 resolve。 */
 export function expandHome(path: string): string {
   if (path === '~') return homedir()
+  // ⚠️ 顺序很重要：`~/.dsh` 的判定**必须在**通用 `~/` 之前，否则会被
+  // `resolve(homedir(), …)` 先吃掉，DSH_HOME 隔离就永远不生效。
+  if (path.startsWith('~/.dsh') || path.startsWith('~\\.dsh')) {
+    const suffix = path.slice('~/.dsh'.length).replace(/^[/\\]+/u, '')
+    return suffix === '' ? dshHome() : join(dshHome(), suffix)
+  }
   if (path.startsWith('~/') || path.startsWith('~\\')) return resolve(homedir(), path.slice(2))
   return resolve(path)
 }
@@ -61,6 +82,12 @@ export function parseDeviceRecord(value: unknown): DeviceRecord {
   if (revokedAt !== null && (typeof revokedAt !== 'string' || Number.isNaN(Date.parse(revokedAt)))) {
     throw new Error('devices: invalid revokedAt')
   }
+  // displacedAt 是 2026-11-12 新增的可选字段；旧记录没有它，视为 null。
+  const { displacedAt } = value
+  if (displacedAt !== undefined && displacedAt !== null
+    && (typeof displacedAt !== 'string' || Number.isNaN(Date.parse(displacedAt)))) {
+    throw new Error('devices: invalid displacedAt')
+  }
   return {
     deviceId,
     label,
@@ -69,6 +96,7 @@ export function parseDeviceRecord(value: unknown): DeviceRecord {
     createdAt,
     lastSeenAt: lastSeenAt as string | null,
     revokedAt: revokedAt as string | null,
+    displacedAt: (displacedAt ?? null) as string | null,
   }
 }
 
@@ -105,10 +133,12 @@ export interface DeviceStore {
   /** 局部更新；未知 `deviceId` 抛错。 */
   update(
     deviceId: string,
-    patch: Partial<Pick<DeviceRecord, 'label' | 'role' | 'lastSeenAt' | 'revokedAt'>>,
+    patch: Partial<Pick<DeviceRecord, 'label' | 'role' | 'lastSeenAt' | 'revokedAt' | 'displacedAt'>>,
   ): Promise<void>
   /** 把内存视图刷回磁盘（合批的 `lastSeenAt` 心跳走这里）。 */
   flush(): Promise<void>
+  /** Remove a revoked pairing record; active credentials must be revoked first. */
+  removeRevoked?(deviceId: string): Promise<boolean>
   /** 文件路径（测试与诊断用）。 */
   readonly path: string
 }
@@ -214,6 +244,16 @@ export async function createDeviceStore(filePath: string): Promise<DeviceStore> 
         devices[index] = { ...previous, ...patch }
         return { version: DEVICE_TABLE_VERSION, devices }
       })
+    },
+    async removeRevoked(deviceId) {
+      let removed = false
+      await mutate(current => {
+        const record = current.devices.find(device => device.deviceId === deviceId)
+        if (record && record.revokedAt === null) throw new Error('devices: revoke device before deleting its record')
+        removed = record !== undefined
+        return { ...current, devices: current.devices.filter(device => device.deviceId !== deviceId) }
+      })
+      return removed
     },
     async flush() {
       await mutate(() => table)

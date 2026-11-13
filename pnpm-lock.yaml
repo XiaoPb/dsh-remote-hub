@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      ws:
+        specifier: ^8.22.2
+        version: 8.22.2
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: 4.1.0
@@ -74,6 +78,15 @@ importers:
       typescript:
         specifier: ^5.9.2
         version: 5.9.3
+
+  companions/remote-paths:
+    dependencies:
+      '@deepseek-ai/cordis':
+        specifier: ~4.1.0
+        version: 4.1.0(@deepseek-ai/cordis-plugin-include@1.1.0)(@deepseek-ai/cordis-plugin-loader@1.1.0)
+      react:
+        specifier: ^18.2.0
+        version: 18.3.1
 
 packages:
 

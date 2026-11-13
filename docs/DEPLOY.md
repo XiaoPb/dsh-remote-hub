@@ -27,8 +27,9 @@ dsh plugin --profile web list
 
 `cordis.patch.yml` 的 roster id 固定为 `remote-hub`，**不随版本改变**（改名会让旧配置的入口悬空）。
 
-### 1.1 版本门
+### 1.1 版本与兼容门
 
+当前插件版本为 `0.2.5`。
 `package.json` 的 `engines.dsh` 是**唯一**被 DSH 读取的兼容门：
 
 ```jsonc
@@ -54,8 +55,8 @@ dsh plugin --profile web list
 | `publicAuthorities` | `[]` | 隧道公开 authority 白名单（`host[:port]`，canonical 校验）。**空数组时经隧道的请求全部被来源围栏拒**（fail-closed 的正确默认） |
 | `defaultRole` | `control` | 操作者未指定时绑给新设备的角色 |
 | `deviceTablePath` | `~/.dsh/remote-hub/devices.json` | 只存 `sha256(token)`，`mode 0600` / 目录 `0700` |
-| `pairQrTtlMs` | `120000` | QR 票据 TTL（2 分钟） |
-| `pairCodeTtlMs` | `600000` | 短码 TTL（10 分钟） |
+| `pairQrTtlMs` | `15000` | QR 票据 TTL（15 秒） |
+| `pairCodeTtlMs` | `15000` | 短码 TTL（15 秒） |
 | `maxPairAttempts` | `5` | 达预算即烧码/烧票据 |
 | `streamHoldMs` | `4000` | 长轮询单次持有上限；也是吊销可见延迟的上界 |
 | `streamBatchMax` | `64` | 单批最大帧数 |
@@ -83,8 +84,7 @@ dsh plugin --profile web list
 - 守卫是**独立** `node:http` 监听，只绑回环字面量。它**不是** DSH WebServer 的一条路由。
 - 一元调用不是「代理到 upstream」，而是守卫用 `peer` 身份走
   `ctx.connection.createSharedFetchHandler('/api').fetch(request, peer)` 在进程内派发。
-- v1 **不起任何 WebSocket**：下行是 `hub/stream.{open,next,cancel}` 三条**一元**方法，
-  同样走 `POST /remote/rpc` 与官方 `decide()`。没有 `/remote/events`，没有 `ws` 依赖。
+- HTTP RPC 与 WebSocket mux 使用同一设备身份和角色策略；`hub/stream.*` 长轮询方法保留为受支持的辅助/兼容通道。
 
 ## 4. provider 选型
 
@@ -116,12 +116,12 @@ cloudflared tunnel --url http://127.0.0.1:8443 [args...]
 1. 本机 DSH 页面点「添加设备」，选角色（`read-only` / `control` / `full`）。
    页面从 `__DSH_REMOTE_HUB__.pairIssueToken` 读进程内令牌 —— 它**只注入本机 index 页**，
    绝不经隧道传输。
-2. 页面渲染二维码（32 字节票据，TTL 120s，单次）。设备扫码；或切到短码兜底
-   （8 位 Crockford Base32，TTL 10 分钟，5 次错误预算即烧）。
+2. 页面渲染二维码（32 字节票据，TTL 15s，单次）。设备扫码；或输入 8 位 Crockford 短码（TTL 15s，最多 5 次错误尝试）。
+
 3. 设备把票据/短码 POST 到 `/remote/pair` 兑换，收到一次 `{ deviceId, token, role }`。
 4. 之后每请求 `Authorization: Bearer <token>`。
 
-**不要把配对二维码截屏发出去**：TTL 120s + 单次使用是唯一缓解，不假装能防截图。
+**不要把配对二维码截屏发出去**：TTL 15s + 单次使用是缓解措施，不假装能防截图。
 令牌泄露 = 吊销前可重放（v1 是 bearer，没有逐请求签名）；缓解是立即吊销 + 审计。
 
 ## 6. 巡检

@@ -6,7 +6,7 @@ out/
 
 # workbuddy workspace data (must never be committed)
 .workbuddy/
-
+.agents/
 # deps
 node_modules/
 .pnpm-store/
@@ -14,6 +14,7 @@ node_modules/
 
 # transient artifacts
 *.log
+
 dsh-remote-hub-src.tar.gz
 
 # android
@@ -28,6 +29,8 @@ android/.idea/
 # local runtime state — never commit a device table or pairing material
 .dsh/
 *.token
+*.ticket.json
+.test-full-ticket.json
 devices.json
 
 # editors / OS
@@ -35,3 +38,4 @@ devices.json
 .idea/
 Thumbs.db
 .DS_Store
+dev/

@@ -20,11 +20,15 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 
-import type { RemoteTransport, TransportOptions } from './transport.js'
-import { createTransport } from './transport.js'
+import { readCarrierMode } from '@core/carrier-contract.js'
+
+import type { RemoteTransport, TransportOptions, AdminRequestDiagnostic, HubLogEntry } from './transport.js'
+import { createTransport, RemoteHubError, HUB_LOG_LIMIT } from './transport.js'
 import { createAccessStore } from './access.js'
 import { mountRemote } from './mount.js'
-import { mountRemotePanel } from './ui/index.js'
+import { createRemoteHubPageComponent, classifyPairSecret } from './panel/RemoteHubPage.js'
+import type { CloudDeviceRow } from './panel/RemoteHubPage.js'
+import { RemoteHubNavIcon } from './panel/NavIcon.js'
 
 /** 装配选项（缺省时从 `window.__DSH_REMOTE_HUB__` 读本机注入值）。 */
 export interface ClientAssemblyOptions {
@@ -35,11 +39,88 @@ export interface ClientAssemblyOptions {
   transport?: RemoteTransport
 }
 
+/** index 页注入的全局（host `webserver/index-inject` 写入，见 host/src/plugin.ts）。 */
 interface HubGlobal {
   pairIssueToken?: string
+  /** 守卫 origin（本机签发配对的目标地址，不是 web 页面 origin）。 */
+  /** 对外可用地址（LAN 模式是 LAN IP；配对链接用它）。 */
+  guardOrigin?: string
+  /** 本机签发/设备管理用的回环地址（守卫签发端要求回环对端）。 */
+  loopbackOrigin?: string
+  /** 守卫实例标识（用于确认页面连的是当前实例）。 */
+  instanceId?: string
+  /** host 进程 pid。 */
+  pid?: number
+  /** 注入时间（ISO）。 */
+  injectedAt?: string
+  /** 协议版本。 */
+  protocolVersion?: number
+  /** 已配对设备快照（非敏感字段；页面渲染时求值）。 */
+  devices?: readonly CloudDeviceRow[]
   origin?: string
   token?: string
 }
+
+/**
+ * 最近一次管理请求诊断（模块级：transport 每次管理请求都会覆盖它）。
+ *
+ * 页面通过 `deps.diagnostic()` 同步读取——不需要事件总线，也不需要把诊断塞进
+ * React 状态以外的任何地方。内容是纯诊断事实，不含凭据。
+ */
+let lastDiagnostic: ImportedDiagnostic | null = null
+
+/** 用户可见日志环形缓冲（最近 N 条；凭据脱敏）。 */
+const logBuffer: HubLogEntry[] = []
+
+/**
+ * 追加一条日志。
+ * @param level - 级别。
+ * @param title - 标题。
+ * @param detail - 细节。
+ * @param path - 相关端点。
+ */
+export function pushHubLog(level: HubLogEntry['level'], title: string, detail?: string, path?: string): void {
+  logBuffer.push({
+    at: Date.now(),
+    level,
+    title,
+    ...(detail === undefined ? {} : { detail }),
+    ...(path === undefined ? {} : { path }),
+  })
+  if (logBuffer.length > HUB_LOG_LIMIT) logBuffer.splice(0, logBuffer.length - HUB_LOG_LIMIT)
+}
+
+/** 读取日志快照（页面渲染用）。 */
+export function hubLogs(): readonly HubLogEntry[] {
+  return [...logBuffer]
+}
+
+type ImportedDiagnostic = NonNullable<AdminRequestDiagnostic>
+
+/**
+ * 统一构造管理 transport（devices/stats/config 共用；与页面 diag 共用回调）。
+ *
+ * 优先使用**同源管理通道**（`/api/hub/admin.*`）：桌面页面 origin 是
+ * `dsh-app://app`，无法跨协议 fetch 守卫，但可以同源访问宿主 API。
+ * 同源通道不依赖 pairIssueToken；缺失 pin 不再阻断管理面。
+ */
+function createAdminTransport(): RemoteTransport {
+  const origin = hubGlobal().loopbackOrigin ?? hubGlobal().guardOrigin ?? ''
+  return createTransport({
+    origin,
+    // 同源通道始终启用；守卫直连作为回退（web 部署）。
+    adminChannel: '/api',
+    ...(hubGlobal().pairIssueToken === undefined ? {} : { pairIssueToken: hubGlobal().pairIssueToken }),
+    onAdminDiagnostic: diagnostic => {
+      lastDiagnostic = { ...diagnostic }
+      adminListener?.({ ...diagnostic })
+    },
+    onLog: entry => { pushHubLog(entry.level, entry.title, entry.detail, entry.path) },
+  })
+}
+
+/** 页面订阅诊断更新（订阅后立即回放一次最近值）。 */
+let adminListener: ((diagnostic: ImportedDiagnostic) => void) | null = null
 
 /** 降级告警：装配失败只留痕，不让异常逃出 effect 回调拖垮 web boot。 */
 function warnDegrade(stage: string, error: unknown): void {
@@ -54,6 +135,135 @@ function warnDegrade(stage: string, error: unknown): void {
 function hubGlobal(): HubGlobal {
   return (globalThis as { __DSH_REMOTE_HUB__?: HubGlobal }).__DSH_REMOTE_HUB__ ?? {}
 }
+
+/**
+ * 云端设备页组件（模块级单例：hooks 身份必须跨渲染稳定）。
+ *
+ * connect/issue 各自新建一条 transport（origin 由页面表单决定），不复用装配期
+ * 的 transport —— 后者的 origin 在页面加载时就固定了，而连接动作恰恰是要换
+ * origin。
+ */
+const RemoteHubPage = createRemoteHubPageComponent({
+  injected: () => hubGlobal(),
+  /** 守卫诊断：最近一次管理请求（transport 写回模块级变量）。 */
+  diagnostic: () => lastDiagnostic,
+  /** 用户可见日志时间线。 */
+  logs: () => hubLogs(),
+  /** 页面侧主动记录一条日志（例如签发结果）。 */
+  log: (level, title, detail, path) => { pushHubLog(level, title, detail, path) },
+  async listDevices() {
+    const snapshot = await createAdminTransport().listDevices()
+    return {
+      guard: snapshot.guard,
+      protocolVersion: snapshot.protocolVersion,
+      singleController: snapshot.singleController,
+      devices: snapshot.devices,
+    }
+  },
+  async forgetDevice(deviceId) {
+    return createAdminTransport().forgetDevice(deviceId)
+  },
+  async revokeDevices(input) {
+    return createAdminTransport().revokeDevices(input)
+  },
+  async issueTicket({ origin, pairIssueToken, role }) {
+    const transport = createTransport({ origin, pairIssueToken, adminChannel: '' })
+    return transport.issueTicket(role)
+  },
+  async issueCode({ origin, pairIssueToken, role }) {
+    const transport = createTransport({ origin, pairIssueToken, adminChannel: '' })
+    return transport.issueCode(role)
+  },
+  /**
+   * 同源签发（桌面端唯一可行路径）。
+   *
+   * 走 `hub/admin.issue`：owner 页面经 Electron `forwardWebRequest` 同源转发，
+   * 不需要 pin，也不受 `dsh-app://app` 跨协议限制。
+   */
+  async adminIssue({ kind, role }) {
+    const transport = createAdminTransport()
+    if (kind === 'ticket') {
+      const issued = await transport.issueTicket(role)
+      return { kind: 'ticket' as const, value: issued.ticket, expiresAt: issued.expiresAt, role: issued.role }
+    }
+    const issued = await transport.issueCode(role)
+    return { kind: 'code' as const, value: issued.code, expiresAt: issued.expiresAt, role: issued.role }
+  },
+  /**
+   * 本机连接信息（局域网 IPv4 + 端口）。
+   *
+   * 守卫在 loopback 模式下公告的是 `127.0.0.1:8443`，**对其他设备无意义**；
+   * 配对二维码 / 链接必须带局域网地址，否则扫码方会连到自己的回环。
+   */
+  async endpoints() {
+    return createAdminTransport().endpoints()
+  },
+  /** 出站状态快照（磁盘真源；页面 2 秒轮询）。 */
+  async carrier() {
+    return createAdminTransport().carrier()
+  },
+  /** 把页面出站状态写回磁盘。 */
+  async carrierWrite(mode) {
+    return createAdminTransport().carrierWrite(mode)
+  },
+  async listOutboundTargets() {
+    return createAdminTransport().listOutboundTargets()
+  },
+  async saveOutboundTarget(target) {
+    return createAdminTransport().saveOutboundTarget(target)
+  },
+  async activateOutboundTarget(targetId) {
+    return createAdminTransport().activateOutboundTarget(targetId)
+  },
+  async forgetOutboundTarget(targetId) {
+    return createAdminTransport().forgetOutboundTarget(targetId)
+  },
+  /** 出站状态变更后重新装配页面（整页重载，重置 RPC 通道）。 */
+  reload() {
+    globalThis.location?.reload()
+  },
+  async connect({ origin, secret }) {
+    const transport = createTransport({ origin })
+    const kind = classifyPairSecret(secret)
+    if (kind === null) throw new Error('pair-invalid：无法识别的配对凭据')
+    const issued = await transport.redeem({
+      ...(kind === 'ticket' ? { ticket: secret } : { code: secret }),
+      clientLabel: 'DSH 主控端',
+    })
+    return {
+      token: issued.token,
+      role: issued.role,
+      deviceId: issued.deviceId,
+      label: issued.deviceId,
+      ...(issued.displacedDevices === undefined ? {} : { displacedDevices: issued.displacedDevices }),
+    }
+  },
+  // ③ 运行指标（守卫 /remote/stats；旧版本 404 → 页面降级卡）。
+  async stats() {
+    const snapshot = await createAdminTransport().stats()
+    return {
+      startedAt: snapshot.startedAt,
+      pairIssued: snapshot.pairIssued,
+      pairRedeemed: snapshot.pairRedeemed,
+      pairRejected: snapshot.pairRejected,
+      authAccepted: snapshot.authAccepted,
+      authDenied: snapshot.authDenied,
+      activeStreams: snapshot.activeStreams,
+      streamsOpened: snapshot.streamsOpened,
+      hourly: snapshot.hourly,
+      daily: snapshot.daily,
+    }
+  },
+  // ④ 配置读写（守卫 /remote/config）。
+  async getConfig() {
+    const { config } = await createAdminTransport().getConfig()
+    return config
+  },
+  async patchConfig(input) {
+    const { config } = await createAdminTransport().patchConfig(input)
+    return config
+  },
+})
 
 /** `ctx.inject(deps, cb)` 返回的子 fiber（只需 dispose 能力）。 */
 interface InjectFiber {
@@ -155,22 +365,48 @@ export function applyRemoteHubClient(ctx: Context, options: ClientAssemblyOption
       if (disposeFiber !== undefined) push(() => { void disposeFiber() })
     }
 
-    // 4. UI（LAST：永远从 access 读权限，不从本地猜）——延迟到 `slots` 就绪。
-    //    面板 slots 实例取自 inject 作用域（已注入，裸读安全）。
-    const panelFiber = injectWhenReady(ctx, ['slots'], 'panel', scoped => {
+    // 4. 同源 remote contribution（不注册任何覆盖层 UI）。
+    //    ⚠️ v0.3 起**不再**往 `shell.overlay` 注册面板：路线 A 的入口是侧栏
+    //    `sidebar.panellist` 行 + `main` 页，overlay 面板会盖在桌面标题栏上
+    //    （2026-11-11 实机反馈）。审批卡片走官方原生 UI，不需要自绘浮层。
+
+    // 5. 云端设备入口（路线 A）：侧栏导航行 + main 页。
+    //    与官方「插件管理」同模式：sidebar.panellist 行 id == main key。
+    const navFiber = injectWhenReady(ctx, ['slots'], 'nav', scoped => {
       const slots = (scoped as unknown as {
-        slots?: { register(options: unknown, component: unknown): () => void }
+        slots?: {
+          register(options: unknown, component: unknown): () => void
+          inject?: (name: string, setup: () => void) => unknown
+        }
       }).slots
       if (slots === undefined || typeof slots.register !== 'function') return
-      const panel = mountRemotePanel(scoped, {
-        slots,
-        access,
-        call: (method, args) => transport.call(method, args),
+      const disposersNav: (() => void)[] = []
+      const injectable = slots
+
+      // 每个槽位一条 inject 声明（声明 = 渲染授权，官方契约）。
+      const declare = (name: string, setup: () => void): void => {
+        if (typeof injectable.inject === 'function') injectable.inject(name, setup)
+        else setup() // 测试桩无 inject 时行为等价。
+      }
+
+      declare('sidebar.panellist', () => {
+        // 侧栏行：图标行；label 供展开态文本与收起态 tooltip。
+        disposersNav.push(slots.register(
+          { name: 'sidebar.panellist', id: 'remote-hub', order: 60, label: '云端设备' },
+          RemoteHubNavIcon,
+        ))
       })
-      return () => { panel.dispose() }
+      declare('main', () => {
+        // 中央页：云端设备控制台（连接 / 签发 / 设备列表 / 模式切换）。
+        disposersNav.push(slots.register(
+          { name: 'main', key: 'remote-hub' },
+          RemoteHubPage,
+        ))
+      })
+      return () => { for (const dispose of [...disposersNav].reverse()) dispose() }
     })
-    const disposePanelFiber = panelFiber?.dispose
-    if (disposePanelFiber !== undefined) push(() => { void disposePanelFiber() })
+    const disposeNavFiber = navFiber?.dispose
+    if (disposeNavFiber !== undefined) push(() => { void disposeNavFiber() })
 
     const assembly: ClientAssembly = {
       transport,

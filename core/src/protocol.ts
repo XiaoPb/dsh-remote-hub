@@ -40,14 +40,24 @@ export const AUTH_HEADER = 'authorization'
 export const BEARER_SCHEME = 'Bearer'
 
 /**
+ * 本机签发/设备管理的进程内凭据头。
+ *
+ * 值由 host 在启动时随机生成并注入本机 index 页（`__DSH_REMOTE_HUB__`），
+ * **绝不经隧道、绝不写日志**；签发端与设备管理端都要求「回环 + 该头」双条件。
+ */
+export const PAIR_ISSUE_HEADER = 'x-pair-issue-token'
+
+/**
  * 守卫自己的 HTTP 路由。**其余一律 404** —— 包括 `/api/*`：那不是守卫的路由，
  * 而是守卫以 `peer` 身份交给 DSH 自己的
  * `ctx.connection.createSharedFetchHandler('/api')` 的 RPC 面。
  *
- * 五条路由，一条不多：
+ * 七条路由，一条不多：
  * - 流**不占路由**：三条 stream 方法是 `hub/*` Remote 方法，走 `rpc` 入口，
  *   因此同样过官方 `decide()`。给它们单开 HTTP 路由等于绕开 Gateway 的参数校验
  *   与访问判定（红线 R9）。
+ * - 两条**设备管理**路由（`devices` / `devicesRevoke`）只作用于本机页面：与
+ *   签发端同样施加「回环 + `x-pair-issue-token`」双条件，不对外暴露。
  */
 export const GUARD_ROUTES = {
   /** 无鉴权的最小事实：`{ ok, protocolVersion }`。不回显设备数，不暴露其它配置。 */
@@ -60,6 +70,14 @@ export const GUARD_ROUTES = {
   pair: '/remote/pair',
   /** 一元入口：Bearer 令牌 + 来源围栏 + 设备 → Peer → official `/api` 派发。 */
   rpc: '/remote/rpc',
+  /** 设备管理（只读）：本机页面列出已配对设备。**双条件回环门控**。 */
+  devices: '/remote/devices',
+  /** 设备管理（写）：清除单台 / 全部配对。**双条件回环门控**。 */
+  devicesRevoke: '/remote/devices/revoke',
+  /** 运行指标（只读快照）：本机页面统计区数据源。**双条件回环门控**。 */
+  stats: '/remote/stats',
+  /** 配置快照（只读）与白名单子集写入。**双条件回环门控**。 */
+  config: '/remote/config',
 } as const
 
 export type GuardRouteName = keyof typeof GUARD_ROUTES
@@ -86,6 +104,42 @@ export const HUB_METHODS = {
   streamCancel: 'stream.cancel',
   /** 回答一次审批：`{ requestId, outcome }` → `{ ok }`（三值，见能力矩阵）。 */
   answerApproval: 'answerApproval',
+  /**
+   * 本机管理面（仅 owner 页面可调；走同源 `/api` 通道，无需 CORS）。
+   *
+   * 桌面端页面 origin 是 `dsh-app://app`（不透明来源），无法直接 fetch
+   * `http://127.0.0.1:8443`。这些方法与已有的 `hub/*` 一样注册在 Typert Remote 上，
+   * 页面经同源 `POST /api/<endpoint>` 调用，由 Electron 的 `forwardWebRequest`
+   * 转发到本机 Host —— 全程同源，零预检。
+   */
+  adminDevices: 'admin.devices',
+  adminDeviceForget: 'admin.deviceForget',
+  adminStats: 'admin.stats',
+  adminConfig: 'admin.config',
+  adminConfigPatch: 'admin.configPatch',
+  adminHealth: 'admin.health',
+  /** 签发配对凭据（owner 页面同源调用；仍需进程内 pin 作为第二因子）。 */
+  adminIssue: 'admin.issue',
+  /** 本机连接信息：局域网 IPv4 + 端口（供其他设备填写 / 生成二维码链接）。 */
+  adminEndpoints: 'admin.endpoints',
+  /**
+   * 出站连接状态（`carrier-mode.json` 的读写）。
+   *
+   * 页面「主控端」卡片的状态原本只存在浏览器 localStorage，CLI 配对后页面
+   * 无从得知。这条端点让磁盘上的 `carrier-mode.json` 成为可轮询的真源：
+   * 页面定时调用 `adminCarrier`，发现有更新即导入到 localStorage。
+   */
+  adminCarrier: 'admin.carrier',
+  /** 把页面的出站状态写回磁盘（页面切换/断开时调用）。 */
+  adminCarrierWrite: 'admin.carrierWrite',
+  /** 枚举当前 DSH_HOME/profile 中已配对的目标，仅返回 opaque ID 与标签。 */
+  adminOutboundTargets: 'admin.outboundTargets',
+  /** 保存新兑换的 bearer 到本地受限档案，不回传 bearer 到浏览器 storage。 */
+  adminOutboundSave: 'admin.outboundSave',
+  /** 按 opaque targetId 激活由 Host 保存的配对目标。 */
+  adminOutboundActivate: 'admin.outboundActivate',
+  /** 删除当前本地主控 profile 下的配对目标。 */
+  adminOutboundForget: 'admin.outboundForget',
 } as const
 
 export type HubMethod = (typeof HUB_METHODS)[keyof typeof HUB_METHODS]
@@ -122,16 +176,24 @@ export const STREAM_BUDGET = {
 /**
  * 资源上限（§9.8）。守卫入口比 DSH 自己的 `/api` 更窄：DSH 默认 300 MiB 是给
  * 图片留的，而我们的入口只承载 JSON 信封与 base64 上传。
+ *
+ * 路线 A（carrier 接管）实测口径：官方 GUI 的并发请求峰值可到 12+（会话流 +
+ * 列表 + 投影），`maxInflightRequestsPerDevice` 已调到 16；`/remote/rpc` 的
+ * 响应**不截断**——官方 client 期待完整 multipart 附件投影
+ * （client.browser.js parseBinaryResponse），截断会产生畸形附件。
  */
 export const LIMITS = {
-  /** `/remote/rpc` 请求体上限（8 MiB）。 */
-  maxRequestBodyBytes: 8 * 1024 * 1024,
-  /** 单批响应体上限；超限截断该批并置 `truncated: true`（4 MiB）。 */
+  /** `/remote/rpc` 请求体上限（16 MiB；官方附件上传实测可达 10 MiB+）。 */
+  maxRequestBodyBytes: 16 * 1024 * 1024,
+  /**
+   * 单批响应体上限；仅对 `hub/stream.next` 的**批聚合**生效（streams.ts 自有
+   * 判据）。`/remote/rpc` 透传官方响应，不做截断（见上）。
+   */
   maxResponseBodyBytes: 4 * 1024 * 1024,
   /** 每设备并发长轮询流数。 */
   maxStreamsPerDevice: 4,
-  /** 每设备并发 `/remote/rpc` 请求数。 */
-  maxInflightRequestsPerDevice: 8,
+  /** 每设备并发 `/remote/rpc` 请求数（官方 GUI 峰值 12+，留余量）。 */
+  maxInflightRequestsPerDevice: 16,
   /** 设备表文件大小上限。 */
   maxDeviceTableBytes: 4 * 1024 * 1024,
   /** 兑换端按来源限流：1 分钟内最多 10 次。 */
@@ -143,11 +205,21 @@ export const PAIRING = {
   /** QR 票据：32 字节随机 → base64url 43 字符。 */
   ticketBytes: 32,
   ticketChars: 43,
-  /** QR 票据 TTL。 */
-  ticketTtlMs: 120_000,
+  /**
+   * 配对凭据 TTL：**15 秒轮换**。
+   *
+   * 设计：票据与短码都只在 15 秒窗口内有效，页面每 15 秒自动换新。
+   * 配对一旦成功，服务端立即签发**长期设备令牌**（`DeviceRecord.tokenHash`
+   * 持久化到设备表），此后该设备凭令牌长期访问，不再需要配对凭据。
+   * 短窗口 + 成功后持久化 = 凭据泄露面极小，且设备不会因凭据过期掉线。
+   */
+  ticketTtlMs: 15_000,
   /** 短码：8 位 Crockford Base32 = 40 bit。 */
   codeLength: 8,
-  codeTtlMs: 600_000,
+  /** 短码 TTL：与票据一致（15 秒轮换）。 */
+  codeTtlMs: 15_000,
+  /** 轮换周期（页面自动刷新间隔）。 */
+  rotateMs: 15_000,
   /** 错误尝试预算；达预算即烧码/烧票据（成功同样 burn）。 */
   maxAttempts: 5,
 } as const
@@ -210,6 +282,8 @@ export const OFFICIAL_ERROR_CODES = {
 export const HUB_SERVICE_KEYS = {
   streams: 'hubStreams',
   devices: 'hubDevices',
+  /** 本机管理面（owner 页面专用；同源通道）。 */
+  admin: 'hubAdmin',
 } as const
 
 /** 设备表磁盘格式版本（与 `PROTOCOL_VERSION` 独立演进）。 */

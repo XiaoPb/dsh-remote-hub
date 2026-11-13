@@ -16,6 +16,21 @@
  * `@core/*` 别名指向**emit 后**的 core 目录（源码里的 `.js` 后缀已在 tsc emit
  * 时确定），因此两个产物各自内联同一份契约常量，零漂移。
  *
+ * ## carrier 为什么必须打在 bundle 顶层
+ *
+ * 整个 client bundle 被包在 `__ModuleLoader__.load({ factory })` 的 **factory**
+ * 里，而 factory 由 DSH 启动 cordis 时才调用。官方 `connection.apply()` 在同一次
+ * 启动里**同步**读取 `__DSH_TRANSPORT__` 并闭包捕获 `fetch`。把 carrier 写在
+ * factory 内，注入必然晚于捕获——CDP 时序探针实测：
+ *
+ * ```
+ *  54ms  connection 读 __DSH_TRANSPORT__ → undefined
+ * 125ms  carrier 才写入 transport        → 接管失效（页面 RPC 仍走本机）
+ * ```
+ *
+ * 因此 carrier 单独打成 IIFE（`lib/carrier-boot.js`），并在 `lib/client.js` 的
+ * banner 里**同步内联执行**——位置在 `__ModuleLoader__.load` 之前。
+ *
  * @module dsh-remote-hub/tsdown
  */
 import { defineConfig } from 'tsdown'
@@ -39,6 +54,28 @@ const aliasFor = (coreDir: string): Record<string, string> => ({ '@core/': coreD
 const nodeExternal = (specifier: string): boolean =>
   specifier.startsWith('node:') || specifier.startsWith('@deepseek-ai/')
 
+/** 浏览器侧：react / 官方包保持外部。 */
+const browserExternal = (specifier: string): boolean =>
+  specifier === 'react' || specifier.startsWith('react/')
+  || specifier === 'react-dom' || specifier.startsWith('react-dom/')
+  || specifier.startsWith('@deepseek-ai/')
+
+/**
+ * 读取构建好的 carrier IIFE，供 `lib/client.js` 的 banner 内联。
+ *
+ * 由 npm script 保证顺序（先打 carrier-boot，再打 client）。文件缺失时返回一段
+ * 明确的注释，让产物仍然可加载（只是接管不生效），而不是让整个构建失败。
+ * @returns 可直接嵌进 banner 的 JS 源码。
+ */
+function carrierBootSource(): string {
+  const file = fileURLToPath(new URL('./lib/carrier-boot.js', import.meta.url))
+  try {
+    return readFileSync(file, 'utf8')
+  } catch {
+    return '/* carrier-boot.js missing: run the carrier build step first */'
+  }
+}
+
 export default defineConfig([
   {
     name: 'dsh-remote-hub/lib',
@@ -55,6 +92,26 @@ export default defineConfig([
     outputOptions: { entryFileNames: 'index.js' },
   },
   {
+    // 第一段：carrier 独立 IIFE（bundle 顶层执行）。必须先于 client 打包。
+    name: 'dsh-remote-hub/carrier-boot',
+    entry: { 'carrier-boot': fileURLToPath(new URL('./.build/client/client/src/carrier-entry.js', import.meta.url)) },
+    outDir: 'lib',
+    format: 'iife',
+    platform: 'browser',
+    target: 'es2022',
+    fixedExtension: false,
+    dts: false,
+    clean: false,
+    codeSplitting: false,
+    alias: aliasFor(CLIENT_CORE),
+    deps: { neverBundle: (specifier: string) => specifier.startsWith('@deepseek-ai/') },
+    outputOptions: {
+      entryFileNames: 'carrier-boot.js',
+      name: '__DSH_REMOTE_HUB_CARRIER_BOOT__',
+      banner: 'if (typeof globalThis.process === "undefined") { globalThis.process = { env: {}, platform: "browser", argv: [] }; }\n',
+    },
+  },
+  {
     name: 'dsh-remote-hub/client',
     entry: { client: CLIENT_ENTRY },
     outDir: 'lib',
@@ -66,16 +123,7 @@ export default defineConfig([
     clean: false,
     codeSplitting: false,
     alias: aliasFor(CLIENT_CORE),
-    deps: {
-      neverBundle: (specifier: string) =>
-        specifier === 'react' || specifier.startsWith('react/')
-        || specifier === 'react-dom' || specifier.startsWith('react-dom/')
-        || specifier.startsWith('@deepseek-ai/'),
-      alwaysBundle: (specifier: string) =>
-        specifier !== 'react' && !specifier.startsWith('react/')
-        && specifier !== 'react-dom' && !specifier.startsWith('react-dom/')
-        && !specifier.startsWith('@deepseek-ai/'),
-    },
+    deps: { neverBundle: browserExternal, alwaysBundle: (s: string) => !browserExternal(s) },
     outputOptions: {
       entryFileNames: 'client.js',
       // Window guard first: the desktop host's node half imports this file while
@@ -86,6 +134,10 @@ export default defineConfig([
       banner:
         'if (typeof window === "undefined") { globalThis.window = { __ModuleLoader__: { load(bundle) { globalThis.__DSH_REMOTE_HUB_BUNDLE__ = bundle; } } }; }\n'
         + 'if (typeof globalThis.process === "undefined") { globalThis.process = { env: {}, platform: "browser", argv: [] }; }\n'
+        // ⚠️ carrier 内联在 **bundle 顶层**（factory 之外），见文件头注释的时序说明。
+        + '/* ===== carrier boot: bundle top-level, BEFORE the plugin factory ===== */\n'
+        + carrierBootSource()
+        + '\n/* ===== plugin factory ===== */\n'
         + `window.__ModuleLoader__.load({ id: ${JSON.stringify(PKG_ID)}, factory: (require) => {`,
       footer: 'return module.exports; } });',
       intro: 'var module = { exports: {} }; var exports = module.exports;',

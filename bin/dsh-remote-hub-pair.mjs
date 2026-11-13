@@ -23,7 +23,7 @@
  * @module dsh-remote-hub/pair-cli
  */
 import { readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { homedir, networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 
 // Inlined from core/src/protocol.ts on purpose: this bin ships standalone in
@@ -43,11 +43,12 @@ const PAIR_ISSUE_HEADER = 'x-pair-issue-token'
 const ROLE_NAMES = ['read-only', 'control', 'full']
 
 function parseArgv(argv) {
-  const out = { role: 'control', port: 8443, mode: null, label: null, help: false }
+  const out = { role: 'control', port: 8443, mode: null, label: null, lan: false, help: false }
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
     if (arg === '--code') out.mode = 'code'
     else if (arg === '--qr' || arg === '--ticket') out.mode = 'qr'
+    else if (arg === '--lan') out.lan = true
     else if (arg === '--role') {
       const value = argv[i + 1]
       if (value === undefined || !ROLE_NAMES.includes(value)) {
@@ -95,16 +96,23 @@ if (args.help || args.mode === null) {
   process.stdout.write(`dsh-remote-hub-pair — issue a pairing credential from a headless host
 
 Usage:
-  dsh-remote-hub-pair --code [--role control] [--port 8443]
-  dsh-remote-hub-pair --qr   [--role control] [--port 8443]
+  dsh-remote-hub-pair --code [--role control] [--port 8443] [--lan]
+  dsh-remote-hub-pair --qr   [--role control] [--port 8443] [--lan]
 
 Options:
-  --code          issue an 8-char Crockford short code (TTL 10 min, 5 attempts)
-  --qr            issue a 43-char QR ticket (TTL 2 min, single use)
+  --code          issue an 8-char Crockford short code (TTL 15s, rotates)
+  --qr            issue a 43-char QR ticket (TTL 15s, rotates, single use)
   --role <name>   read-only | control | full (default: control)
   --port <n>      guard port (default: 8443)
   --label <text>  device label for the audit row
+  --lan           also print LAN IPv4 addresses and a ready-to-share pair-link
   -h, --help      this text
+
+Credentials are short-lived (15 seconds) by design: once a device redeems a
+code or ticket, the guard issues a long-lived device token and persists its
+hash to the device table, so the paired device keeps working after the
+credential window closes. For an automated flow, call this command again to
+get a fresh credential right before redeeming.
 
 Reads the 0600 pin file the host plugin wrote at startup:
   ~/.dsh/remote-hub/pair-issue-pin
@@ -148,15 +156,45 @@ if (response.status !== 200) {
 const secret = args.mode === 'code' ? parsed.code : parsed.ticket
 if (typeof secret !== 'string' || secret === '') fail('guard response did not carry a credential')
 
+/**
+ * 枚举本机局域网 IPv4（与 host 侧 `lanAddresses()` 同判据，内联以保持独立可运行）。
+ * 只取非内部、非链路本地地址，`192.168.*` 优先。
+ * @returns 地址列表。
+ */
+function lanAddresses() {
+  const rows = []
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family !== 'IPv4' || entry.internal) continue
+      const address = entry.address
+      if (address.startsWith('169.254.')) continue
+      const rank = address.startsWith('192.168.') ? 0
+        : address.startsWith('10.') ? 1
+          : /^172\.(1[6-9]|2\d|3[01])\./u.test(address) ? 2 : 3
+      rows.push({ address, rank })
+    }
+  }
+  return rows.sort((a, b) => a.rank - b.rank).map(row => row.address)
+}
+
 const expiresAt = typeof parsed.expiresAt === 'number' ? new Date(parsed.expiresAt).toISOString() : 'unknown'
 const body = args.mode === 'code'
   ? JSON.stringify({ code: secret, clientLabel: args.label ?? 'remote device' })
   : JSON.stringify({ ticket: secret, clientLabel: args.label ?? 'remote device' })
+
+// 其他设备可达的地址：--lan 时给出局域网 IPv4 + 端口（扫码/填写用）。
+const lan = args.lan ? lanAddresses() : []
+const reachable = lan[0] === undefined ? origin : `http://${lan[0]}:${args.port}`
 
 process.stdout.write(`path: ${args.mode === 'code' ? 'code' : 'qr'}\n`)
 process.stdout.write(`secret: ${secret}\n`)
 process.stdout.write(`role: ${parsed.role ?? args.role}\n`)
 process.stdout.write(`expires-at: ${expiresAt}\n`)
 process.stdout.write(`guard-origin: ${origin}\n`)
-process.stdout.write(`redeem-hint: POST ${origin}${GUARD_ROUTES.pair} ${body}\n`)
+if (args.lan) {
+  for (const address of lan) process.stdout.write(`lan-address: http://${address}:${args.port}\n`)
+  // 票据配对的完整链接（与页面二维码内容一致），便于直接抄给另一台设备。
+  if (args.mode === 'qr') process.stdout.write(`pair-link: ${reachable}/#dshrh=${secret}\n`)
+}
+process.stdout.write(`redeem-hint: POST ${reachable}${GUARD_ROUTES.pair} ${body}\n`)
 

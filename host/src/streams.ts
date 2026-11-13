@@ -369,11 +369,10 @@ export function createStreamEngine(deps: StreamEngineDeps): StreamEngine {
  * @returns `OpenUpstream`。
  */
 export function gatewayStreamOpener(ctx: unknown): OpenUpstream {
-  // 走 reflect.props 读（与 probeServices 同理由）：插件 fiber 的裸读会抛
-  // `cannot get property … without inject`（cordis proxy get trap）。
+  // **必须走 reflect.get 读实例**（reflect.props 是声明元数据，不是服务对象）。
   const gateway = (ctx as {
-    reflect?: { props?: Record<string, unknown> }
-  }).reflect?.props?.typertGateway as {
+    reflect?: { get?: (name: string, strict?: boolean) => unknown }
+  }).reflect?.get?.('typertGateway', false) as {
     stream(request: {
       namespace: string
       method: string
@@ -382,7 +381,7 @@ export function gatewayStreamOpener(ctx: unknown): OpenUpstream {
       signal: AbortSignal
     }): Promise<AsyncIterable<unknown>>
   } | undefined
-  if (gateway === undefined) {
+  if (gateway === undefined || typeof gateway.stream !== 'function') {
     throw new Error('dsh-remote-hub: ctx.typertGateway is unavailable; cannot open upstream streams')
   }
   return async (endpoint, args, peer, signal) => {

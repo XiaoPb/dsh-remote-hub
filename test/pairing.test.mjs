@@ -5,12 +5,13 @@ import { PATHS, pairingService, read, secretOf, testLoadLib } from './_helpers.m
 
 const mod = await testLoadLib()
 
-test('QR ticket: 43 chars, TTL 120000, single-use burn', async () => {
+test('QR ticket: 43 chars, TTL 15s (rotate), single-use burn', async () => {
   const env = pairingService(mod)
   const issued = env.service.issueTicket('control')
   const ticket = secretOf(issued)
   assert.match(ticket, /^[A-Za-z0-9_-]{43}$/u)
-  assert.equal(issued.expiresAt - env.now, 120_000)
+  // 15 秒轮换：凭据窗口极短，配对成功即换长期设备令牌（见 redeem 断言）。
+  assert.equal(issued.expiresAt - env.now, 15_000)
   assert.equal(issued.role, 'control')
   const first = await env.service.redeemTicket(ticket, 'phone')
   assert.equal(first.ok, true)
@@ -30,7 +31,7 @@ test('short code: 8 Crockford chars (no I L O U), entropy >= 40 bits', () => {
     assert.equal(code.length, 8)
     assert.equal([...code].every(char => env.CROCKFORD.includes(char)), true)
     assert.doesNotMatch(code, /[ILOU]/u)
-    assert.equal(issued.expiresAt - env.now, 600_000)
+    assert.equal(issued.expiresAt - env.now, 15_000)
   }
 })
 
