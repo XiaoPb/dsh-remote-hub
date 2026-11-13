@@ -16,6 +16,7 @@ import { execFile } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const mod = await import('../lib/index.js')
 
@@ -136,7 +137,7 @@ describe('短码 / 票据可用于配对控制', () => {
     await writeFile(join(home, '.dsh', 'remote-hub', 'pair-issue-pin'), 'pin-xyz\n', { mode: 0o600 })
 
     const runCli = argv => new Promise((resolve, reject) => {
-      execFile(process.execPath, [new URL('../bin/dsh-remote-hub-pair.mjs', import.meta.url).pathname.replace(/^\//u, ''), ...argv], {
+      execFile(process.execPath, [fileURLToPath(new URL('../bin/dsh-remote-hub-pair.mjs', import.meta.url)), ...argv], {
         env: { ...process.env, HOME: home, USERPROFILE: home },
         timeout: 15_000,
       }, (error, stdout, stderr) => {
@@ -156,7 +157,7 @@ describe('短码 / 票据可用于配对控制', () => {
     await import('node:fs/promises').then(fs => fs.mkdir(join(home, '.dsh', 'remote-hub'), { recursive: true }))
     await writeFile(join(home, '.dsh', 'remote-hub', 'pair-issue-pin'), 'pin-xyz\n', { mode: 0o600 })
     const runCli = argv => new Promise((resolve, reject) => {
-      execFile(process.execPath, [new URL('../bin/dsh-remote-hub-pair.mjs', import.meta.url).pathname.replace(/^\//u, ''), ...argv], {
+      execFile(process.execPath, [fileURLToPath(new URL('../bin/dsh-remote-hub-pair.mjs', import.meta.url)), ...argv], {
         env: { ...process.env, HOME: home, USERPROFILE: home },
         timeout: 15_000,
       }, (error, stdout, stderr) => {
