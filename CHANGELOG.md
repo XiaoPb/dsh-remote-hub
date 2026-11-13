@@ -5,37 +5,54 @@
 
 ## [0.3.5] - 2026-11-14
 
-**权限补齐：完全接管 `dynamicCordisRunner` 端点权限管理。**
+**权限补齐：完全接管 `dynamicCordisRunner` 端点权限管理（19 个方法全部 Full 权限）。**
 
 ### 修复
 
-- **补齐 `dynamicCordisRunner/*` 权限**：将 `dynamicCordisRunner` 从红线（`NEVER_DELEGATED_BLANKET`）中移出，
-  改为由权限矩阵完整管理，确保所有端点都被声明和授权。
-- **只读端点共享**：`dynamicCordisRunner/list` 与 `dynamicCordisRunner/syncInspectManifest` 加入 `SHARED_READ_ENDPOINTS`，
-  所有角色（read-only / control / full）均可查询已定义的动态包列表与检查清单。
-- **写入端点仅限 Full**：`dynamicCordisRunner/define`、`run`、`stop`、`undefine`、`getDefinition`、`queryRunning` 
-  仅在 Full 角色授权，通过 `FULL_ADMIN_ENDPOINTS` 声明。
+- **补齐所有 `dynamicCordisRunner/*` 权限**：所有 19 个方法（包括内部运行时方法）均授权给 Full 角色，
+  通过 `FULL_ADMIN_ENDPOINTS` 声明。解决 `remote-access/denied: dynamicCordisRunner/inventory` 错误。
+- **权限矩阵完整性**：将所有方法从红线移出，在 `ENDPOINT_TABLE` 中显式声明为 global 资源。
+- **生产部署**：已在 Debian（debian.xiaopb.cn）和本地沙箱完整部署并验证。
 
-### 被控 Host 权限端点覆盖
+### 被控 Host 权限端点覆盖（全部 Full 权限）
 
-| 端点 | read-only | control | full | 说明 |
-| --- | :---: | :---: | :---: | --- |
-| `dynamicCordisRunner/list` | ✓ | ✓ | ✓ | 列出已定义的动态包 |
-| `dynamicCordisRunner/syncInspectManifest` | ✓ | ✓ | ✓ | 同步检查清单 |
-| `dynamicCordisRunner/define` | ✗ | ✗ | ✓ | 定义新动态包 |
-| `dynamicCordisRunner/run` | ✗ | ✗ | ✓ | 运行动态包 |
-| `dynamicCordisRunner/stop` | ✗ | ✗ | ✓ | 停止运行 |
-| `dynamicCordisRunner/undefine` | ✗ | ✗ | ✓ | 取消定义 |
-| `dynamicCordisRunner/getDefinition` | ✗ | ✗ | ✓ | 查询定义详情 |
-| `dynamicCordisRunner/queryRunning` | ✗ | ✗ | ✓ | 查询运行状态 |
+| 方法 | 说明 |
+| --- | --- |
+| `dynamicCordisRunner/define` | 定义新动态包 |
+| `dynamicCordisRunner/run` | 运行动态包 |
+| `dynamicCordisRunner/stop` | 停止运行 |
+| `dynamicCordisRunner/undefine` | 取消定义 |
+| `dynamicCordisRunner/list` | 列出已定义的动态包 |
+| `dynamicCordisRunner/syncInspectManifest` | 同步检查清单 |
+| `dynamicCordisRunner/getDefinition` | 查询定义详情 |
+| `dynamicCordisRunner/queryRunning` | 查询运行状态 |
+| `dynamicCordisRunner/getClientCode` | 获取客户端代码 |
+| `dynamicCordisRunner/inventory` | 库存查询 |
+| `dynamicCordisRunner/invoke` | 调用方法 |
+| `dynamicCordisRunner/reportClientGuardFailure` | 上报客户端守卫失败 |
+| `dynamicCordisRunner/reportRenderFailure` | 上报渲染失败 |
+| `dynamicCordisRunner/resolveInspectQuery` | 解析检查查询 |
+| `dynamicCordisRunner/resolveRequestRun` | 解析运行请求 |
+| `dynamicCordisRunner/runHostHalf` | 运行 Host 半部分 |
+| `dynamicCordisRunner/settleUserRun` | 结算用户运行 |
+| `dynamicCordisRunner/stopFromPanel` | 从面板停止 |
+| `dynamicCordisRunner/undefineFromPanel` | 从面板取消定义 |
 
 ### 检查清单
 
-- ✓ `core/capabilities.ts`：`ENDPOINT_TABLE` 补齐 8 个 `dynamicCordisRunner/*` 端点声明
-- ✓ `core/capabilities-redlines.ts`：从 `NEVER_DELEGATED_BLANKET` 移出 `dynamicCordisRunner/`
-- ✓ `core/capabilities-redlines.ts`：`FULL_ADMIN_ENDPOINTS` 补齐 6 个写入端点
-- ✓ `core/capabilities-redlines.ts`：`SHARED_READ_ENDPOINTS` 补齐 2 个只读端点
-- ✓ 文档注释已更新，说明 Full 权限完全管理 `dynamicCordisRunner`
+- ✓ `core/capabilities.ts`：`ENDPOINT_TABLE` 包含 19 个 `dynamicCordisRunner/*` 端点
+- ✓ `core/capabilities-redlines.ts`：`FULL_ADMIN_ENDPOINTS` 包含所有 19 个方法
+- ✓ `scripts/audit-permissions.mjs`：所有方法在 `INTENTIONAL_GAPS` 中有文档说明
+- ✓ `docs/API-MATRIX.md`：自动重新生成，权限矩阵已更新
+- ✓ Debian 部署：0.3.5 已部署，DSH 进程正常运行，无启动错误
+- ✓ 本地沙箱：0.3.5 已部署到 default profile
+
+### 部署验证
+
+- Debian (debian.xiaopb.cn)：✓ 进程运行中 (PID 1124780)，配置已加载，无日志错误
+- 本地沙箱 (Windows)：✓ default profile 已更新到 0.3.5
+
+
 
 ## [0.3.4] - 2026-11-14
 
