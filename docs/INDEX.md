@@ -2,8 +2,9 @@
 
 Public documentation describes the current release only.
 
-- [README](../README.md): features, installation, limitations.
+- [README (中文)](../README.md) ｜ [README (English)](../README.en.md): features, installation, limitations.
 - [Deployment](DEPLOY.md): Host setup, guard exposure, operations.
+- [Release process](RELEASE.md): CI/CD versioning, publishing controls, troubleshooting.
 - [Architecture](ARCHITECTURE.md): data paths, identity, authorization, persistence.
 - [Design contract](DESIGN.md): role semantics, state ownership, supported boundaries.
 - [Technical notes](TECHNICAL.md): document scope and archive policy.

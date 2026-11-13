@@ -1,0 +1,17 @@
+* text=auto eol=lf
+
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.ts text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.sh text eol=lf
+
+*.png binary
+*.jpg binary
+*.ico binary
+*.apk binary
+*.aab binary

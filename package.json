@@ -49,7 +49,12 @@
     "watch": "tsdown --watch",
     "typecheck": "tsc -p tsconfig.host.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "node --test test/*.test.mjs",
-    "verify": "npm run typecheck && npm run build && npm run test && node scripts/version-gate.mjs && node scripts/contract-check.mjs"
+    "test:serial": "node scripts/run-all-tests.mjs",
+    "verify": "npm run typecheck && npm run build && npm run test && node scripts/version-gate.mjs && node scripts/contract-check.mjs",
+    "check": "node scripts/verify-package.mjs && node scripts/run-all-tests.mjs && node scripts/version-gate.mjs && node scripts/contract-check.mjs && node scripts/fence.mjs && node scripts/redlines.mjs",
+    "release:check": "node scripts/release-check.mjs",
+    "pack:dry": "npm pack --dry-run",
+    "prepack": "node scripts/verify-package.mjs --no-pack"
   },
   "engines": {
     "node": ">=24.9.0",

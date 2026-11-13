@@ -1,37 +1,63 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
 name: CI
 
+# 质量门禁：只校验，不发布。发布走 release.yml（打 v* tag 触发）。
 on:
   push:
+    branches: [main, master]
   pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PACKAGE_NAME: '@xiaopb/dsh-remote-hub'
 
 jobs:
-  verify:
+  check:
+    name: check (node 24)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 11
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
+          # engines.node 要求 >=24.9.0，只用 24 一条线
           node-version: 24
+          cache: pnpm
 
       - name: Install
-        run: pnpm install --config.node-linker=hoisted
+        run: pnpm install --frozen-lockfile
 
+      # ============ 代码门禁 ============
       - name: Typecheck
-        run: pnpm typecheck
+        run: pnpm run typecheck
 
       - name: Build
-        run: pnpm build
+        run: pnpm run build
+
+      # ============ 自检（与 release.yml 同一入口） ============
+      - name: Package manifest contract
+        run: node scripts/verify-package.mjs
 
       - name: Unit tests
-        run: node --test test/*.test.mjs
+        run: node scripts/run-all-tests.mjs
 
       - name: Version gate
         run: node scripts/version-gate.mjs
@@ -44,3 +70,77 @@ jobs:
 
       - name: Red lines
         run: node scripts/redlines.mjs
+
+      - name: Release consistency
+        run: node scripts/release-check.mjs
+
+      # ============ 打包与消费者安装 ============
+      - name: Pack the tarball
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          # prepack 会跑 verify-package，stdout 里混有自检输出，按文件名取产物。
+          npm pack > pack.log 2>&1 || { cat pack.log; exit 1; }
+          TARBALL="$(ls -1t ./*.tgz | head -n1 | xargs -n1 basename)"
+          printf '%s\n' "$TARBALL" > tarball.txt
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          ls -lh "$TARBALL"
+
+      - name: Install the packed bundle like a consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARBALL="$(cat tarball.txt)"
+          mkdir -p "$RUNNER_TEMP/consumer"
+          cd "$RUNNER_TEMP/consumer"
+          npm init -y > /dev/null
+          # 宿主提供的包（cordis / DSH 各包）走 peer，消费端不需要真的拉下来。
+          npm install --no-audit --no-fund --legacy-peer-deps "$GITHUB_WORKSPACE/$TARBALL"
+          PKG="$RUNNER_TEMP/consumer/node_modules/$PACKAGE_NAME"
+          node --input-type=module -e "
+            import { readFileSync } from 'node:fs';
+            const p = JSON.parse(readFileSync('$PKG/package.json', 'utf8'));
+            if (p.name !== '$PACKAGE_NAME') throw new Error('unexpected package name: ' + p.name);
+            if (p.dsh?.bundle?.patch !== './cordis.patch.yml') throw new Error('dsh.bundle.patch missing');
+            if (p.dsh?.client?.platform !== 'web') throw new Error('dsh.client.platform missing');
+            if (p.exports?.['.']?.default !== './lib/index.js') throw new Error('host export missing');
+            if (p.exports?.['./client']?.default !== './lib/client.js') throw new Error('client export missing');
+            const host = await import('$PKG/lib/index.js');
+            if (typeof host.apply !== 'function') throw new Error('host entry does not export apply');
+            if (!Array.isArray(host.inject)) throw new Error('host entry does not export inject');
+          "
+          test -f "$PKG/lib/client.js"
+          test -f "$PKG/cordis.patch.yml"
+          test -f "$PKG/bin/dsh-remote-hub-pair.mjs"
+          grep -q '__ModuleLoader__' "$PKG/lib/client.js"
+          # 开发目录不能进包
+          for dir in test docs scripts dev .github node_modules; do
+            if [ -e "$PKG/$dir" ]; then echo "::error::$dir leaked into the tarball"; exit 1; fi
+          done
+          echo "installed bundle: $(node -p "require('$PKG/package.json').name + '@' + require('$PKG/package.json').version")"
+
+      # ============ 发布脚本冒烟（确保发布链路本身没坏） ============
+      - name: Validate the release notes generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          TARBALL="$(cat tarball.txt)"
+          SHA256="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
+          TAG="v$VERSION" VERSION="$VERSION" PACKAGE_NAME="$PACKAGE_NAME" \
+            TARBALL="$TARBALL" SHA256="$SHA256" \
+            bash scripts/release-notes.sh "$RUNNER_TEMP/release-notes.md"
+          grep -q '^## 版本信息' "$RUNNER_TEMP/release-notes.md"
+          grep -q '^## 安装' "$RUNNER_TEMP/release-notes.md"
+          grep -q '^## 发布产物' "$RUNNER_TEMP/release-notes.md"
+          grep -q "$SHA256" "$RUNNER_TEMP/release-notes.md"
+          echo "release notes: $(wc -l < "$RUNNER_TEMP/release-notes.md") lines"
+
+      - name: Lint the publish script
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/publish-npm.sh
+          bash -n scripts/release-notes.sh
+          echo "shell scripts parse cleanly"

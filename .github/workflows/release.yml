@@ -1,0 +1,221 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+name: Release
+
+# 打 tag 或手动触发时执行完整发布：
+#   · 校验 tag ↔ package.json 版本一致（不一致立刻失败，不产生任何发布动作）
+#   · 运行与 CI 同一入口的自检（typecheck / build / 单测 / 版本门 / 契约 / 围栏 / 红线 / 发布一致性）
+#   · 发布 npm：优先 Trusted Publishing（OIDC），不可用时回退 NPM_TOKEN
+#     —— 脚本内部是「发布 + 轮询确认版本已在 registry 可见」；发布请求被接受后
+#       读不到不算失败（npm 可能先进入自动校验），只有被 registry 拒绝才失败
+#   · npm pack + SHA-256、生成完整发布说明并创建/更新 Release
+#
+# 首选的 Trusted Publishing 需要在 npm 包设置里登记本仓库与 workflow 文件名
+# （release.yml），并允许 id-token: write。回退方式需要 Secret：NPM_TOKEN
+# （必须是可发布的 granular token：不能 stage-only / read-only，且 allowed packages 含本包）。
+#
+# @xiaopb 没有付费私有包计划，registry 对 restricted 回 E402，因此固定 --access public。
+#
+# 发布逻辑在 scripts/publish-npm.sh，可在本地用假 npm 跑（见 docs/RELEASE.md §4.2）。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 要发布的 Git ref（分支或 tag）
+        required: false
+        default: main
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PACKAGE_NAME: '@xiaopb/dsh-remote-hub'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  publish:
+    name: publish npm + GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          fetch-depth: 0 # 生成变更日志需要完整历史与 tag
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # ============ 版本与 tag 校验 ============
+      - name: Resolve version and check the tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::package.json version '$VERSION' is not SemVer"
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "v$VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version v$VERSION"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "releasing $PACKAGE_NAME@$VERSION (tag v$VERSION)"
+
+      # ============ 自检（与 ci.yml 同一入口） ============
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Run the release checks
+        run: node scripts/release-check.mjs --tag "v${{ steps.version.outputs.version }}"
+
+      - name: Package manifest contract
+        run: node scripts/verify-package.mjs
+
+      - name: Unit tests
+        run: node scripts/run-all-tests.mjs
+
+      - name: Version gate
+        run: node scripts/version-gate.mjs
+
+      - name: Contract check
+        run: node scripts/contract-check.mjs
+
+      - name: Source fence
+        run: node scripts/fence.mjs
+
+      - name: Red lines
+        run: node scripts/redlines.mjs
+
+      # ============ 发布 npm ============
+      - name: Upgrade npm for trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      # 发布凭据探测：先弄清这次能走哪条路，失败时日志里才有可判断的信息。
+      - name: Check npm credentials
+        id: auth
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -uo pipefail
+          echo "npm $(npm --version) · node $(node --version)"
+          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "has_token=true" >> "$GITHUB_OUTPUT"
+            echo "NPM_TOKEN identity: $(npm whoami --registry https://registry.npmjs.org/ 2>&1 | head -n 1)"
+          else
+            echo "has_token=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=No NPM_TOKEN::仓库 Secret NPM_TOKEN 未配置，只能依赖 Trusted Publishing"
+          fi
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "oidc=available"
+          else
+            echo "oidc=unavailable"
+          fi
+
+      # 发布：OIDC 优先 → 未真正公开则回退 NPM_TOKEN。
+      - name: Publish to npm (OIDC, then NPM_TOKEN fallback)
+        id: publish
+        shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          POLL_ATTEMPTS: '18'
+          POLL_INTERVAL: '10'
+        run: bash scripts/publish-npm.sh
+
+      # ============ 打包与校验和 ============
+      - name: Pack the tarball
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          # prepack 会跑 verify-package，stdout 里混有自检输出，按文件名取产物。
+          npm pack > pack.log 2>&1 || { cat pack.log; exit 1; }
+          TARBALL="$(ls -1t ./*.tgz | head -n1 | xargs -n1 basename)"
+          sha256sum "$TARBALL" > "$TARBALL.sha256"
+          SHA256="$(cut -d' ' -f1 "$TARBALL.sha256")"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "checksum=$TARBALL.sha256" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          ls -lh "$TARBALL" "$TARBALL.sha256"
+          cat "$TARBALL.sha256"
+
+      # ============ 生成完整发布说明（与 CI 共用同一脚本） ============
+      - name: Generate release notes
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          SHA256: ${{ steps.pack.outputs.sha256 }}
+          PUBLISH_METHOD: ${{ steps.publish.outputs.method }}
+        run: |
+          set -euo pipefail
+          bash scripts/release-notes.sh release-notes.md
+          echo "----- release-notes.md -----"
+          cat release-notes.md
+
+      # ============ 创建 / 更新 Release ============
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: dsh-remote-hub ${{ steps.version.outputs.version }}
+          body_path: release-notes.md
+          files: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.checksum }}
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
+          target_commitish: ${{ github.sha }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summarize
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          SHA256: ${{ steps.pack.outputs.sha256 }}
+          PUBLISH_METHOD: ${{ steps.publish.outputs.method }}
+        run: |
+          {
+            echo "### Released"
+            echo ""
+            echo "- npm: [\`$PACKAGE_NAME@$VERSION\`](https://www.npmjs.com/package/$PACKAGE_NAME/v/$VERSION)"
+            echo "- 发布方式: $PUBLISH_METHOD"
+            echo "- GitHub Release: \`$TAG\`（附件 \`$TARBALL\`、\`$TARBALL.sha256\`）"
+            echo "- SHA-256: \`$SHA256\`"
+            echo "- 安装: \`dsh plugin --profile web add $PACKAGE_NAME@$VERSION\`"
+            echo "- 升级后记得重启 Host（守卫监听与隧道子进程不会热替换）"
+          } >> "$GITHUB_STEP_SUMMARY"
