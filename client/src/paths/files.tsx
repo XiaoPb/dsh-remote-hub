@@ -38,8 +38,17 @@ export function quoteRemoteFile(path: string): string {
   return /[\s"\\]/u.test(path) ? `@${JSON.stringify(path)}` : `@${path}`
 }
 
+/** 目标主机上的「目录根」伪会话 id：没有绑定会话时也能浏览目录。 */
+const DIRECTORY_ROOT_SCOPE = ''
+
 /**
  * 云端文件选择对话框。
+ *
+ * 两种入口：
+ * - 绑定到会话：浏览该会话的工作区文件，可勾选并追加到草稿；
+ * - **未绑定会话**（新建的空会话、绑定尚未就绪）：退化为浏览目标主机的目录，
+ *   仍然可以查看/进入目录，只是没有可勾选的文件。这样入口永远不会「点了没反应」。
+ *
  * @param props - `ctx` 是主插件 client ctx。
  * @returns React 元素或 `null`。
  */
@@ -52,6 +61,8 @@ export function RemoteFilesDialog({ ctx }: { ctx: PathsHostContext }): React.Rea
   const binding = React.useRef<{ ctx: unknown } | null>(null)
   const request = React.useRef<AbortController | null>(null)
   const context = React.useRef<CloudPathContext | null>(null)
+  /** 本次打开是否解析到了会话绑定（false = 目录浏览模式）。 */
+  const [bound, setBound] = React.useState(true)
 
   const load = async (path: string, id: string | null = sessionId): Promise<void> => {
     request.current?.abort()
@@ -59,9 +70,16 @@ export function RemoteFilesDialog({ ctx }: { ctx: PathsHostContext }): React.Rea
     request.current = controller
     setBusy(true)
     setError('')
+    const scope = id === null || id === DIRECTORY_ROOT_SCOPE
     try {
-      const value = await pathRpc<WorkspaceListing>(context.current, 'workspaceFiles/list', { workspaceFileScopeId: id, path: path || '.' }, controller.signal)
-      if (!controller.signal.aborted) setListing(value)
+      // 有会话绑定 → 读该会话的工作区；没有 → 退化为读目标主机目录（仍然可浏览/新建）。
+      const value = scope
+        ? await pathRpc<WorkspaceListing>(context.current, 'directoryPicker/list', { path: path || '' }, controller.signal)
+        : await pathRpc<WorkspaceListing>(context.current, 'workspaceFiles/list', { workspaceFileScopeId: id, path: path || '.' }, controller.signal)
+      if (!controller.signal.aborted) {
+        setBound(!scope)
+        setListing(value)
+      }
     } catch (reason) {
       if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason))
     } finally {
@@ -78,17 +96,19 @@ export function RemoteFilesDialog({ ctx }: { ctx: PathsHostContext }): React.Rea
     const open = (event: Event): void => {
       const detail = (event as CustomEvent<{ sessionId?: string }>).detail
       const id = detail?.sessionId
-      if (typeof id !== 'string') return
-      const retained = ctx.sessions.binding(id)
       const target = cloudPathContext()
-      if (!retained || !target) return
+      if (!target) return
+      // 绑定可能尚未就绪（新建的空会话、接管刚完成）：**不吞掉这次点击**，
+      // 退化为目录浏览模式，用户至少能看到目标主机有哪些文件。
+      const retained = typeof id === 'string' ? ctx.sessions.binding(id) ?? null : null
       binding.current = retained
       context.current = target
-      setSessionId(id)
+      setBound(retained !== null)
+      setSessionId(typeof id === 'string' ? id : DIRECTORY_ROOT_SCOPE)
       setListing(null)
       setSelected([])
       setError('')
-      void load('', id)
+      void load('', retained === null ? DIRECTORY_ROOT_SCOPE : id)
     }
     globalThis.addEventListener(OPEN_REMOTE_FILES, open)
     return () => {
@@ -125,26 +145,29 @@ export function RemoteFilesDialog({ ctx }: { ctx: PathsHostContext }): React.Rea
   return h('div', { className: 'rhp-mask' }, h('section', {
     className: 'rhp-dialog', role: 'dialog', 'aria-modal': true, 'aria-label': '选择云端文件', 'data-testid': 'remote-files-dialog',
   },
-  h('h2', null, '选择云端文件'),
+  h('h2', null, bound ? '选择云端文件' : '浏览目标主机'),
   h('p', { className: 'rhp-hint' }, `目标主机：${context.current?.origin ?? ''}`),
-  h('p', null, '从当前会话的云端工作区选择文件，添加到消息中供 AI 读取。'),
+  h('p', null, bound
+    ? '从当前会话的云端工作区选择文件，添加到消息中供 AI 读取。'
+    : '当前没有可绑定的会话，这里只做浏览。新建或打开一个云端会话后即可选择文件加入消息。'),
   h('div', { className: 'rhp-row' },
-    button('工作区根目录', () => void load(''), busy),
-    listing?.path ? button('上一级', () => void load(listing.path.split('/').slice(0, -1).join('/')), busy) : null),
+    button(bound ? '工作区根目录' : '主目录', () => void load('', bound ? null : DIRECTORY_ROOT_SCOPE), busy),
+    listing?.path ? button('上一级', () => void load(listing.path.split('/').slice(0, -1).join('/'), bound ? null : DIRECTORY_ROOT_SCOPE), busy) : null),
   h('p', { className: 'rhp-path' }, listPath || '/'),
   error ? h('p', { role: 'alert', className: 'rhp-error' }, error) : null,
   busy ? h('p', { role: 'status' }, '正在读取云端文件…') : null,
   h('div', { className: 'rhp-list' }, entries.map(entry => {
     const fullPath = [listPath, entry.name].filter(Boolean).join('/')
     if (entry.type === 'directory') {
-      return h('div', { key: fullPath }, button(`▸ ${entry.name}`, () => void load(fullPath), busy, { 'data-remote-directory': entry.name }))
+      return h('div', { key: fullPath }, button(`▸ ${entry.name}`, () => void load(fullPath, bound ? null : DIRECTORY_ROOT_SCOPE), busy, { 'data-remote-directory': entry.name }))
     }
     if (entry.type !== 'file') return null
     return h('label', { key: fullPath, className: 'rhp-file-row' },
       h('input', {
         type: 'checkbox',
         checked: selected.includes(fullPath),
-        disabled: busy,
+        // 未绑定会话时不能把路径追加进草稿（不知道是哪个工作区），只允许浏览。
+        disabled: busy || !bound,
         onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
           const checked = event.currentTarget.checked
           setSelected(previous => checked ? [...previous, fullPath] : previous.filter(item => item !== fullPath))
@@ -155,7 +178,7 @@ export function RemoteFilesDialog({ ctx }: { ctx: PathsHostContext }): React.Rea
   listing?.truncated ? h('p', { className: 'rhp-hint' }, '目录列表已截断，请进入子目录选择。') : null,
   h('footer', { className: 'rhp-footer' },
     button('取消', close),
-    button(`添加到消息${selected.length ? `（${selected.length}）` : ''}`, add, busy || !selected.length, { className: 'rhp-button rhp-primary', 'data-testid': 'remote-files-add' }))))
+    button(`添加到消息${selected.length ? `（${selected.length}）` : ''}`, add, busy || !selected.length || !bound, { className: 'rhp-button rhp-primary', 'data-testid': 'remote-files-add' }))))
 }
 
 export type { PathsHostContext }
