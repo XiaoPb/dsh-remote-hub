@@ -105,9 +105,15 @@ jobs:
           # 这样 host 入口才能被真正 import 进来。
           PEERS="$(node -e "
             const p = require('$GITHUB_WORKSPACE/package.json');
-            const host = { '@deepseek-ai/cordis': '4.1.0', '@deepseek-ai/schemastery': '3.19.0' };
+            // 宿主自带版本的第三方 peer（cordis / schemastery / react）按宿主版本装，
+            // 其余 DSH 包用本包 devDependencies 锁定的版本。
+            const hostThirdParty = {
+              '@deepseek-ai/cordis': '4.1.0',
+              '@deepseek-ai/schemastery': '3.19.0',
+              'react': '18.3.1',
+            };
             const specs = Object.entries(p.peerDependencies || {}).map(([name]) =>
-              host[name] ? name + '@' + host[name] : name + '@0.2.2-rc.1');
+              hostThirdParty[name] ? name + '@' + hostThirdParty[name] : name + '@0.2.2-rc.1');
             process.stdout.write(specs.join(' '));
           ")"
           echo "host peers: $PEERS"
