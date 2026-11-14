@@ -75,18 +75,29 @@
 
 ---
 
-## ADR-004 · 本地页不声明 `plugins.*` 子槽（方案 B）
+## ADR-004 · 本地页不声明 `plugins.*` 子槽（方案 B，**2026-11-14 已实测并获用户确认**）
 
-- **状态**：已推荐
-- **背景**：官方页在 `main` 注册里声明了 9 个子槽；ui-slots 的语义是**声明即独占渲染授权**（"Declaring is claiming"）。
+- **状态**：**已定稿（用户 2026-11-14 明确选择「接受只读」）**
+- **背景**：官方页在 `main` 注册里声明了 9 个子槽；ui-slots 的语义是**声明即独占渲染授权**
+  （"Declaring is claiming"），且 `register()` 对已声明的子槽直接抛
+  `slot "x" is already declared (by …)` —— **一个子槽只能有一个声明者**。
+- **实测（testhub / DSH 0.2.2-rc.1）**：
+  - 本地页也声明这 9 个子槽 → 抛 `slot "plugins.add.actions" is already declared`，本地页整体降级不挂；
+  - 本地页不声明 → 宿主渲染器只在条目声明了 `children` 时才把 `renderSlot` 放进 kit
+    （`ui-renderer/scoped-slots.tsx`：`if (entry.children !== undefined)`），于是
+    `props.renderSlot === undefined`，所有子槽贡献渲染为空。
+  - 结论：**在同一宿主里，「本地页渲染配置表单」与「官方页正常工作」不可兼得**（除非改内核）。
 - **选项**：
-  - A. 本地页也声明 `plugins.bundle.config` 等 ⇒ 与官方页争抢全局声明；
-  - B. 本地页不声明 ⇒ 官方页保持独占，本地页这些扩展位渲染为空；
-  - C.（补充）本地页自带 4 个内置官方项的静态摘要文案，不依赖槽位。
-- **结论**：**B**（默认），C 作为可选项（若用户要那 4 张卡）。
+  - A. 本地页声明 → 与官方页互斥（实测冲突，否决）；
+  - B. 本地页不声明、配置区只读 → 官方页 100% 不变（**采纳**）；
+  - C. 自绘配置表单（绕开子槽，直接读 `ctx.configForms`）→ 外观无法与原插件自绘 UI 一致；
+  - D. 改内核让 `main` 子槽按 panel key 隔离 → 需要修改 `deepseek-harness`（当前禁止）。
+- **结论**：**B**。本地页的定位是「接管期间看/管本机插件」：列表、开关、安装、版本、更新、卸载、
+  详情、状态全部等价；**内置插件配置区为空（只读）**，配置在前台状态下的官方「插件」页完成。
 - **依赖代价**：0；**不修改内核**。
-- **影响**：本地页缺少"内置官方插件卡 + 第三方插件配置入口"；其余功能（列表/开关/安装/版本/更新/卸载/详情/状态）全部等价。
-- **登记**：见 [04-verification.md](./04-verification.md) §6。
+- **实现要求**：页面必须走 `renderContribution()` 守卫（未提供渲染器 / 拒绝该 key 都返回 null），
+  绝不直接调用 `props.renderSlot`，否则会抛 `SlotOwnershipError` 导致整页崩溃。
+- **登记**：见 [04-verification.md](./04-verification.md) §6、[06-sandbox-record.md](./06-sandbox-record.md)。
 
 ---
 
