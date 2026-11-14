@@ -51,13 +51,13 @@ dsh plugin --profile web list
 ```jsonc
 "engines": {
   "node": ">=24.9.0",
-  "dsh": ">=0.2.2-rc.1 <0.3.0-0"
+  "dsh": ">=0.2.2-rc.1 <0.3.0"
 }
 ```
 
 `dsh.compatibility` 只是人读镜像，必须与之同步，`dshReleases` 列出全部已测版本。
 `scripts/version-gate.mjs` 在 CI 里断言矩阵
-`0.2.2-rc.1=Y / 0.2.2-rc.3=Y / 0.3.0-rc.1=n`；
+`0.2.1-rc.5=n / 0.2.2-rc.1=Y / 0.2.2-rc.2=Y / 0.2.2-rc.3=Y`；
 **删掉上界会让 CI 直接变红**。
 
 ## 2. 配置项

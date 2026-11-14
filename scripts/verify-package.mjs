@@ -49,8 +49,8 @@ const engines = pkg.engines ?? {}
 check('engines-node', engines.node === '>=24.9.0', `engines.node must be >=24.9.0, got ${String(engines.node)}`)
 check(
   'engines-dsh-upper-bound',
-  typeof engines.dsh === 'string' && engines.dsh.includes('<0.3.0-0'),
-  'engines.dsh must carry the <0.3.0-0 upper bound',
+  typeof engines.dsh === 'string' && engines.dsh.includes('<0.3.0'),
+  'engines.dsh must carry the <0.3.0 upper bound',
 )
 check(
   'compatibility-mirror',

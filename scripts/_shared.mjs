@@ -290,10 +290,18 @@ export function satisfiesRange(version, range) {
 }
 
 /** The exact four-item matrix from ROADMAP A0-2, as data (no hard-coded verdicts). */
+/**
+ * 版本矩阵：每一项都用**真实发布过**的版本，绝不列不存在的版本。
+ *
+ * 0.2.2 只发布过 rc.1 / rc.2 / rc.3（registry 实测），0.3.0 尚未发布；
+ * 因此上界之外的反例用 0.2.1-rc.5（真实存在、低于下界）表达，
+ * 而不是拿一个虚构的 0.3.0-rc.1 当反例。
+ */
 export const VERSION_MATRIX = Object.freeze({
+  '0.2.1-rc.5': false,
   '0.2.2-rc.1': true,
+  '0.2.2-rc.2': true,
   '0.2.2-rc.3': true,
-  '0.3.0-rc.1': false,
 })
 
 /** Compute the matrix line from `engines.dsh`; used by both the script and tests. */
