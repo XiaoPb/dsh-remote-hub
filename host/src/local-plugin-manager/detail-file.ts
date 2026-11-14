@@ -149,6 +149,20 @@ export function createDetailFileHandler(
     const path = params.get('path')
     if (bundleName === null || document === null || path === null) return detailImageResponse('invalid', cacheControl)
     try {
+      // ① 首选：官方 `PluginManager.serveDetailFile()` 实例方法。
+      //
+      //   ⚠️ 2026-11-14 实测：`readBundleImage` 在 0.2.2-rc.1 只是 `lib/index.js` 里的**内部函数**，
+      //   包的 `export {}` 里没有它（只有 PluginManager / parseInstallSpec 等）。ADR-001 当初设想的
+      //   「直接调导出的 readBundleImage」在这版宿主上不成立 —— 图片因此一直返回 403（denied）。
+      //   实例方法才是官方稳定面，且它内部已经做了 listedBundle + readBundleImage + detailImageResponse 三段。
+      const serve = (upstreams.pluginManager as unknown as {
+        serveDetailFile?: (request: Request) => Promise<Response>
+      }).serveDetailFile
+      if (typeof serve === 'function') {
+        return await serve.call(upstreams.pluginManager, request)
+      }
+
+      // ② 回退：宿主若真的导出了 readBundleImage，就自己拼（与官方 serveDetailFile 同构）。
       const readBundleImage = await loadReader()
       const profile = ctx === undefined ? undefined : profileOf(ctx)
       if (readBundleImage === undefined || profile === undefined) {
@@ -169,12 +183,15 @@ export function createDetailFileHandler(
     } catch (error) {
       // 官方错误码（unknown-bundle / detail-unavailable）→ 官方同款响应；
       // 其它异常同样不泄漏内部细节，统一按「不可用」处理。
-      const code = asLocalPluginError(error).code
+      const local = asLocalPluginError(error)
+      const code = local.code
+      // serveDetailFile 抛的官方错误带 `details.reason`，按官方映射透传。
+      const reason = (local.details as { reason?: DetailFailureReason } | undefined)?.reason
       if (code === 'plugin-manager/unknown-bundle') return detailImageResponse(undefined, cacheControl)
       if (code === 'plugin-manager/detail-unavailable') {
-        return detailImageResponse('network' satisfies DetailFailureReason, cacheControl)
+        return detailImageResponse(reason ?? 'network', cacheControl)
       }
-      return new Response(JSON.stringify(failureBody(asLocalPluginError(error))), {
+      return new Response(JSON.stringify(failureBody(local)), {
         status: 500,
         headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
       })
