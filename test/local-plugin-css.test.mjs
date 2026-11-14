@@ -154,3 +154,12 @@ test('面板声明的样式表清单与 bundle 实际注册的完全一致', () 
   const declared = [...panel.matchAll(/^ {2}'([A-Za-z]+\.module\.css)',$/gmu)].map(m => m[1]).sort()
   assert.deepEqual(declared, registered)
 })
+
+test('面板挂载时注入全部 vendored 样式表，卸载时全部移除', () => {
+  // 2026-11-14 实机：只注入主页面那张 → 所有原子组件退回浏览器原生外观（按钮就是原生 <button>）。
+  const panel = readFileSync(new URL('../client/src/local-plugin-manager/panel.ts', import.meta.url), 'utf8')
+  assert.match(panel, /for \(const id of STYLESHEET_IDS\)/u, 'mount must loop over every sheet')
+  assert.match(panel, /installStylesheet\(id\)/u, 'each sheet must be installed')
+  assert.match(panel, /for \(const id of installed\) removeStylesheet\(id\)/u, 'dispose must remove what it installed')
+  assert.ok(!/^\s*installStylesheet\(STYLESHEET_ID\)/mu.test(panel), 'the single-sheet path must be gone')
+})
