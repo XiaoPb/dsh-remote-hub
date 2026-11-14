@@ -35,6 +35,8 @@ const tsdown = 'node_modules/tsdown/dist/run.mjs'
 run('clean', process.execPath, ['-e', "const fs=require('node:fs');for(const p of ['lib','.build'])fs.rmSync(p,{recursive:true,force:true})"])
 run('tsc host', process.execPath, [tsc, '-p', 'tsconfig.build.host.json'])
 run('tsc client', process.execPath, [tsc, '-p', 'tsconfig.build.client.json'])
+// tsc 不 emit *.module.css；镜像进 .build，供 tsdown 的 CSS Module 插件读取。
+run('copy client css', process.execPath, ['scripts/copy-client-css.mjs'])
 run('tsc types', process.execPath, [tsc, '-p', 'tsconfig.types.json'])
 run('tsdown host', process.execPath, [tsdown, '--filter', 'dsh-remote-hub/lib'])
 run('tsdown carrier-boot', process.execPath, [tsdown, '--filter', 'dsh-remote-hub/carrier-boot'])

@@ -79,8 +79,8 @@ test('splitRules 处理字符串与嵌套花括号', () => {
 test('moduleSource 产出可执行的注册代码', () => {
   const compiled = compileCssModule('.a { color: red }', 'x.module.css')
   const source = moduleSource('x.module.css', compiled, './css-modules.js')
-  assert.match(source, /^import \{ registerStylesheet \} from "\.\/css-modules\.js"/u)
-  assert.match(source, /registerStylesheet\("x\.module\.css"/u)
+  assert.match(source, /^import \{ __dshLocalRegisterStylesheet \} from "\.\/css-modules\.js"/u)
+  assert.match(source, /__dshLocalRegisterStylesheet\("x\.module\.css"/u)
   assert.match(source, /export default/u)
   assert.doesNotThrow(() => { new Function(source.replace(/^import .*$/mu, '').replace(/export default/u, 'return')) })
 })
@@ -88,9 +88,12 @@ test('moduleSource 产出可执行的注册代码', () => {
 test('插件只处理 *.module.css，并要求 prelude', () => {
   assert.throws(() => localCssModules({}), /prelude is required/u)
   const plugin = localCssModules({ prelude: './css-modules.js' })
-  assert.equal(plugin.transform('.a{color:red}', 'plain.css'), null)
-  const out = plugin.transform('.a{color:red}', '/abs/x.module.css')
-  assert.match(out.code, /registerStylesheet\("x\.module\.css"/u)
+  // transform 以 `{ order: 'pre', filter, handler }` 形式注册（rolldown 的新插件 API）。
+  assert.equal(typeof plugin.transform.handler, 'function')
+  assert.equal(plugin.transform.order, 'pre')
+  assert.equal(plugin.transform.handler('.a{color:red}', 'plain.css'), null)
+  const out = plugin.transform.handler('.a{color:red}', '/abs/x.module.css?probe')
+  assert.match(out.code, /__dshLocalRegisterStylesheet\("x\.module\.css"/u)
 })
 
 // ── 真实覆盖：官方样式表 ────────────────────────────────────────────────────────

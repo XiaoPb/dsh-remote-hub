@@ -37,6 +37,7 @@ import { defineConfig } from 'tsdown'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
+
 const PKG_ID = (
   JSON.parse(readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8')) as {
     name: string
@@ -123,7 +124,14 @@ export default defineConfig([
     clean: false,
     codeSplitting: false,
     alias: aliasFor(CLIENT_CORE),
-    deps: { neverBundle: browserExternal, alwaysBundle: (s: string) => !browserExternal(s) },
+    // `*.module.css` 由 `scripts/copy-client-css.mjs` 预编译成 `.css.mjs`（rolldown 1.2 已移除
+    // CSS 打包能力，且 tsdown 自带 css-guard），产物里只出现普通的相对 import。
+    //
+    // ⚠️ 必须用 `external` 而不是 `neverBundle`：tsdown 把 `neverBundle` 解释成
+    // 「never bundle = 一律 external」的判定函数，相对路径也会被误判成 external，
+    // 于是 `require("css-modules.js")` 这类裸名被留在了 bundle 里（2026-11-14 实测）。
+    // `external` 是纯 allowlist：只外置明确列出的框架包，其余（含所有相对路径）全部内联。
+    deps: { external: browserExternal },
     outputOptions: {
       entryFileNames: 'client.js',
       // Window guard first: the desktop host's node half imports this file while

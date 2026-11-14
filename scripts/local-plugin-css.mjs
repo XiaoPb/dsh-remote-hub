@@ -39,6 +39,9 @@
 /** 插件名称（rolldown 诊断里可见）。 */
 export const CSS_MODULE_PLUGIN = 'dsh-local-css-modules'
 
+/** 说明符改写插件的名字。 */
+export const CSS_SPECIFIER_PLUGIN = 'dsh-local-css-specifier'
+
 /** 类名的哈希前缀（避免与宿主 CSS 撞名，且一眼看出归属）。 */
 const SCOPE_PREFIX = 'lpl'
 
@@ -267,10 +270,21 @@ export function compileCssModule(source, fileId) {
  * @param prelude - 运行期注册函数的模块说明符（例如 `'./css-modules.js'`）。
  * @returns ES 模块源码。
  */
+/**
+ * 生成一个 CSS Module 的 JS 模块源码。
+ *
+ * 导入的是**别名入口** `__registerCompiledStylesheet`，不是 `registerStylesheet`：后者在最终的
+ * client bundle 里会和 vendored UI 里别处的同名局部函数撞名（rolldown 会给其中一个改名），
+ * 使用别名可以保证每个样式表都注册到 `css-modules.ts` 里真正的那张表上。
+ * @param fileId - 文件标识（= `data-plugin-css` 的值与哈希种子）。
+ * @param compiled - 编译结果。
+ * @param prelude - 运行期注册函数的模块说明符（例如 `'./css-modules.js'`）。
+ * @returns ES 模块源码。
+ */
 export function moduleSource(fileId, compiled, prelude) {
   return [
-    `import { registerStylesheet } from ${JSON.stringify(prelude)}`,
-    `registerStylesheet(${JSON.stringify(fileId)}, {`,
+    `import { __dshLocalRegisterStylesheet } from ${JSON.stringify(prelude)}`,
+    `__dshLocalRegisterStylesheet(${JSON.stringify(fileId)}, {`,
     `  classes: ${JSON.stringify(compiled.classes)},`,
     `  text: ${JSON.stringify(compiled.text)},`,
     '})',
@@ -285,6 +299,25 @@ export function moduleSource(fileId, compiled, prelude) {
  * @param options.prelude - 运行期注册模块的说明符（相对 bundle 入口解析，见 tsdown 配置的 alias）。
  * @returns rolldown 插件对象。
  */
+/**
+ * 把产物里的 `x.module.css` 说明符改写成 `x.module.css?`。
+ *
+ * 为什么需要：tsdown 自带一个 `tsdown:css-guard` 插件，只对 `\.css$` 的模块报错（要求安装 `@tsdown/css`）。
+ * 我们的样式由 {@link localCssModules} 自己编译，不需要那个包；给说明符加上查询串即可让它不再介入，
+ * 而本文件的 transform 会先去掉查询串再识别文件。
+ * @returns rolldown 插件。
+ */
+export function rewriteCssModuleSpecifier() {
+  return {
+    name: CSS_SPECIFIER_PLUGIN,
+    transform(code, id) {
+      if (!id.endsWith('.js') && !id.endsWith('.mjs')) return null
+      const next = code.replace(/\.module\.css(?=["'])/gu, '.module.css?')
+      return next === code ? null : { code: next, map: null }
+    },
+  }
+}
+
 export function localCssModules(options) {
   const prelude = options?.prelude
   if (typeof prelude !== 'string' || prelude === '') {
@@ -292,11 +325,18 @@ export function localCssModules(options) {
   }
   return {
     name: CSS_MODULE_PLUGIN,
-    transform(code, id) {
-      if (!id.endsWith('.module.css')) return null
-      const fileId = id.split(/[\\/]/u).slice(-1)[0]
-      const compiled = compileCssModule(code, fileId)
-      return { code: moduleSource(fileId, compiled, prelude), map: null }
+    // `order: 'pre'`：必须先于 tsdown 内置的 css-guard 运行（后者只匹配 `.css$`，
+    // 我们用带 `?` 的说明符绕过它；这里在 pre 阶段把 id 规整回真实路径）。
+    transform: {
+      order: 'pre',
+      filter: { id: /\.module\.css/u },
+      handler(code, id) {
+        const file = id.split('?')[0] ?? id
+        if (!file.endsWith('.module.css')) return null
+        const fileId = file.split(/[\\/]/u).slice(-1)[0] ?? file
+        const compiled = compileCssModule(code, fileId)
+        return { code: moduleSource(fileId, compiled, prelude), map: null }
+      },
     },
   }
 }

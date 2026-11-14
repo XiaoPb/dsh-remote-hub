@@ -114,6 +114,9 @@ function makeBrowser(options) {
   }
   sandbox.globalThis = sandbox
   sandbox.window = sandbox
+  // 最小 DOM 事件面：vendored 的 ui-primitives 在求值期注册 window 级指针/键盘监听。
+  sandbox.addEventListener = () => {}
+  sandbox.removeEventListener = () => {}
   const context = createContext(sandbox)
   return { context, created, store, sandbox }
 }
@@ -128,8 +131,40 @@ function evaluateBundle(env) {
   assert.ok(entry !== undefined, 'bundle 必须调用 __ModuleLoader__.load')
   assert.equal(typeof entry.factory, 'function', 'entry.factory 必须是函数')
   // DSH 激活插件时才调用工厂；carrier-entry 在工厂体内求值。
-  // require 桩：bundle 是自包含的，外部 import 在此环境里不会被用到。
-  entry.factory(() => ({}))
+  // require 桩：bundle 是自包含的，外部 import 在此环境里不会被用到 —— 除了 `react` /
+  // `react-dom`：本地插件页在模块求值期就会构造 react 元素（本测试不需要它们的行为），
+  // 所以这里给一个**够用**的最小桩，避免 vm 里的 bundle 求值失败。
+  const react = {
+    createElement: (type, props, ...children) => ({ type, props, children }),
+    forwardRef: render => render,
+    createContext: defaultValue => ({ Provider: ({ children }) => children, _defaultValue: defaultValue }),
+    cloneElement: element => element,
+    Fragment: 'Fragment',
+    useState: value => [typeof value === 'function' ? value() : value, () => {}],
+    useEffect: () => {},
+    useLayoutEffect: () => {},
+    useMemo: factory => factory(),
+    useCallback: callback => callback,
+    useRef: value => ({ current: value }),
+    useContext: context => context._defaultValue,
+    useId: () => 'test-id',
+  }
+  const reactDom = {
+    createPortal: node => node,
+    flushSync: callback => callback(),
+  }
+  // JSX 运行时：vendored 页面在模块求值期就会调用 jsx/jsxs 生成元素。
+  const jsxRuntime = {
+    jsx: react.createElement,
+    jsxs: react.createElement,
+    jsxDEV: react.createElement,
+    Fragment: react.Fragment,
+  }
+  entry.factory(specifier => {
+    if (specifier === 'react/jsx-runtime') return jsxRuntime
+    if (specifier.startsWith('react-dom')) return reactDom
+    return react
+  })
 }
 
 describe('真实 client bundle 的页面级接管', () => {
