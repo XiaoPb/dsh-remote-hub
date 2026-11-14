@@ -82,13 +82,13 @@ test('本地页请求 configForms（否则 fiber 作用域 proxy 抛错、面板
 
 test('子槽渲染器缺席时页面渲染为空，而不是抛错', () => {
   const page = readFileSync(new URL('../client/src/local-plugin-manager/PluginManagerPage.tsx', import.meta.url), 'utf8')
-  // 允许两种形态：`renderContribution(renderSlot, 'plugins.*' …)`（模块级辅助，供子组件用），
-  // 以及就地守卫的 `renderSlot === undefined ? null : renderSlot('plugins.add.actions' …)`。
-  const guardedInline = /renderSlot === undefined \? null : renderSlot\('plugins\./gu
-  const withoutInline = page.replace(guardedInline, 'renderContribution(renderSlot, \'plugins.')
-  assert.ok(!/(?<![.\w])renderSlot\('plugins\./u.test(withoutInline), 'every plugins.* call must be guarded')
+  // 单点守卫：没有渲染器、或该子槽未声明（绑定会抛 SlotOwnershipError）时都返回 null。
   assert.ok(/function renderContribution\(/u.test(page), 'renderContribution pins the absence check in one place')
-  assert.ok(page.includes('renderSlot === undefined ? null : renderSlot('), 'absent renderer must render null')
+  assert.ok(page.includes('if (renderSlot === undefined) return null'), 'absent renderer must render null')
+  assert.ok(/catch \{[\s\S]{0,200}return null/u.test(page), 'a binding that refuses the key must degrade to null')
+  // 页面与子组件都只能拿到守卫版渲染器，绝不直接调用 props.renderSlot。
+  assert.ok(!/props\.renderSlot\(/u.test(page), 'props.renderSlot must never be called directly')
+  assert.ok(/const guarded = /u.test(page), 'the page threads one guarded renderer into its children')
 })
 
 /** 让 lint 知道 val 的用途（读取可选导出）。 */

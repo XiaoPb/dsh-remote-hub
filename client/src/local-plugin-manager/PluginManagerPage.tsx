@@ -60,11 +60,20 @@ export type PluginManagerPageProps =
 /** The page's slot renderer, narrowed to the configuration slots. */
 type RenderConfig = PluginManagerPageProps['renderSlot']
 
+/** 已守卫的子槽渲染器：未提供或未声明时返回 null，绝不抛错。 */
+type GuardedRender = (name: string, owner?: object, options?: object) => ReactNode
+
 /**
  * Render a `plugins.*` contribution, tolerating a host that offers no renderer at all.
  *
- * This page declares none of those child slots (ADR-004), so the shell is free to hand us no
- * `renderSlot`; every contribution then renders as "nothing contributed" instead of crashing.
+ * Two independent reasons can make a contribution unavailable, and neither is an error here:
+ *
+ * 1. the shell passed no `renderSlot` at all, and
+ * 2. the renderer is **bound to our registration**, so it only accepts keys this entry declared.
+ *    This page declares none of those child slots (ADR-004 — the official page owns them), so the
+ *    binding throws `SlotOwnershipError` for every key. Catching it keeps the host's declaration
+ *    authority intact while the page degrades to "nothing contributed" instead of crashing.
+ *
  * @param renderSlot - the renderer the shell passed, when it passed one.
  * @param name - the child slot being rendered.
  * @param owner - the owner props of the contribution.
@@ -77,18 +86,24 @@ function renderContribution(
   owner?: object,
   options?: object,
 ): ReactNode {
-  return renderSlot === undefined ? null : renderSlot(name, owner as object, options)
+  if (renderSlot === undefined) return null
+  try {
+    return renderSlot(name, owner as object, options)
+  } catch {
+    // 未声明该子槽（声明权在官方页）或宿主已回收该注册：当作「没有贡献者」。
+    return null
+  }
 }
 type ResolveText = PluginManagerFace['resolveText']
 
 type RowPhase = NonNullable<PackageRow['phase']>
 
 /** The primary action installs; the adjacent menu offers every add-plugin path. */
-function AddPluginMenu({ t, disabled, openInstall, renderSlot }: {
+function AddPluginMenu({ t, disabled, openInstall, renderContribution }: {
   readonly t: Translate
   readonly disabled: boolean
   readonly openInstall: () => void
-  readonly renderSlot: RenderConfig | undefined
+  readonly renderContribution: GuardedRender
 }): ReactNode {
   const [open, setOpen] = useState(false)
   const onDismiss = (): void => { setOpen(false) }
@@ -117,7 +132,7 @@ function AddPluginMenu({ t, disabled, openInstall, renderSlot }: {
             <span className={css.addMenuDescription}>{t('installExistingDescription')}</span>
           </span>
         </MenuItemButton>
-        {renderSlot === undefined ? null : renderSlot('plugins.add.actions', { onDismiss })}
+        {renderContribution('plugins.add.actions', { onDismiss })}
       </Menu>
     </span>
   )
@@ -603,15 +618,15 @@ function PackageCard({ pkg, t, resolveText, busy, highlighted, newer, onOpen, on
  * One official plugin as a card that opens its page: its icon, its title from
  * the registration, and the one-liner the entry renders in its summary view.
  */
-function ItemCard({ item, t, onOpen, renderSlot }: {
+function ItemCard({ item, t, onOpen, renderContribution }: {
   readonly item: OfficialItem
   readonly t: Translate
   readonly onOpen: () => void
-  readonly renderSlot: RenderConfig
+  readonly renderContribution: GuardedRender
 }): ReactNode {
   return (
     <li className={`${css.card} ${css.cardLink}`} data-plugin-item={item.id}>
-      <CardHead title={item.label} t={t} onOpen={onOpen} icon={itemArtwork(item.id)} description={renderContribution(renderSlot, 'plugins.item', { view: 'summary' }, { only: item.id })} />
+      <CardHead title={item.label} t={t} onOpen={onOpen} icon={itemArtwork(item.id)} description={renderContribution('plugins.item', { view: 'summary' }, { only: item.id })} />
     </li>
   )
 }
@@ -639,11 +654,11 @@ function packageRef(pkg: PackageView): PluginPackageRef {
  * contributed actions, its title with the contributed badges over its
  * one-liner, the form the entry renders, and the contributed sections.
  */
-function ItemDetail({ item, t, onBack, renderSlot, form }: {
+function ItemDetail({ item, t, onBack, renderContribution, form }: {
   readonly item: OfficialItem
   readonly t: Translate
   readonly onBack: () => void
-  readonly renderSlot: RenderConfig
+  readonly renderContribution: GuardedRender
   readonly form: ConfigPageForm | undefined
 }): ReactNode {
   const subject: PluginsSubject = { kind: 'item', id: item.id }
@@ -654,20 +669,20 @@ function ItemDetail({ item, t, onBack, renderSlot, form }: {
         crumbText={t('crumbRoot')}
         onBack={onBack}
         icon={itemArtwork(item.id)}
-        actions={<div className={css.detailActions}>{renderContribution(renderSlot, 'plugins.detail.actions', { subject })}</div>}
+        actions={<div className={css.detailActions}>{renderContribution('plugins.detail.actions', { subject })}</div>}
       />
       <div className={css.detailMain}>
         <div className={css.titleRow}>
           <h3 className={css.detailTitle}>{item.label}</h3>
-          {renderContribution(renderSlot, 'plugins.detail.badge', { subject })}
+          {renderContribution('plugins.detail.badge', { subject })}
         </div>
-        <p className={css.detailDesc}>{renderContribution(renderSlot, 'plugins.item', { view: 'summary' }, { only: item.id })}</p>
+        <p className={css.detailDesc}>{renderContribution('plugins.item', { view: 'summary' }, { only: item.id })}</p>
       </div>
       <div className={css.detailSections}>
         <section className={css.detailSection} data-plugin-config>
-          {renderContribution(renderSlot, 'plugins.item', { view: 'page', form }, { only: item.id })}
+          {renderContribution('plugins.item', { view: 'page', form }, { only: item.id })}
         </section>
-        {renderContribution(renderSlot, 'plugins.detail.section', { subject })}
+        {renderContribution('plugins.detail.section', { subject })}
       </div>
     </div>
   )
@@ -677,13 +692,13 @@ function ItemDetail({ item, t, onBack, renderSlot, form }: {
  * A row's configuration page keeps its technical identity beside local package
  * text and the form supplied by its configuration entry.
  */
-function RowDetail({ pkg, row, t, resolveText, onBack, renderSlot, form }: {
+function RowDetail({ pkg, row, t, resolveText, onBack, renderContribution, form }: {
   readonly pkg: PackageView
   readonly row: PackageRow
   readonly t: Translate
   readonly resolveText: ResolveText
   readonly onBack: () => void
-  readonly renderSlot: RenderConfig
+  readonly renderContribution: GuardedRender
   readonly form: ConfigPageForm | undefined
 }): ReactNode {
   const { title } = packageText(pkg, resolveText)
@@ -697,22 +712,22 @@ function RowDetail({ pkg, row, t, resolveText, onBack, renderSlot, form }: {
         crumbText={title}
         onBack={onBack}
         icon={<PackageArtwork key={row.meta?.icon} src={row.meta?.icon} row size={CARD_ARTWORK_SIZE} />}
-        actions={<div className={css.detailActions}>{renderContribution(renderSlot, 'plugins.detail.actions', { subject })}</div>}
+        actions={<div className={css.detailActions}>{renderContribution('plugins.detail.actions', { subject })}</div>}
       />
       <div className={css.detailMain}>
         <div className={css.titleRow}>
           <h3 className={css.detailTitle}>{rowTitle}</h3>
-          {renderContribution(renderSlot, 'plugins.detail.badge', { subject })}
+          {renderContribution('plugins.detail.badge', { subject })}
         </div>
         {rowTitle === row.rowId ? null : <p className={css.detailName}><code>{row.rowId}</code></p>}
         <p className={css.detailName}><code>{row.moduleName}</code></p>
-        <p className={css.detailDesc}>{description ?? renderContribution(renderSlot, 'plugins.row.config', { view: 'summary' }, { entryKey: key })}</p>
+        <p className={css.detailDesc}>{description ?? renderContribution('plugins.row.config', { view: 'summary' }, { entryKey: key })}</p>
       </div>
       <MetadataError error={row.meta?.error} t={t} />
       <RuntimeError error={row.diagnostic} t={t} />
       <div className={css.detailSections} data-plugin-config>
-        {renderContribution(renderSlot, 'plugins.row.config', { view: 'page', form }, { entryKey: key })}
-        {renderContribution(renderSlot, 'plugins.detail.section', { subject })}
+        {renderContribution('plugins.row.config', { view: 'page', form }, { entryKey: key })}
+        {renderContribution('plugins.detail.section', { subject })}
       </div>
     </div>
   )
@@ -727,7 +742,7 @@ function RowDetail({ pkg, row, t, resolveText, onBack, renderSlot, form }: {
  * and configure controls; and where it comes from.
  */
 function PackageDetail({
-  pkg, t, resolveText, busy, rowBusy, configured, configure, renderSlot, inMore, versions, detail,
+  pkg, t, resolveText, busy, rowBusy, configured, configure, renderContribution, inMore, versions, detail,
   onBack, onSetEnabled, onUninstall, onUpdate, onSetRowEnabled, onEnsureVersions, onCheckVersions, onUpdateVersion,
 }: {
   readonly pkg: PackageView
@@ -743,7 +758,7 @@ function PackageDetail({
   /** Whether the bundle registered a configuration of its own. */
   readonly configured: boolean
   readonly configure: RowConfigure
-  readonly renderSlot: RenderConfig
+  readonly renderContribution: GuardedRender
   readonly inMore: boolean
   readonly onBack: () => void
   readonly onSetEnabled: (enabled: boolean) => void
@@ -769,7 +784,7 @@ function PackageDetail({
         icon={<PackageArtwork key={pkg.meta?.icon} src={pkg.meta?.icon} />}
         actions={(
           <div className={css.detailActions}>
-            {renderContribution(renderSlot, 'plugins.detail.actions', { subject })}
+            {renderContribution('plugins.detail.actions', { subject })}
             {updateAvailable(pkg) ? (
               <Button variant="outline" size="sm" icon={<IconRefreshOutlineRegular size={13} />}
                 disabled={busy} aria-label={t('updateLabel', { name: title })} onClick={onUpdate}>
@@ -809,7 +824,7 @@ function PackageDetail({
           {status === 'problem' ? <Tag className={css.statusTag} tone="danger">{t('statusProblem')}</Tag> : null}
           {pkg.availability === 'missing' ? <Tag className={css.statusTag}>{t(pkg.installed ? 'statusMissingFiles' : 'statusNotInstalled')}</Tag> : null}
           {updateAvailable(pkg) || newer !== undefined ? <Tag className={css.statusTag} tone="info">{t('statusUpdateAvailable')}</Tag> : null}
-          {renderContribution(renderSlot, 'plugins.detail.badge', { subject })}
+          {renderContribution('plugins.detail.badge', { subject })}
         </div>
         <p className={css.detailName}><code data-plugin-name>{pkg.name}</code></p>
         {description === undefined ? null : <p className={css.detailDesc}>{description}</p>}
@@ -822,7 +837,7 @@ function PackageDetail({
         {configured
           ? (
             <section className={css.detailSection} data-plugin-config>
-              {renderContribution(renderSlot, 'plugins.bundle.config', { view: 'page' }, { entryKey: pkg.name })}
+              {renderContribution('plugins.bundle.config', { view: 'page' }, { entryKey: pkg.name })}
             </section>
           )
           : null}
@@ -837,7 +852,7 @@ function PackageDetail({
           pkg={pkg} check={versions} t={t} busy={busy} onEnsure={onEnsureVersions} onCheck={onCheckVersions} onUpdate={onUpdateVersion}
         />
         <SourceSection pkg={pkg} t={t} />
-        {renderContribution(renderSlot, 'plugins.detail.section', { subject })}
+        {renderContribution('plugins.detail.section', { subject })}
       </div>
     </div>
   )
@@ -1567,9 +1582,11 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
   // 官方页面同样按可选处理（这些子槽由其它插件贡献）。
   const configurations = props.useConfigurations((snapshot: any) => snapshot.view?.namespaces)
   const renderSlot = props.renderSlot as ((name: string, owner?: object, options?: object) => ReactNode) | undefined
+  /** 本页渲染 plugins.* 的守卫版本（未声明/未提供时返回 null）。 */
+  const guarded = (name: string, owner?: object, options?: object): ReactNode => renderContribution(renderSlot, name, owner, options)
   // 本页不声明任何 `plugins.*` 子槽（ADR-004），宿主有可能压根不提供渲染器；缺省时就当没有贡献者。
   const renderSlotContribution = (name: string, owner?: object, options?: object): ReactNode =>
-    renderSlot === undefined ? null : renderSlot(name, owner, options)
+    renderContribution(renderSlot, name, owner, options)
   const formFor = (id: string): ConfigPageForm | undefined => {
     if (!configurations?.some((view: { ns: string }) => view.ns === id)) return undefined
     const form = props.configForm<Record<string, unknown>>(id)
@@ -1667,7 +1684,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
     />
   )
   const basicCards = ledger.items.map(item => (
-    <ItemCard key={`item:${item.id}`} item={item} t={t} renderSlot={renderSlot} onOpen={() => { setView({ kind: 'item', id: item.id }) }} />
+    <ItemCard key={`item:${item.id}`} item={item} t={t} renderContribution={guarded} onOpen={() => { setView({ kind: 'item', id: item.id }) }} />
   ))
   const renderGroup = (id: 'basic' | 'extensions' | 'bundles', heading: string, cards: readonly ReactNode[]): ReactNode => {
     const offersMore = id === 'extensions' && more.length > 0
@@ -1727,7 +1744,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
                     </Button>
                   </Tooltip>
                   {state.install.requestId === undefined
-                    ? <AddPluginMenu t={t} disabled={!loaded} openInstall={props.openInstall} renderSlot={renderSlot} />
+                    ? <AddPluginMenu t={t} disabled={!loaded} openInstall={props.openInstall} renderContribution={guarded} />
                     : (
                       <Tooltip label={t('installViewTask')} side="bottom" delayMs={500} focusDelayMs={500} portal disabled={!loaded}>
                         <Button variant="primary" size="sm" className={css.addButton} icon={<IconPlusOutlineRegular size={13} />}
@@ -1762,7 +1779,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
         {!onInstalled
           ? (
             <div role="tabpanel" id={`${tabsId}-${tab}-panel`} aria-labelledby={`${tabsId}-${tab}`} className={css.tabPanel}>
-              {renderContribution(renderSlot, 'plugins.tab', {
+              {guarded('plugins.tab', {
                 install: props.installFrom,
                 openPackage: (name: string) => { setTab(INSTALLED_TAB); setView({ kind: 'package', name, returnTab: tab }) },
               }, { only: tab })}
@@ -1808,7 +1825,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
               form={formFor(openRow.rowId)}
               t={t}
               resolveText={resolveText}
-              renderSlot={renderSlot}
+              renderContribution={guarded}
               onBack={() => { setView({ kind: 'package', name: openPkg.name, ...pkgOrigin }) }}
             />
           )
@@ -1823,7 +1840,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
               rowBusy={row => row.entryId !== undefined && state.busy.includes(rowKey(row.entryId))}
               configured={ledger.bundles.has(openPkg.name)}
               configure={configure(openPkg)}
-              renderSlot={renderSlot}
+              renderContribution={guarded}
               inMore={backToMore}
               detail={(
                 <BundleDetailSection name={openPkg.name} version={openPkg.version} fromNpm={openPkg.availability === 'missing'}
@@ -1846,7 +1863,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
           )
           : null}
         {onInstalled && loaded && openItem !== undefined
-          ? <ItemDetail form={formFor(openItem.id)} item={openItem} t={t} renderSlot={renderSlot} onBack={() => { setView({ kind: 'list' }) }} />
+          ? <ItemDetail form={formFor(openItem.id)} item={openItem} t={t} renderContribution={guarded} onBack={() => { setView({ kind: 'list' }) }} />
           : null}
         {loaded && installedCards
           ? basicCards.length === 0 && official.length === 0 && mine.length === 0 && state.status !== 'error'
@@ -1880,7 +1897,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
             )
           : null}
         {onInstalled && activated !== undefined && !state.install.open
-          ? renderContribution(renderSlot, 'plugins.bundle.activation', {
+          ? guarded('plugins.bundle.activation', {
             packageName: activated.name,
             onDismiss: () => { setActivation(null) },
             onOpenDetails: () => {

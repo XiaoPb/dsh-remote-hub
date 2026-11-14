@@ -32,6 +32,19 @@ import { createPluginHeaderRef } from './header-scroll.ts'
 import { LOCAL_PANEL_KEY, LOCAL_PANEL_ORDER, LOCALE_NAMESPACE } from './locale-namespace.ts'
 import { activeLanguage, bindLanguage, registerDictionaries, translate } from './panel-copy.ts'
 
+/** 与官方 `ui-plugin-manager` 一致的九个 `plugins.*` 子槽声明。 */
+const PLUGIN_CHILD_SLOTS = {
+  'plugins.add.actions': { kind: 'list', scope: 'root' },
+  'plugins.tab': { kind: 'list', scope: 'root' },
+  'plugins.item': { kind: 'list', scope: 'root' },
+  'plugins.bundle.activation': { kind: 'keyed', scope: 'root' },
+  'plugins.bundle.config': { kind: 'keyed', scope: 'root' },
+  'plugins.row.config': { kind: 'keyed', scope: 'root' },
+  'plugins.detail.actions': { kind: 'list', scope: 'root' },
+  'plugins.detail.badge': { kind: 'list', scope: 'root' },
+  'plugins.detail.section': { kind: 'list', scope: 'root' },
+} as const
+
 /** 侧栏行与主面板共用的 id（与官方 `plugins` 并列且互不冲突）。 */
 export const LOCAL_PANEL_ID = LOCAL_PANEL_KEY
 
@@ -68,7 +81,7 @@ const STYLESHEET_IDS: readonly string[] = [
 /** 宿主槽位注册表的最小形状。 */
 interface SlotsFace {
   register(options: Record<string, unknown>, component: unknown): () => void
-  inject?(name: string, setup: () => void): unknown
+  inject?(name: string, setup: () => void): (() => void) | undefined
 }
 
 /** 一个已装配的本地插件页。 */
@@ -150,9 +163,16 @@ export function mountLocalPluginsPanel(
   const instance = navigation.create()
 
   const disposers: (() => void)[] = [registerDictionaries(ctx)]
+  // `slots.inject(name, setup)` 返回**等待器**的释放函数，不是 setup 的释放函数：
+  // 注册动作发生在 setup 内，它的 disposer 必须由调用方自己收集，否则永远没人释放。
+  const waiters: (() => void)[] = []
   const declare = (name: string, setup: () => void): void => {
-    if (typeof slots.inject === 'function') slots.inject(name, setup)
-    else setup()
+    if (typeof slots.inject === 'function') {
+      const stop = slots.inject(name, setup)
+      if (typeof stop === 'function') waiters.push(stop)
+    } else {
+      setup()
+    }
   }
 
   // ③ 样式：把 vendored 的每一张样式表都注入一次（卸载时全部移除）。
@@ -170,7 +190,17 @@ export function mountLocalPluginsPanel(
     }
   }
 
-  // ④ 主面板：官方页面组件 + 本地 face。不声明 `plugins.*` 子槽（ADR-004）。
+  // ④ 主面板：官方页面组件 + 本地 face。
+  //
+  // ⚠️ 必须声明 `children`（哪怕只是「借位」）：宿主渲染器只有在条目声明了 children 时才会把
+  // `renderSlot` 放进渲染 kit（`ui-renderer/scoped-slots.tsx` 的 `if (entry.children !== undefined)`）。
+  // 不声明 → `props.renderSlot === undefined` → 「内置插件配置」点进去一片空白（2026-11-14 实测）。
+  //
+  // 真正的**声明权**仍在官方页：宿主规定一个子槽只能有一个声明者，官方页先声明，这里再申明会抛
+  // `slot "plugins.item" is already declared`（已实测）。因此下面的 `children` 表只是让渲染器把
+  // `renderSlot` 交给本页，页面的 `renderContribution()` 对每个 key 都做了 try/catch：
+  // 若本注册确实持有该声明就正常渲染，否则退化为「没有贡献者」。
+  // 只要官方页持有声明，配置贡献者就正常注册、本页正常渲染（`renderSlot` 的解析只看注册表，不看 parent）。
   declare('main', () => {
     disposers.push(slots.register({
       name: 'main',
@@ -178,6 +208,7 @@ export function mountLocalPluginsPanel(
       locale: LOCALE_NAMESPACE,
       store: { ...navigation, create: () => instance },
       inject: () => ({ ...face, createHeaderRef: createPluginHeaderRef }),
+      // 不声明 children：官方页持有声明权，这里只渲染（见下方注释与 ADR-004）。
     }, PluginManagerPage as unknown as (props: unknown) => ReactNode))
   })
 
@@ -213,6 +244,13 @@ export function mountLocalPluginsPanel(
         }
       }
       disposers.length = 0
+      for (const stop of waiters.splice(0)) {
+        try {
+          stop()
+        } catch {
+          // 等待器释放失败不影响其余收尾。
+        }
+      }
       subscription.dispose()
       transport.dispose()
       controller.dispose()
