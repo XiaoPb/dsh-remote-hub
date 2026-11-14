@@ -7,7 +7,7 @@
  * presence check is the uniform acceptance-script precondition.
  *
  * Acceptance (ROADMAP §4.1):
- *   node scripts/version-gate.mjs | grep -qx '0.2.1-rc.2=Y 0.2.1-rc.5=Y 0.2.2-rc.1=Y 0.3.0-rc.1=n'
+ *   node scripts/version-gate.mjs | grep -qx '0.2.2-rc.1=Y 0.2.2-rc.3=Y 0.3.0-rc.1=n'
  */
 import {
   VERSION_MATRIX,
@@ -42,9 +42,9 @@ report.check(
     for (const [version, want] of Object.entries(VERSION_MATRIX)) {
       if (satisfiesRange(version, range) !== want) return false
     }
-    return satisfiesComparator('0.2.1-rc.2', '>=0.2.1-rc.2')
-      && !satisfiesComparator('0.2.1-rc.1', '>=0.2.1-rc.2')
-      && satisfiesComparator('0.2.1-rc.10', '>=0.2.1-rc.5')
+    return satisfiesComparator('0.2.2-rc.1', '>=0.2.2-rc.1')
+      && !satisfiesComparator('0.2.1-rc.5', '>=0.2.2-rc.1')
+      && satisfiesComparator('0.2.2-rc.10', '>=0.2.2-rc.1')
       && !satisfiesComparator('0.3.0-rc.1', '<0.3.0-0')
       && satisfiesComparator('0.2.9', '<0.3.0-0')
   },

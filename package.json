@@ -34,10 +34,8 @@
       "platform": "web"
     },
     "compatibility": {
-      "dsh": ">=0.2.1-rc.2 <0.3.0-0",
+      "dsh": ">=0.2.2-rc.1 <0.3.0-0",
       "dshReleases": {
-        "0.2.1-rc.2": "compatible",
-        "0.2.1-rc.5": "compatible",
         "0.2.2-rc.1": "compatible"
       }
     }
@@ -60,14 +58,14 @@
   },
   "engines": {
     "node": ">=24.9.0",
-    "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+    "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.1.0",
-    "@deepseek-ai/dsh-api-remote-access": ">=0.2.1-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-atomic-write": ">=0.2.1-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-scope": ">=0.2.1-rc.2 <0.3.0-0",
-    "@deepseek-ai/dsh-typert-protocol": ">=0.2.1-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-api-remote-access": ">=0.2.2-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-atomic-write": ">=0.2.2-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-scope": ">=0.2.2-rc.1 <0.3.0-0",
+    "@deepseek-ai/dsh-typert-protocol": ">=0.2.2-rc.1 <0.3.0-0",
     "@deepseek-ai/schemastery": ">=3.19.0 <4.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

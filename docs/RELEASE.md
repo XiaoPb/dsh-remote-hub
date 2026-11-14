@@ -27,7 +27,7 @@
 3. `pnpm run build` —— tsc → tsdown，产物顺序固定（host / carrier-boot / client）；
 4. `node scripts/verify-package.mjs` —— 包清单契约（入口、`files` 白名单、开发目录不进包）；
 5. `node scripts/run-all-tests.mjs` —— 串行跑全部 `test/*.test.mjs`；
-6. `node scripts/version-gate.mjs` —— 兼容矩阵 `0.2.1-rc.2=Y 0.2.1-rc.5=Y 0.2.2-rc.1=Y 0.3.0-rc.1=n`；
+6. `node scripts/version-gate.mjs` —— 兼容矩阵 `0.2.2-rc.1=Y 0.2.2-rc.3=Y 0.3.0-rc.1=n`；
 7. `node scripts/contract-check.mjs` —— 协议契约对账；
 8. `node scripts/fence.mjs` —— 来源围栏用例；
 9. `node scripts/redlines.mjs` —— 红线 endpoint 对 `full` 角色仍被拒绝；
@@ -156,3 +156,4 @@ bash scripts/release-notes.sh /tmp/notes.md
 - 新增 `release-check`（版本三处一致 + 双语 README 互链 + CHANGELOG 条目）、`verify-package`
   （包清单契约 + consumer 安装）与 `render-api-matrix --check`（权限文档不漂移）三个门禁；
 - Node 矩阵只有 24 一条线（`engines.node >= 24.9.0`），不做双版本试探。
+

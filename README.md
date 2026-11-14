@@ -103,7 +103,7 @@ pnpm run build
 dsh plugin --profile web add link:$PWD
 ```
 
-主包为 `@xiaopb/dsh-remote-hub@0.3.4`（云端路径 UI 已内置，无需其它包）。要求 **Node.js ≥ 24.9.0**、**DSH ≥ 0.2.1-rc.2 < 0.3.0-0**。
+主包为 `@xiaopb/dsh-remote-hub@0.3.4`（云端路径 UI 已内置，无需其它包）。要求 **Node.js ≥ 24.9.0**、**DSH ≥ 0.2.2-rc.1 < 0.3.0-0**。
 
 ---
 
@@ -191,3 +191,4 @@ CI 跑上面同一套。发布走 CI/CD，**不接受本地手工 `npm publish`*
 ## 许可证
 
 [MIT](LICENSE) © 2026 XiaoPb
+

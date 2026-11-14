@@ -291,9 +291,8 @@ export function satisfiesRange(version, range) {
 
 /** The exact four-item matrix from ROADMAP A0-2, as data (no hard-coded verdicts). */
 export const VERSION_MATRIX = Object.freeze({
-  '0.2.1-rc.2': true,
-  '0.2.1-rc.5': true,
   '0.2.2-rc.1': true,
+  '0.2.2-rc.3': true,
   '0.3.0-rc.1': false,
 })
 

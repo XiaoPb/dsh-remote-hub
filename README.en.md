@@ -104,7 +104,7 @@ pnpm run build
 dsh plugin --profile web add link:$PWD
 ```
 
-The package is `@xiaopb/dsh-remote-hub@0.3.4` (the cloud path UI is built in — no other package needed). Requires **Node.js ≥ 24.9.0** and **DSH ≥ 0.2.1-rc.2 < 0.3.0-0**.
+The package is `@xiaopb/dsh-remote-hub@0.3.4` (the cloud path UI is built in — no other package needed). Requires **Node.js ≥ 24.9.0** and **DSH ≥ 0.2.2-rc.1 < 0.3.0-0**.
 
 ---
 
@@ -192,3 +192,4 @@ Internal plans, historical designs, audits and environment-specific acceptance r
 ## License
 
 [MIT](LICENSE) © 2026 XiaoPb
+

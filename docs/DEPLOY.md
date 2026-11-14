@@ -51,13 +51,13 @@ dsh plugin --profile web list
 ```jsonc
 "engines": {
   "node": ">=24.9.0",
-  "dsh": ">=0.2.1-rc.2 <0.3.0-0"
+  "dsh": ">=0.2.2-rc.1 <0.3.0-0"
 }
 ```
 
 `dsh.compatibility` 只是人读镜像，必须与之同步，`dshReleases` 列出全部已测版本。
 `scripts/version-gate.mjs` 在 CI 里断言矩阵
-`0.2.1-rc.2=Y / 0.2.1-rc.5=Y / 0.2.2-rc.1=Y / 0.3.0-rc.1=n`；
+`0.2.2-rc.1=Y / 0.2.2-rc.3=Y / 0.3.0-rc.1=n`；
 **删掉上界会让 CI 直接变红**。
 
 ## 2. 配置项
@@ -199,3 +199,4 @@ curl -s -o /dev/null -w "%{http_code}" -H "X-Hub-Protocol: 1" https://<tunnel-ho
 5. 能力矩阵里每个 endpoint 是否仍存在（对账测试）。
 6. `ctx.typert.local.list()` 全集 vs `GUARD_ROUTES` ∪ `capabilities.ts` ∪ 红线清单。
 7. `hub/stream.next` 依赖的 endpoint 段字符集是否仍允许 `.`。
+
