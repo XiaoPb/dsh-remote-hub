@@ -58,7 +58,7 @@ export interface StoreHandle<T, A extends ActionsDecl<T> = ActionsDecl<T>> {
 export type SelectorHook<T> = <R>(selector: (snapshot: T) => R) => R
 
 /** 与官方 `SnapshotSelectorHook` 同名的别名（vendored 代码用这个名字导入）。 */
-export type SnapshotSelectorHook<T> = SelectorHook<T>
+export type SnapshotSelectorHook<T> = <R>(selector: (snapshot: T) => R) => R
 
 /**
  * 创建一个快照源。

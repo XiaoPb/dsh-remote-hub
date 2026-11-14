@@ -7,7 +7,7 @@
 /** A bundle's long description on its page: the Markdown document the Host reads for it. */
 import { useEffect, useMemo, type ReactNode } from 'react'
 import { DetailDocument, detailDocumentState, useDetailDocumentLabels, type MarkdownPathImages } from './primitives.ts'
-import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
+import type { PropsLocale } from './official-stubs.ts'
 import { bundleDetailKey, type BundleDetailFailure, type BundleDetailsState } from './detail-store.ts'
 
 type Translate = PropsLocale<'pluginManager'>['t']
@@ -52,7 +52,7 @@ export function BundleDetailSection(props: BundleDetailSectionProps): ReactNode 
   const detail = state?.status === 'ready' ? state.detail : undefined
   const document = detail?.status === 'found' ? detail.path : undefined
   const images = useMemo<MarkdownPathImages | undefined>(
-    () => document === undefined ? undefined : { resolve: value => image(name, document, value, fromNpm) },
+    () => document === undefined ? undefined : { toUrl: (value: string) => image(name, document, value, fromNpm) },
     [name, document, fromNpm, image],
   )
   const shown = detailDocumentState(state?.status === 'error'

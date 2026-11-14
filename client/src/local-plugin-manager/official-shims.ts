@@ -100,6 +100,42 @@ export const EXPERIMENTAL_BUNDLES: ReadonlySet<string> = new Set([
   '@deepseek-ai/dsh-experimental-liveshare',
 ])
 
+/**
+ * 有独立插件页、但在插件管理页里**不显示**的内置包（官方 `HIDDEN_BUNDLES`）。
+ * 这些包永远不占列表位置，与「本机/云端」无关。
+ */
+export const HIDDEN_BUNDLES: ReadonlySet<string> = new Set([
+  '@deepseek-ai/dsh-base',
+  '@deepseek-ai/dsh-web-app',
+  '@deepseek-ai/dsh-headless',
+  '@deepseek-ai/dsh-sdk-app',
+  '@deepseek-ai/dsh-acp-app',
+  '@deepseek-ai/dsh-sdk-minimal',
+  '@deepseek-ai/dsh-experimental-terminal-bundle',
+  '@deepseek-ai/dsh-experimental-tool-worktree',
+])
+
+/** 主列表里排在最前面的可选扩展包（官方 `EXTENSION_BUNDLES`，顺序有意义）。 */
+export const EXTENSION_BUNDLES: readonly string[] = [
+  '@deepseek-ai/dsh-experimental-voice-input-bundle',
+  '@deepseek-ai/dsh-experimental-plugin-market-bundle',
+  '@deepseek-ai/dsh-experimental-auto-review',
+]
+
+/** 主列表默认不收、只在「更多」里靠后排列的可选包（官方 `MORE_BUNDLES`，顺序有意义）。 */
+export const MORE_BUNDLES: readonly string[] = [
+  '@deepseek-ai/dsh-personalized-recommendations',
+  '@deepseek-ai/dsh-experimental-inspector-profile',
+  '@deepseek-ai/dsh-cua-bundle',
+  '@deepseek-ai/dsh-experimental-cot-translation-bundle',
+  '@deepseek-ai/dsh-experimental-session-search',
+  '@deepseek-ai/dsh-experimental-session-titles-bundle',
+  '@deepseek-ai/dsh-experimental-badge-skill-bundle',
+  '@deepseek-ai/dsh-experimental-ralph-bundle',
+  '@deepseek-ai/dsh-subagent-codex',
+  '@deepseek-ai/dsh-subagent-claude-code',
+]
+
 // ── 快照 store（替代 @deepseek-ai/dsh-client-store）────────────────────────────
 
 /** 一个可订阅的只读快照源（与官方 `HostObservable` 同形）。 */

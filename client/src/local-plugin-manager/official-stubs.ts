@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react'
+
 /**
  * 官方数据结构 / 槽位契约的**类型再导出**（编译期专用，产物零成本）。
  *
@@ -59,7 +61,8 @@ export type { SidebarPanelIconOwnerProps } from '@deepseek-ai/dsh-client-ui-side
 
 /** 槽位运行时 props（只用其签名）。 */
 export interface PropsRuntime<_Names extends string = string> {
-  readonly [key: string]: unknown
+  /** 宿主标准 kit（面板注册的 props 由槽位渲染器提供；这里保持开放形状）。 */
+  readonly [key: string]: any
 }
 
 /** 槽位语言 props。 */
@@ -69,7 +72,7 @@ export interface PropsLocale<_Namespace extends string = string> {
 
 /** 槽位渲染授权（消费者侧形状）。 */
 export type PropsRenderSlots<_Names extends string = string> = {
-  renderSlot(name: string, owner: object, options?: { only?: string; entryKey?: string }): unknown
+  renderSlot(name: string, owner: object, options?: { only?: string; entryKey?: string }): ReactNode
 }
 
 /** 注册方注入面。 */
@@ -77,10 +80,14 @@ export interface InjectFace<Face> {
   readonly __face?: Face
 }
 
+/** 注入面（face 的成员直接摊到 props 上，与官方的 InjectFace<PluginManagerFace> 形状一致）。 */
+export type InjectFaceProps<Face> = InjectFace<Face> & Face
+
+
 /** store 座位。 */
 export interface PropsStore<Handle> {
-  useStore<R>(selector: (snapshot: unknown) => R): R
-  actions: unknown
+  useStore<R>(selector: (snapshot: any) => R): R
+  actions: any
   readonly __handle?: Handle
 }
 

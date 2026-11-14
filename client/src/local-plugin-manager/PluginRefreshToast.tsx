@@ -7,8 +7,8 @@
 /** Refresh failure feedback hosted outside the Plugins panel's lifetime. */
 import type { ReactNode } from 'react'
 import { IconWarningOutlineRegular, Toast } from './primitives.ts'
-import type { InjectFace, PropsLocale } from './official-stubs.ts'
-import type { PluginManagerFace } from './manager-store.ts'
+import type { InjectFaceProps, PropsLocale } from './official-stubs.ts'
+import type { PluginManagerFace, PluginManagerState } from './manager-store.ts'
 import { noticeText } from './presentation.ts'
 
 /** The controller's shared notice source and dismissal action. */
@@ -17,7 +17,10 @@ export type PluginRefreshToastFace = Pick<PluginManagerFace, 'dismissNotice'> & 
 }
 
 /** Render inputs bound from the shared controller and plugin dictionary. */
-export type PluginRefreshToastProps = InjectFace<PluginRefreshToastFace> & PropsLocale<'pluginManager'>
+export type PluginRefreshToastProps = InjectFaceProps<PluginRefreshToastFace> & PropsLocale<'pluginManager'> & {
+  /** The renderer flattens `hooks` into this standard seat (same as the official `main` slot). */
+  readonly usePluginManager: <R>(selector: (snapshot: PluginManagerState) => R) => R
+}
 
 /**
  * Display refresh failures even after navigation leaves the Plugins panel.

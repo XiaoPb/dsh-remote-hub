@@ -26,11 +26,11 @@ import {
   SegmentedTabs, StateDot, Switch, Tag, TerminalBlock, Toast, Tooltip, useDismissOnOutsidePointer,
   type IconProps, type StateDotState, type TerminalBlockLabels,
 } from './primitives.ts'
-import type { InjectFace, PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore } from './official-stubs.ts'
+import type { InjectFaceProps, PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore } from './official-stubs.ts'
 import { EXTENSION_BUNDLES, HIDDEN_BUNDLES, MORE_BUNDLES } from './official-shims.ts'
 import type { createNavigationStore } from './navigation-store.ts'
 import type { PluginHeaderLayoutFace } from './header-scroll.ts'
-import { rowConfigKey, type OfficialItem } from './config-ledger.ts'
+import { rowConfigKey, type ConfigLedger, type OfficialItem } from './config-ledger.ts'
 import { INSTALL_GIT_EXAMPLE, INSTALL_PATH_EXAMPLE, type PluginManagerLocaleKey } from './locales.ts'
 import {
   bundleBusy, asksMirror, githubRecoveryRegistry, isInstallPending, offeredRegistries, rowKey, updateCandidate,
@@ -53,7 +53,7 @@ export type PluginManagerPageProps =
     | 'plugins.add.actions' | 'plugins.tab'
     | 'plugins.detail.actions' | 'plugins.detail.badge' | 'plugins.detail.section'
   >
-  & InjectFace<PluginManagerFace & PluginHeaderLayoutFace>
+  & InjectFaceProps<PluginManagerFace & PluginHeaderLayoutFace>
   & PropsStore<ReturnType<typeof createNavigationStore>>
 
 /** The page's slot renderer, narrowed to the configuration slots. */
@@ -1542,22 +1542,22 @@ function ConfirmDialog({ name, t, onConfirm, onCancel }: {
 /** Render the plugin manager: the official plugins and installed bundles, their pages, the install dialog, and the confirmation. */
 export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
   const { t, ensure, renderSlot, resolveText } = props
-  const configurations = props.useConfigurations(snapshot => snapshot.view?.namespaces)
+  const configurations = props.useConfigurations((snapshot: any) => snapshot.view?.namespaces)
   const formFor = (id: string): ConfigPageForm | undefined => {
-    if (!configurations?.some(view => view.ns === id)) return undefined
+    if (!configurations?.some((view: { ns: string }) => view.ns === id)) return undefined
     const form = props.configForm<Record<string, unknown>>(id)
     return { state: form.getSnapshot(), mutate: (ops, revision) => form.mutate(ops, revision) }
   }
-  const state = props.usePluginManager(snapshot => snapshot)
-  const ledger = props.useConfigLedger(snapshot => snapshot)
+  const state: PluginManagerState = props.usePluginManager((snapshot: any) => snapshot)
+  const ledger: ConfigLedger = props.useConfigLedger((snapshot: any) => snapshot)
   // What is open; a package that leaves the list (uninstalled) drops back to the cards.
-  const view = props.useStore(state => state.view), { setView, setTab } = props.actions
-  const tabs = props.usePluginTabs(snapshot => snapshot)
-  const bundleDetails = props.useBundleDetails(snapshot => snapshot)
-  const language = props.useLocale(snapshot => snapshot.active)
-  const selectedTab = props.useStore(state => state.tab)
+  const view = props.useStore((state: any) => state.view), { setView, setTab } = props.actions as any
+  const tabs: readonly { id: string; label: string }[] = props.usePluginTabs((snapshot: any) => snapshot)
+  const bundleDetails = props.useBundleDetails((snapshot: any) => snapshot)
+  const language = props.useLocale((snapshot: any) => snapshot.active)
+  const selectedTab = props.useStore((state: any) => state.tab)
   // A contributed tab that left the ledger falls back to Installed, and stays there when it returns.
-  const tab = tabs.some(item => item.id === selectedTab) ? selectedTab : INSTALLED_TAB
+  const tab = (tabs as any).some((item: any) => item.id === selectedTab) ? selectedTab : INSTALLED_TAB
   useEffect(() => { if (tab !== selectedTab) setTab(tab) }, [tab, selectedTab, setTab])
   const tabsId = useId()
   const [activation, setActivation] = useState<string | null>(null)
@@ -1737,7 +1737,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
             <div role="tabpanel" id={`${tabsId}-${tab}-panel`} aria-labelledby={`${tabsId}-${tab}`} className={css.tabPanel}>
               {renderSlot('plugins.tab', {
                 install: props.installFrom,
-                openPackage: (name) => { setTab(INSTALLED_TAB); setView({ kind: 'package', name, returnTab: tab }) },
+                openPackage: (name: string) => { setTab(INSTALLED_TAB); setView({ kind: 'package', name, returnTab: tab }) },
               }, { only: tab })}
             </div>
           )

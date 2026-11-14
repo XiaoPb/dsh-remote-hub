@@ -20,7 +20,11 @@ declare module '@deepseek-ai/dsh-api-remotes/client' {
   export type ReadOnlyReason = 'management-required' | 'unaddressable'
   export type RestartReason = 'no-hmr' | 'package-moved' | 'host-module' | 'unmanaged-plugin' | 'module-comparison'
   export type PluginFiberPhase = 'pending' | 'loading' | 'active' | 'failed' | 'unloading' | null
-  export type PluginUpdateStep = 'check' | 'remove' | 'install'
+  /** The steps an update announces as it runs (page-facing labels differ from the manager's result steps). */
+  /** The steps an update announces as it runs (plugin-manager/update-state). */
+  export type PluginUpdateStep = 'checking' | 'removing' | 'installing' | 'restoring'
+  /** The step an update *result* reports (PluginUpdateResult.step). */
+  export type PluginUpdateResultStep = 'check' | 'remove' | 'install'
   export type PluginInstallFailureKind =
     | 'pnpm-missing' | 'timeout' | 'not-found' | 'no-matching-version' | 'network'
     | 'disk-full' | 'permission' | 'build-blocked' | 'integrity' | 'unknown'
@@ -161,7 +165,7 @@ declare module '@deepseek-ai/dsh-api-remotes/client' {
   export interface PluginUpdateResult {
     readonly from: string
     readonly to: string
-    readonly step: PluginUpdateStep
+    readonly step: PluginUpdateResultStep
     readonly result: ChangeResult
     readonly restore?: ChangeResult
   }

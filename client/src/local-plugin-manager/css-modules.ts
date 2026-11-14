@@ -36,6 +36,15 @@ const stylesheets = new Map<string, CompiledStylesheet>()
  * @param id - 样式表标识（同一份 CSS 在多次 import 下保持稳定）。
  * @param sheet - 编译结果。
  */
+export function __dshLocalRegisterStylesheet(id: string, sheet: CompiledStylesheet): void {
+  registerStylesheet(id, sheet)
+}
+
+/**
+ * 注册一张编译好的样式表（构建产物里的样式模块调用这个入口）。
+ * @param id - 样式表标识。
+ * @param sheet - 编译结果。
+ */
 export function registerStylesheet(id: string, sheet: CompiledStylesheet): void {
   stylesheets.set(id, sheet)
 }

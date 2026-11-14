@@ -83,7 +83,7 @@ function summaryOf(check: VersionCheck | undefined, t: Translate): Summary {
       tone: 'error', glyph: <IconCloseOutlineRegular size={14} />,
       title: t(list.problem === 'network' ? 'versionsFailedNetwork' : 'versionsFailedOther'),
       // A check the transport lost asked no registry the page knows of; its words stand alone.
-      sub: failed?.problem === undefined ? list.reason : `${registryName(failed.registry, t)} ${t(PROBLEM_KEYS[failed.problem])}`,
+      sub: failed?.problem === undefined ? list.reason : `${registryName(failed.registry, t)} ${t(PROBLEM_KEYS[failed.problem as keyof typeof PROBLEM_KEYS] ?? 'versionsProblemUnknown')}`,
       newer: 0,
     }
   }
@@ -170,7 +170,7 @@ function AttemptRows({ attempts, t }: { readonly attempts: readonly RegistryAtte
             <div className={css.versionTitle}>
               <span className={css.versionNumber}>{registryName(attempt.registry, t)}</span>
               <Tag className={css.statusTag} tone="outline">{t(index === 0 ? 'versionsPrimaryTag' : 'versionsFallbackTag')}</Tag>
-              {attempt.problem === undefined ? null : <Tag className={css.statusTag} tone="danger">{t(PROBLEM_KEYS[attempt.problem])}</Tag>}
+              {attempt.problem === undefined ? null : <Tag className={css.statusTag} tone="danger">{t(PROBLEM_KEYS[attempt.problem as keyof typeof PROBLEM_KEYS] ?? 'versionsProblemUnknown')}</Tag>}
             </div>
             {attempt.reason === undefined ? null : <code className={css.versionLog}>{attempt.reason}</code>}
           </div>
@@ -312,6 +312,8 @@ function stepLabel(step: PluginUpdateStep, update: UpdateState, t: Translate): s
     case 'removing': return t('updateStepRemoving', { version: update.from })
     case 'installing': return t('updateStepInstalling', { version: update.to, registry: registryName(update.registry, t) })
     case 'restoring': return t('updateStepRestoring', { version: update.from })
+    // A step this build does not know still shows its name rather than nothing.
+    default: return String(step)
   }
 }
 
