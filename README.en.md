@@ -61,8 +61,7 @@ Writes from `full` **take effect immediately; the local owner is no longer asked
 
 ### 5. What is deliberately out of reach
 
-- `account/*` (official login state and balance), `dynamicCordisRunner/*` (dynamic execution),
-  `directoryPicker/pick` (host-native dialog) and `settings/openSettingsDocument` stay **closed to every role**;
+- `account/*` (official login state and balance), `directoryPicker/pick` (host-native dialog), `settings/openSettingsDocument`, `remoteAccess/follow` and `$events` are closed to every role; `dynamicCordisRunner/*` (dynamic execution) is **not** a red line — since 0.3.2 it is **`full`-only**, denied to `read-only` and `control`;
 - `full` is **not** DSH owner: host-side plugin lifecycle and credential management remain governed by DSH's own policy and host approval.
 
 The complete per-endpoint matrix is in [API permission matrix](docs/API-MATRIX.md).
@@ -73,7 +72,8 @@ The complete per-endpoint matrix is in [API permission matrix](docs/API-MATRIX.m
 
 - **Pair by QR or short code**: a QR ticket and an 8-character Crockford code, both with a **15-second TTL**; a successful pair issues a persistent device token. Headless hosts get a CLI: `dsh-remote-hub-pair`.
 - **Three roles enforced by DSH Gateway**: `read-only` / `control` / `full` are bound to endpoints and resources; unknown endpoints **deny by default**; `full` is **not** DSH owner. **`full` is fully opened up**: writing configuration, setting provider API keys and installing/removing/enabling plugins all take effect immediately, with no approval card.
-- **Red lines are never delegated**: `account/*` (official login state), `settings/openSettingsDocument`, `directoryPicker/*`, `pluginInventory/*`, `dynamicCordisRunner/*`, `remoteAccess/follow` and `$events` stay host-local for every role; `settings/*`, `credentials/*`, `pluginManager/*` and `pluginMarket/*` are **prefix red lines with named exemptions**, so unregistered methods are always denied. CI re-asserts this on every build.
+- **Red lines are never delegated**: `account/*` (official login state), `settings/openSettingsDocument`, `directoryPicker/pick`, `remoteAccess/follow` and `$events` stay host-local for every role; `settings/*`, `credentials/*`, `pluginManager/*` and `pluginMarket/*` are **prefix red lines with named exemptions**, so unregistered methods are always denied. CI re-asserts this on every build.
+- **`full`-only surface**: `dynamicCordisRunner/*` (12 dynamic-execution endpoints), `directoryPicker/list` and `directoryPicker/createDirectory` are open to `full` alone; `pluginInventory/*` (installed-plugin listing, read-only) is open to all three roles.
 - **Plugins stay readable on every pairing**: the installed-plugin inventory, plugin/market catalogs, versions and details are open to `read-only`, `control` and `full`.
 - **Secrets never travel in the clear**: when writing an API key, the audit log and diagnostics still show only a masked value (`sk-****abcd`) — dropping the approval step does not weaken redaction.
 - **Official transport takeover**: HTTP RPC (`/remote/rpc`) and the official WebSocket mux (`/remote/ws`) both target the paired Host. The DSH kernel is not replaced.

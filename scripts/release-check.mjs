@@ -65,6 +65,8 @@ const versionedDocs = [
   ['README.md', /v(\d+\.\d+\.\d+)/u],
   ['README.en.md', /v(\d+\.\d+\.\d+)/u],
   ['docs/DESIGN.md', /\*\*Version:\*\*\s*(\d+\.\d+\.\d+)/u],
+  // DEPLOY 里写过「当前插件版本为 X.Y.Z」，曾经长期漂在 0.3.4 无人发现。
+  ['docs/DEPLOY.md', /当前插件版本为 `(\d+\.\d+\.\d+)`/u],
 ]
 for (const [file, pattern] of versionedDocs) {
   const text = read(file)

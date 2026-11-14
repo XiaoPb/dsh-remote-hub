@@ -146,7 +146,7 @@ const doc = `# 接口权限分布（角色 × endpoint）
 | --- | --- | --- | --- | ---: |
 | \`read-only\` | 只读 | 看列表、历史、状态、文件内容、任务面板、只读目录 | 任何写入、执行、上传 | ${countFor('read-only')} |
 | \`control\` | 控制 | 只读 + 驱动会话（prompt / cancel / create / fork / rename / 队列）、审批与提问 | 碰文件系统与终端 | ${countFor('control')} |
-| \`full\` | 完全 | 控制 + 上传文件、工作区文件读写、终端、\`job/kill\` | **不等于 DSH owner**：凭据、账号、插件安装、动态执行仍然全部拒绝 | ${countFor('full')} |
+| \`full\` | 完全 | 控制 + 上传文件、工作区文件读写、终端、\`job/kill\`、**插件安装/卸载/启停**、**\`dynamicCordisRunner/*\` 动态执行**、配置与凭据写入 | **不等于 DSH owner**：\`account/*\`、\`settings/openSettingsDocument\`、\`directoryPicker/pick\` 等红线仍然一律拒绝 | ${countFor('full')} |
 
 **未知 endpoint 一律拒绝（fail-closed）**。三档角色严格包含：\`read-only ⊆ control ⊆ full\`。
 

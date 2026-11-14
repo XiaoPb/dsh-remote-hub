@@ -61,8 +61,9 @@
 
 ### 5. 明确不做的事
 
-- `account/*`（官方登录态、余额）、`dynamicCordisRunner/*`（动态执行）、
-  `directoryPicker/pick`（宿主桌面原生弹框）、`settings/openSettingsDocument` **对任何角色都不开放**；
+- `account/*`（官方登录态、余额）、`directoryPicker/pick`（宿主桌面原生弹框）、
+  `settings/openSettingsDocument`、`remoteAccess/follow`、`$events` **对任何角色都不开放**；
+- `dynamicCordisRunner/*`（动态执行）**不是**红线：0.3.2 起改为 **`full` 专属**，`read-only` / `control` 一律拒绝；
 - `full` **不等于** DSH owner：宿主侧的插件生命周期、凭据管理等由 DSH 自身策略与 Host 审批把关。
 
 完整接口级权限见 [接口权限分布](docs/API-MATRIX.md)。
@@ -74,7 +75,8 @@
 - **扫码或短码配对**：二维码票据与 8 位 Crockford 短码，**TTL 均为 15 秒**，配对成功即签发持久设备令牌。无界面主机用 `dsh-remote-hub-pair` 命令行出码。
 - **三级角色，由 DSH Gateway 强制**：`read-only` / `control` / `full` 绑定到 endpoint 与资源，未知 endpoint **默认拒绝**；`full` **不等于** DSH owner。**`full` 完全放开**：写配置、配置 Provider API Key、安装/卸载/启停插件都会**直接生效，不再弹审批卡**。
 - **插件在只读配对下也完全可读**：已装插件清单、插件/市场目录、版本与详情对 `read-only` / `control` / `full` 三档都开放。
-- **红线不可下放**：`account/*`（官方登录态）、`settings/openSettingsDocument`、`directoryPicker/*`、`pluginInventory/*`、`dynamicCordisRunner/*`、`remoteAccess/follow`、`$events` 无论何种角色都不外放；`settings/*`、`credentials/*`、`pluginManager/*`、`pluginMarket/*` 是**前缀红线 + 具名豁免**，未登记的方法一律拒绝。CI 每次构建都用断言复核。
+- **红线不可下放**：`account/*`（官方登录态）、`settings/openSettingsDocument`、`directoryPicker/pick`、`remoteAccess/follow`、`$events` 无论何种角色都不外放；`settings/*`、`credentials/*`、`pluginManager/*`、`pluginMarket/*` 是**前缀红线 + 具名豁免**，未登记的方法一律拒绝。CI 每次构建都用断言复核。
+- **Full 专属面**：`dynamicCordisRunner/*`（12 个动态执行端点）与 `directoryPicker/list`、`directoryPicker/createDirectory` 只对 `full` 开放；`pluginInventory/*`（已装插件清单，只读）对三档角色都开放。
 - **密钥永不明文外流**：写入 API Key 时，审计日志与诊断文件里的密钥仍一律掩码为 `sk-****abcd`（即使已取消审批，脱敏不受影响）。
 - **官方传输接管**：HTTP RPC（`/remote/rpc`）与官方 WebSocket mux（`/remote/ws`）都指向已配对的 Host，不替换 DSH 内核。
 - **默认零暴露**：守卫是**独立**监听，只绑回环字面量（默认 `127.0.0.1:8443`），端口被占时直接报错、**不静默换端口**；未配对设备 fail-closed。隧道默认 `kind: 'none'`。

@@ -16,6 +16,7 @@ The guard always creates a `remote-device` principal. The target Host binds the 
 - `read-only`: inspect authorized resources and read-only catalogs; no mutation or execution.
 - `control`: perform explicitly listed session/workspace actions on bound resources.
 - `full`: additionally perform explicitly listed file/terminal and selected administrative actions — **writing configuration, setting provider API keys, and installing/enabling plugins**.
+- `full` alone also gets the `dynamicCordisRunner/*` dynamic-execution surface (12 endpoints) and `directoryPicker/list` + `directoryPicker/createDirectory`; `read-only` and `control` are denied those.
 
 Unknown endpoints deny by default. `full` is not equivalent to DSH owner.
 

@@ -41,6 +41,12 @@
   （`systemprofile`）这一高频坑、自有服务器 SSH 反向隧道 + nginx 反代、
   Quick Tunnel 与 Tailscale 方案，以及排错对照表与上线自检清单。
   文中 Cloudflare 步骤已对照官方文档核对。
+- **修正权限描述过时**：README（中英）第 5 节把 `dynamicCordisRunner/*` 写作「对任何角色都不开放」，
+  与实现不符——0.3.2 起它已是 **`full` 专属**（12 个端点）。同时 `pluginInventory/*`
+  早已对三档角色开放，也一并从「红线不可下放」中移出。`docs/DESIGN.md` 与
+  `docs/API-MATRIX.md` 的角色语义同步更新。
+- **`docs/DEPLOY.md` 版本号漂移修正**：长期停在 0.3.4。现已纳入 `release-check` 的
+  `doc-version` 校验（此前只校验 README 与 DESIGN），再漂移会在 CI 变红。
 
 ### 兼容性
 
