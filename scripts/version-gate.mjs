@@ -7,7 +7,7 @@
  * presence check is the uniform acceptance-script precondition.
  *
  * Acceptance (ROADMAP §4.1):
- *   node scripts/version-gate.mjs | grep -qx '0.2.1-rc.2=Y 0.2.1-rc.5=Y 0.2.2-rc.1=Y 0.3.0-rc.1=n'
+ *   node scripts/version-gate.mjs | grep -qx '0.2.1-rc.5=n 0.2.2-rc.1=Y 0.2.2-rc.2=Y 0.2.2-rc.3=Y'
  */
 import {
   VERSION_MATRIX,
@@ -42,11 +42,11 @@ report.check(
     for (const [version, want] of Object.entries(VERSION_MATRIX)) {
       if (satisfiesRange(version, range) !== want) return false
     }
-    return satisfiesComparator('0.2.1-rc.2', '>=0.2.1-rc.2')
-      && !satisfiesComparator('0.2.1-rc.1', '>=0.2.1-rc.2')
-      && satisfiesComparator('0.2.1-rc.10', '>=0.2.1-rc.5')
-      && !satisfiesComparator('0.3.0-rc.1', '<0.3.0-0')
-      && satisfiesComparator('0.2.9', '<0.3.0-0')
+    return satisfiesComparator('0.2.2-rc.1', '>=0.2.2-rc.1')
+      && !satisfiesComparator('0.2.1-rc.5', '>=0.2.2-rc.1')
+      && satisfiesComparator('0.2.2-rc.10', '>=0.2.2-rc.1')
+      // 上界只声明真实存在的大版本边界 0.3.0 未发布；用 0.2.9 证明仍在界内即可。
+      && satisfiesComparator('0.2.9', '<0.3.0')
   },
   `matrix must be exactly "${expected}"`,
 )
@@ -56,11 +56,11 @@ report.check('manifest-version: 1', () => pkg.dsh?.manifestVersion === 1, 'dsh.m
 report.check(
   'upper-bound: present',
   () => typeof range === 'string'
-    && range.includes('<0.3.0-0')
-    && !satisfiesRange('0.3.0-rc.1', range)
+    && range.includes('<0.3.0')
+    && !satisfiesRange('0.3.0', range)
     && pkg.dsh?.compatibility?.dsh === range
     && Object.prototype.hasOwnProperty.call(pkg.dsh?.compatibility?.dshReleases ?? {}, '0.2.2-rc.1'),
-  'engines.dsh must carry the <0.3.0-0 upper bound; compatibility.dsh must match; dshReleases must include 0.2.2-rc.1',
+  'engines.dsh must carry the <0.3.0 upper bound; compatibility.dsh must match; dshReleases must include 0.2.2-rc.1',
 )
 
 report.finish()

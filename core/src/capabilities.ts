@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 能力矩阵：三档角色 × 官方 endpoint 的 allow-list，**按资源种类分层**。
  *
  * 这是「哪个角色能调哪个 endpoint」的**唯一真源**：host 的
@@ -177,22 +177,30 @@ export const ENDPOINT_TABLE: Readonly<Record<string, EndpointFact>> = {
   /** 反馈目录按会话可见性过滤：session 资源（与 fileReferences/skills 同组）。 */
   'messageFeedback/list': { kind: 'session' },
   'messageFeedback/put': { kind: 'global' },
-  // `subagents/prompt` 需要一个存活父会话地址；`interruptByParent` 同域。
+  // `subagents/prompt` 需要一个存活父会话地址；中断端点同域。
+  // 中断端点跨 DSH 版本更名：0.2.2-rc.1 是 `interruptByParent`，rc.2 起是 `interruptByUser`。
+  // 两者都登记形态，运行时只有实际存在的那个会被 decide() 用到（另一个在注册表里不存在）。
   'subagents/prompt': { kind: 'session' },
   'subagents/interruptByParent': { kind: 'session' },
+  'subagents/interruptByUser': { kind: 'session' },
   // Full 维护类
   'schedule/deleteInactive': { kind: 'global' },
   'messageFeedback/delete': { kind: 'global' },
 
-   // ── dynamicCordisRunner（`dynamicCordisRunner`，Full 权限专属）──────────────
-   'dynamicCordisRunner/define': { kind: 'global' },
-   'dynamicCordisRunner/run': { kind: 'global' },
-   'dynamicCordisRunner/stop': { kind: 'global' },
-   'dynamicCordisRunner/undefine': { kind: 'global' },
-   'dynamicCordisRunner/list': { kind: 'global' },
-   'dynamicCordisRunner/syncInspectManifest': { kind: 'global' },
-   'dynamicCordisRunner/getDefinition': { kind: 'global' },
-   'dynamicCordisRunner/queryRunning': { kind: 'global' },
+  // ── dynamicCordisRunner（`dynamicCordisRunner`，Full 权限专属）──────────────
+  // 名单以 DSH 0.2.2-rc.1 的宿主产物为准（audit-permissions 会对账官方注册表）。
+  'dynamicCordisRunner/getClientCode': { kind: 'global' },
+  'dynamicCordisRunner/inventory': { kind: 'global' },
+  'dynamicCordisRunner/invoke': { kind: 'global' },
+  'dynamicCordisRunner/reportClientGuardFailure': { kind: 'global' },
+  'dynamicCordisRunner/reportRenderFailure': { kind: 'global' },
+  'dynamicCordisRunner/resolveInspectQuery': { kind: 'global' },
+  'dynamicCordisRunner/resolveRequestRun': { kind: 'global' },
+  'dynamicCordisRunner/runHostHalf': { kind: 'global' },
+  'dynamicCordisRunner/settleUserRun': { kind: 'global' },
+  'dynamicCordisRunner/stopFromPanel': { kind: 'global' },
+  'dynamicCordisRunner/syncInspectManifest': { kind: 'global' },
+  'dynamicCordisRunner/undefineFromPanel': { kind: 'global' },
 
   // ── 本插件自己的 hub/* 方法（同过 decide()，与官方 endpoint 等权）──────────
   'hub/devices': { kind: 'global', hub: true },
@@ -201,6 +209,29 @@ export const ENDPOINT_TABLE: Readonly<Record<string, EndpointFact>> = {
   'hub/stream.next': { kind: 'global', hub: true },
   'hub/stream.cancel': { kind: 'global', hub: true },
   'hub/answerApproval': { kind: 'global', hub: true },
+
+  // ── 本地插件管理直连通道（**永不授权**，只登记事实）──────────────────────
+  // 这些名字对应 `LOCAL_PLUGIN_METHODS`（`core/src/local-plugin-manager.ts`），走的是
+  // `ctx.connection.fetch.register` 的 exact route（owner-only），**不**经过 api-gateway，
+  // 因此它们既不在 `claimsEndpoint()` 的结果里，也不会出现在任何角色的动作集合中。
+  // 登记在此的唯一目的：让「名字存在但永不授权」成为可静态检查的事实
+  // （`assertLocalPluginNotDelegated()` 与 `test/local-plugin-channel-guard.test.mjs` 都依赖它），
+  // 避免未登记 endpoint 造成的审计盲区。**不要**把它们加进 ROLE_MATRIX。
+  'hub/localPluginManager/listBundles': { kind: 'global', hub: true },
+  'hub/localPluginManager/listPlugins': { kind: 'global', hub: true },
+  'hub/localPluginManager/listInventory': { kind: 'global', hub: true },
+  'hub/localPluginManager/registries': { kind: 'global', hub: true },
+  'hub/localPluginManager/fastestRegistry': { kind: 'global', hub: true },
+  'hub/localPluginManager/inspect': { kind: 'global', hub: true },
+  'hub/localPluginManager/listVersions': { kind: 'global', hub: true },
+  'hub/localPluginManager/readBundleDetail': { kind: 'global', hub: true },
+  'hub/localPluginManager/installBundle': { kind: 'global', hub: true },
+  'hub/localPluginManager/waitForInstall': { kind: 'global', hub: true },
+  'hub/localPluginManager/cancelInstall': { kind: 'global', hub: true },
+  'hub/localPluginManager/updateBundle': { kind: 'global', hub: true },
+  'hub/localPluginManager/removeBundle': { kind: 'global', hub: true },
+  'hub/localPluginManager/setPluginEnabled': { kind: 'global', hub: true },
+  'hub/localPluginManager/setBundleEnabled': { kind: 'global', hub: true },
 }
 
 /** 某角色在某个资源种类上可用的动作集合。 */
@@ -301,7 +332,7 @@ const CONTROL: RoleMatrix = {
     'agentPresets/select',
     'schedule/create', 'schedule/edit', 'schedule/run',
     'messageFeedback/put',
-    'subagents/prompt', 'subagents/interruptByParent',
+    'subagents/prompt', 'subagents/interruptByParent', 'subagents/interruptByUser',
     'hub/devices',
     'hub/answerApproval',
   ],
@@ -459,18 +490,56 @@ export function deprecatedActionsInMatrix(): readonly string[] {
 }
 
 /**
+ * 本地插件管理直连通道的 endpoint 前缀。
+ *
+ * 这批方法**只**服务本机 owner 页面（exact Fetch route），永远不进 RPC 名册，
+ * 所以它们在 {@link ENDPOINT_TABLE} 里有事实条目，但在三档角色矩阵里必须为空。
+ */
+export const LOCAL_PLUGIN_ENDPOINT_PREFIX = 'hub/localPluginManager/'
+
+/**
+ * 断言五：本地插件管理直连通道**不得**被授予任何角色（含 `full`）。
+ *
+ * 这条断言是需求「该接口不释放给 RPC，避免云端调用」的代码化：
+ * 一旦有人把它加进 `READ_ONLY` / `CONTROL` / `FULL`，插件加载期立即失败，
+ * 而不是等到某台云端设备在实机上真的能装插件。
+ * @throws 当任一角色的动作集合里出现 {@link LOCAL_PLUGIN_ENDPOINT_PREFIX} 前缀的 endpoint。
+ */
+export function assertLocalPluginNotDelegated(): void {
+  for (const role of ROLE_NAMES) {
+    const delegated = allActionsFor(role).filter(action => action.startsWith(LOCAL_PLUGIN_ENDPOINT_PREFIX))
+    if (delegated.length > 0) {
+      throw new Error(
+        `capabilities: ${role} must not be granted the local plugin-manager channel; found ${delegated.join(', ')}`,
+      )
+    }
+  }
+}
+
+/**
+ * 本地插件管理直连通道的 endpoint 清单（= `ENDPOINT_TABLE` 里以该前缀登记的事实条目）。
+ * @returns 按字典序排列的 endpoint；供审计脚本与测试对账。
+ */
+export function localPluginEndpoints(): readonly string[] {
+  return Object.keys(ENDPOINT_TABLE)
+    .filter(endpoint => endpoint.startsWith(LOCAL_PLUGIN_ENDPOINT_PREFIX))
+    .sort()
+}
+
+/**
  * 模块加载期自检：**任何一条不成立就抛错**，让能力矩阵的错误在插件加载时暴露，
  * 而不是等到某台设备在实机上 403。
  */
 export function assertMatrixIntegrity(): void {
   assertRoleContainment()
   assertNoRedlineDelegated()
+  assertLocalPluginNotDelegated()
   const untraceable = untraceableActions()
   if (untraceable.length > 0) {
     throw new Error(`capabilities: matrix names endpoints missing from the table: ${untraceable.join(', ')}`)
   }
   for (const [endpoint, fact] of Object.entries(ENDPOINT_TABLE)) {
-    if (!/^[A-Za-z0-9_$.-]+\/[A-Za-z0-9_$.-]+$/u.test(endpoint)) {
+    if (!/^[A-Za-z0-9_$.-]+(?:\/[A-Za-z0-9_$.-]+)+$/u.test(endpoint)) {
       throw new Error(`capabilities: endpoint ${JSON.stringify(endpoint)} is not <namespace>/<method>`)
     }
     if (fact.hub === true && !endpoint.startsWith('hub/')) {

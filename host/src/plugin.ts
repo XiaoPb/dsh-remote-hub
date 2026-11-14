@@ -36,6 +36,7 @@ import { createDispatcher } from './dispatch.js'
 import { remoteDevicePrincipal } from './principal.js'
 import { PAIR_ISSUE_GLOBAL, PAIR_ISSUE_PIN_FILE, startGuard, type GuardDeps, type GuardHandle } from './guard.js'
 import { createGuardMux } from './guard-mux.js'
+import { applyLocalPluginManager } from './local-plugin-manager/index.js'
 import { createSensitiveApprovalGate } from './sensitive-approval.js'
 import { createMetricsCollector } from './metrics.js'
 import { createPairingService } from './pairing.js'
@@ -387,11 +388,35 @@ export function applyRemoteHub(ctx: Context, config: ConfigType = DEFAULT_CONFIG
 
   // 服务就绪时再装配；宿主永不提供这些服务时回调不执行 → 插件安静地不装。
   ;(ctx as unknown as {
-    inject(deps: readonly string[], callback: (scoped: Context) => void): unknown
+    inject(deps: readonly string[], callback: (scoped: Context) => void): { dispose?: () => unknown } | undefined
   }).inject(['connection', 'typertGateway', 'remoteAccess'], scoped => {
     writeStatus(config, { phase: 'services-ready' })
     assembleRemoteHub(scoped, config)
   })
+
+  // ── 本地插件管理直连通道：**独立的注入 fiber** ────────────────────────────────
+  //
+  // 它只依赖 `pluginManager`（本机 profile 的插件管理）、`connection`（精确路径路由）
+  // 与 `webServer`（事件通道升级），与守卫（`typertGateway` / `remoteAccess`）无关：
+  // 守卫装配失败时本地插件页依然应该可用（2026-11-14 沙箱实测：缺 remoteAccess 时
+  // 整块 assembly 不跑，本地通道也随之消失）。
+  //
+  // 三个依赖都就绪才挂；任一缺席则通道不挂（fail-closed，绝不影响守卫与官方页）。
+  try {
+    const fiber = (ctx as unknown as {
+      inject(deps: readonly string[], callback: (scoped: Context) => (() => void) | void):
+        { dispose?: () => unknown } | undefined
+    }).inject(['pluginManager', 'connection', 'webServer'], scoped => {
+      const channel = applyLocalPluginManager(scoped)
+      return () => { channel.dispose() }
+    })
+    if (fiber?.dispose !== undefined) {
+      const disposeFiber = fiber.dispose
+      ;(ctx as unknown as { effect(fn: () => () => void): unknown }).effect(() => () => { void disposeFiber() })
+    }
+  } catch {
+    // 注入能力缺席（老宿主）：通道不挂，本地插件页只是不可用。
+  }
 }
 
 /**
@@ -871,6 +896,9 @@ function assembleRemoteHub(ctx: Context, config: ConfigType): void {
       },
     }
     ;(ctx as unknown as { remoteHubHost?: RemoteHubHost }).remoteHubHost = handle
+
+    // 本地插件管理直连通道挂在 apply() 顶层的独立 inject fiber 里（见文件末尾），
+    // 与守卫装配解耦：守卫失败时本地插件页仍然可用。
 
     return () => handle.dispose()
   }, 'dsh-remote-hub: full assembly')

@@ -4,6 +4,7 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "types": [],
+    "rewriteRelativeImportExtensions": true,
     "noEmit": false,
     "declaration": false,
     "rootDir": ".",

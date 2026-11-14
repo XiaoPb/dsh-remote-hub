@@ -147,7 +147,7 @@ done < <(git log --no-merges --pretty=format:'%h%x09%s%n' "$RANGE" 2>/dev/null |
   echo "- \`pnpm run typecheck\`：host + client 双 tsconfig 零错误"
   echo "- \`pnpm run build\`：tsc → tsdown（host / carrier-boot / client 顺序固定）"
   echo "- \`node scripts/run-all-tests.mjs\`：串行跑全部 \`test/*.test.mjs\`"
-  echo "- \`version-gate\`：兼容矩阵 \`0.2.1-rc.2=Y 0.2.1-rc.5=Y 0.2.2-rc.1=Y 0.3.0-rc.1=n\`"
+  echo "- \`version-gate\`：兼容矩阵 \`0.2.1-rc.5=n 0.2.2-rc.1=Y 0.2.2-rc.2=Y 0.2.2-rc.3=Y\`"
   echo "- \`contract-check\` / \`fence\` / \`redlines\`：协议对账、来源围栏、红线不可下放"
   echo "- 发布后校验版本确实在 registry 公开（\`npm view\` 轮询，失败会自动回退 token 并再确认）"
   echo "- 打包后在干净目录里安装并校验（CI consumer 测试）"

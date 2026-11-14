@@ -77,10 +77,11 @@ export const FULL_ADMIN_ENDPOINTS: readonly string[] = [
   // 宿主原生弹框 `directoryPicker/pick` 仍是红线。
   'directoryPicker/list', 'directoryPicker/createDirectory',
   'workspace/delete',
-  // 0.3.2：动态 Cordis 包管理（Full 权限专属）- 所有方法完全开放给 Full。
-  'dynamicCordisRunner/define', 'dynamicCordisRunner/run', 'dynamicCordisRunner/stop', 'dynamicCordisRunner/undefine',
-  'dynamicCordisRunner/list', 'dynamicCordisRunner/syncInspectManifest',
-  'dynamicCordisRunner/getDefinition', 'dynamicCordisRunner/queryRunning',
+  // 动态 Cordis 包管理（Full 权限专属）- 所有方法完全开放给 Full。
+  // 名单以 DSH 0.2.2-rc.1 / rc.2 的宿主产物为准（两者一致，见 docs/COMPAT.md）。
+  // 旧版里的 define / run / stop / undefine / list / getDefinition / queryRunning
+  // 在 0.2.2 系列里已不存在，登记它们会让权限审计报「矩阵有、注册表没有」。
+  'dynamicCordisRunner/syncInspectManifest',
   'dynamicCordisRunner/getClientCode', 'dynamicCordisRunner/inventory', 'dynamicCordisRunner/invoke',
   'dynamicCordisRunner/reportClientGuardFailure', 'dynamicCordisRunner/reportRenderFailure',
   'dynamicCordisRunner/resolveInspectQuery', 'dynamicCordisRunner/resolveRequestRun',
@@ -141,10 +142,14 @@ export const NEVER_DELEGATED_BLANKET: readonly string[] = [
  * 整组禁用、但允许具名豁免的 namespace。
  *
  * - `directoryPicker/`：豁免 `list` / `createDirectory`，宿主原生弹框 `pick` 与未来新增方法仍默认拒绝；
- * - `pluginInventory/`：豁免 `list`（三档共享只读），未登记方法默认拒绝。
+ * - `pluginInventory/`：豁免 `list`（三档共享只读），未登记方法默认拒绝；
+ * - `hub/localPluginManager/`：本机插件管理直连通道的**事实名册**（只在 `ENDPOINT_TABLE` 登记，
+ *   用于让「存在但永不授权」可被静态检查），整条前缀对它永不放开。真正的强制点是
+ *   `capabilities.ts` 的 `assertLocalPluginNotDelegated()` 与 owner-only 路由。
  */
 export const NEVER_DELEGATED_NAMESPACES: readonly string[] = [
   'remoteAccess/', 'pluginManager/', 'pluginMarket/', 'credentials/', 'settings/', 'directoryPicker/', 'pluginInventory/',
+  'hub/localPluginManager/',
 ]
 
 /** Gateway 自有面（不是 `<ns>/<method>` 形状，单独列出以便断言）。 */

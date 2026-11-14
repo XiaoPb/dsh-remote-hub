@@ -74,6 +74,21 @@ jobs:
       - name: Permission coverage audit
         run: node scripts/audit-permissions.mjs --check
 
+      # 受支持的两个 DSH 版本端点集不同（rc.1 与 rc.2 相差 18 个），
+      # 同一份能力矩阵必须在两者上都成立。这里把两个版本的 dsh-api-remotes 都拉下来逐一校验。
+      - name: Permission coverage audit across supported DSH versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          for VERSION in 0.2.2-rc.1 0.2.2-rc.2; do
+            DIR="$RUNNER_TEMP/registry-$VERSION"
+            mkdir -p "$DIR"
+            ( cd "$DIR" && npm pack "@deepseek-ai/dsh-api-remotes@$VERSION" > /dev/null 2>&1 && tar -xzf ./*.tgz )
+            echo "::group::audit against DSH $VERSION"
+            DSH_REGISTRY_FILE="$DIR/package/lib/client.js" node scripts/audit-permissions.mjs --check
+            echo "::endgroup::"
+          done
+
       - name: API permission matrix in sync
         run: node scripts/render-api-matrix.mjs --check
 
