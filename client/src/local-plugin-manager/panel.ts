@@ -213,7 +213,13 @@ export function mountLocalPluginsPanel(
       key: LOCAL_PANEL_ID,
       locale: LOCALE_NAMESPACE,
       store: { ...navigation, create: () => instance },
-      inject: () => ({ ...face, createHeaderRef: createPluginHeaderRef }),
+      inject: () => ({
+        ...face,
+        createHeaderRef: createPluginHeaderRef,
+        // 页头标题：官方页的文案是「插件」，这里必须改成「本地插件」，
+        // 否则本页与官方页标题一模一样，用户在两个页签之间分不清哪个是本机的。
+        localTitle: translate('panel'),
+      }),
       // 不声明 children：官方页持有声明权，这里只渲染（见下方注释与 ADR-004）。
     }, PluginManagerPage as unknown as (props: unknown) => ReactNode))
   })

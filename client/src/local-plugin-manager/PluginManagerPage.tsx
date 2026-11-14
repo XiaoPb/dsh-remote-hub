@@ -31,7 +31,7 @@ import { EXTENSION_BUNDLES, HIDDEN_BUNDLES, MORE_BUNDLES } from './official-shim
 import type { createNavigationStore } from './navigation-store.ts'
 import type { PluginHeaderLayoutFace } from './header-scroll.ts'
 import { rowConfigKey, type ConfigLedger, type OfficialItem } from './config-ledger.ts'
-// 内置项的只读配置兜底（ADR-004「接受只读」）：官方贡献者在本地页缺席时显示当前值。
+// 内置项的只读配置兜底：官方贡献者的渲染器在本地页不可用，这里显示当前生效值。
 import { namespaceFor, ReadonlyConfigSection } from './readonly-config.tsx'
 import { INSTALL_GIT_EXAMPLE, INSTALL_PATH_EXAMPLE, type PluginManagerLocaleKey } from './locales.ts'
 import {
@@ -662,7 +662,12 @@ function ItemDetail({ item, t, onBack, renderContribution, form, readonlyConfig 
   readonly onBack: () => void
   readonly renderContribution: GuardedRender
   readonly form: ConfigPageForm | undefined
-  /** 内置项当前生效的配置值与所属命名空间（只读展示；官方贡献者在本地页缺席时兜底）。 */
+  /**
+   * 内置项当前生效的配置值与所属命名空间（只读展示）。
+   *
+   * 本地页拿不到官方贡献者的渲染器（声明权在官方页），所以内置四项的配置表单在这里永远是空的；
+   * 值本身可从 `ctx.configForms` 读到，因此兜底显示当前值。
+   */
   readonly readonlyConfig: { readonly namespace: string; readonly value: unknown } | undefined
 }): ReactNode {
   const subject: PluginsSubject = { kind: 'item', id: item.id }
@@ -684,6 +689,8 @@ function ItemDetail({ item, t, onBack, renderContribution, form, readonlyConfig 
       </div>
       <div className={css.detailSections}>
         <section className={css.detailSection} data-plugin-config>
+          {/* 官方表单优先（宿主将来若允许本页渲染 plugins.item，这里会自动接管）；
+              拿不到时退回内置项的只读当前值。 */}
           {readonlyConfig === undefined
             ? renderContribution('plugins.item', { view: 'page', form }, { only: item.id })
             : (
@@ -1600,8 +1607,8 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
   // 本页不声明任何 `plugins.*` 子槽（ADR-004），宿主有可能压根不提供渲染器；缺省时就当没有贡献者。
   const renderSlotContribution = (name: string, owner?: object, options?: object): ReactNode =>
     renderContribution(renderSlot, name, owner, options)
-  // 内置项的只读配置：本地页拿不到 `plugins.item` 的渲染器（声明权在官方页），
-  // 但配置值本身能从 `ctx.configForms` 读到 —— 算好交给 ItemDetail 兜底显示。
+  // 内置项的只读配置：官方贡献者的渲染器在本地页拿不到（声明权在官方页），
+  // 但配置值本身能从 ctx.configForms 读到 —— 算好交给 ItemDetail 兜底显示。
   const servedNamespaces = new Set<string>(
     (configurations ?? []).map((view: { ns: string }) => view.ns),
   )
@@ -1752,7 +1759,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
             >
               <header className={css.pageHead} data-window-drag>
                 <div className={css.pageHeading}>
-                  <h1 className={css.pageTitle} data-plugin-header-part="title">{t('title')}</h1>
+                  <h1 className={css.pageTitle} data-plugin-header-part="title">{(props as { localTitle?: string }).localTitle ?? t('title')}</h1>
                   <div className={css.pageIntro} data-plugin-header-part="intro">
                     <span>{t('intro')}</span>
                     <Tooltip label={t('infoDescription')} side="bottom" delayMs={300} maxWidth={300} portal openOnClick>
