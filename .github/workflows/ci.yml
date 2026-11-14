@@ -123,15 +123,23 @@ jobs:
           # 这样 host 入口才能被真正 import 进来。
           PEERS="$(node -e "
             const p = require('$GITHUB_WORKSPACE/package.json');
-            // 宿主自带版本的第三方 peer（cordis / schemastery / react）按宿主版本装，
-            // 其余 DSH 包用本包 devDependencies 锁定的版本。
+            // 宿主自带版本的第三方 peer（cordis / schemastery / react / react-dom）。
+            // ⚠️ 这里必须是白名单映射而不是「非 DSH 包就猜版本」：曾经漏掉 react-dom，
+            // 它被拼成 react-dom@0.2.2-rc.1（不存在）导致 consumer 安装必然失败。
             const hostThirdParty = {
               '@deepseek-ai/cordis': '4.1.0',
               '@deepseek-ai/schemastery': '3.19.0',
               'react': '18.3.1',
+              'react-dom': '18.3.1',
             };
-            const specs = Object.entries(p.peerDependencies || {}).map(([name]) =>
-              hostThirdParty[name] ? name + '@' + hostThirdParty[name] : name + '@0.2.2-rc.1');
+            const specs = Object.entries(p.peerDependencies || {}).map(([name]) => {
+              if (hostThirdParty[name]) return name + '@' + hostThirdParty[name];
+              // 其余应全是 @deepseek-ai/* 的 DSH 包，用宿主版本。
+              if (!name.startsWith('@deepseek-ai/')) {
+                throw new Error('unmapped third-party peer, add it to hostThirdParty: ' + name);
+              }
+              return name + '@0.2.2-rc.1';
+            });
             process.stdout.write(specs.join(' '));
           ")"
           echo "host peers: $PEERS"
