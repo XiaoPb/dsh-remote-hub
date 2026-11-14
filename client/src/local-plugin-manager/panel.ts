@@ -58,14 +58,18 @@ export const LOCAL_PANEL_ID = LOCAL_PANEL_KEY
  * 这里是**全部** vendored 样式表（`scripts/copy-client-css.mjs` 编译进 bundle 的那些）。
  */
 const STYLESHEET_IDS: readonly string[] = [
-  'PluginManagerPage.module.css',
+  // ⚠️ 顺序 = 层叠顺序，必须与官方页面的模块图一致：原子组件先、页面后。
+  // 否则同优先级的规则会被页面样式压掉 —— 例如「添加插件」弹窗：
+  // `Modal.module.css` 的 `.dialog { width: min(380px,100%) }` 会盖住
+  // `PluginManagerPage.module.css` 的 `.installDialog { width: min(560px,100%) }`，
+  // 弹窗只有 380px 宽（2026-11-14 实测）。
   'Button.module.css',
   'Checkbox.module.css',
   'CommandText.module.css',
   'DetailDocument.module.css',
-  'MenuSurface.module.css',
   'Input.module.css',
   'Menu.module.css',
+  'MenuSurface.module.css',
   'Modal.module.css',
   'Pill.module.css',
   'SegmentedTabs.module.css',
@@ -76,6 +80,8 @@ const STYLESHEET_IDS: readonly string[] = [
   'TerminalBlock.module.css',
   'Toast.module.css',
   'Tooltip.module.css',
+  // 页面样式最后注入：它自己的布局覆盖（如弹窗宽度）才能生效。
+  'PluginManagerPage.module.css',
 ]
 
 /** 宿主槽位注册表的最小形状。 */

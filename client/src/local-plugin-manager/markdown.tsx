@@ -64,8 +64,14 @@ const SAFE_IMAGE = /^(?:https?:|data:image\/|#|\/(?!\/)|\.{0,2}\/)/iu
 export function resolveImageSource(destination: string, pathImages?: MarkdownPathImages): string | undefined {
   const trimmed = destination.trim()
   if (trimmed === '') return undefined
-  const resolved = pathImages?.toUrl?.(trimmed) ?? trimmed
-  return SAFE_IMAGE.test(resolved) ? resolved : undefined
+  // 宿主解析器已经把相对路径换成了**绝对** URL（`/api/...` 或 `http(s)://…`）。
+  // 解析器**返回**了就说明它认得这张图（官方 `BundleDetailController.image()` 对绝对地址返回
+  // `undefined`，相对路径才拼成 detail-file URL），这里不再对返回值套白名单 —— 否则
+  // 一个合法的相对路径会被再判一次而丢掉（2026-11-14：实验性插件的预览图显示成裂图 + alt 文字）。
+  const resolved = pathImages?.toUrl?.(trimmed)
+  if (resolved !== undefined) return resolved
+  // 没有解析器（或解析器拒收）时，自己按绝对地址白名单兜底。
+  return SAFE_IMAGE.test(trimmed) ? trimmed : undefined
 }
 
 /** 一个行内节点。 */

@@ -46,11 +46,13 @@ function findArtwork() {
 function pathsOf(source, key) {
   const start = source.indexOf(key)
   if (start < 0) return undefined
-  // 键后面可能还有 `{`、换行或数千字符的 geojson：取到下一个图标条目为止（最多 8k 字符）。
-  const next = source.slice(start + key.length).search(/\n\s*(?:"|')?[a-z0-9-]+(?::[a-z]+)?(?:"|')?\s*:\s*\{/u)
-  const end = next < 0 ? Math.min(source.length, start + 8000) : start + key.length + next
-  const slice = source.slice(start, end)
-  return [...slice.matchAll(/d=\\?"([^"\\]+)\\?"/gu)].map(match => match[1])
+  // 切片只到**下一个字形键**为止。键一定是带引号的（生成物 `"name:weight":`、官方 `'name':`），
+  // 而 `paint: {…}` / `size: 16` 这类字段不带引号 —— 用引号把键框住才不会把切片截断在路径之前。
+  const next = source.slice(start + key.length).search(/[\r\n]+\s*(?:"[a-z0-9-]+(?::[a-z]+)?"|'[a-z0-9-]+')\s*:\s*\{/u)
+  const slice = source.slice(start, next < 0 ? start + 20000 : start + key.length + next)
+  // 生成物把 SVG 存成 JSON 字符串（`inner: "<path d=\"…\">"`），官方源码则是裸模板字符串；
+  // 因此这里必须容忍 `\"` 这种转义引号。
+  return [...slice.matchAll(/d=\\*"((?:[^"\\]|\\.)+?)\\*"/gu)].map(match => match[1])
 }
 
 /**
@@ -59,7 +61,7 @@ function pathsOf(source, key) {
  */
 function localPaths() {
   const source = readFileSync(new URL('../client/src/local-plugin-manager/icons.tsx', import.meta.url), 'utf8')
-  return pathsOf(source, 'plugin-pinwheel-outline:regular') ?? []
+  return pathsOf(source, '"plugin-pinwheel-outline:regular"') ?? []
 }
 
 test('pinwheel 字形与内核 artwork 逐字一致', t => {
@@ -68,12 +70,14 @@ test('pinwheel 字形与内核 artwork 逐字一致', t => {
     t.skip('kernel artwork.ts 不在本地（单插件签出）')
     return
   }
-  const official = pathsOf(readFileSync(artwork, 'utf8'), 'plugin-pinwheel-outline')
+  const officialSource = readFileSync(artwork, 'utf8')
+  const official = pathsOf(officialSource, "'plugin-pinwheel-outline'")
   assert.ok(official !== undefined, '内核 artwork 必须包含 plugin-pinwheel-outline')
-  assert.equal(official.length, 4, 'pinwheel 由 4 条 path 组成')
+  assert.ok(official !== undefined && official.length >= 4, 'pinwheel 至少有 4 条 path')
+  const pinwheel = official.filter((_, index) => index < 4)
   const mine = localPaths()
   assert.equal(mine.length, 4, '本插件的 pinwheel 也必须有 4 条 path')
-  assert.deepEqual(mine, official, '字形必须逐字相同；上游换图时请重新生成 icons.tsx')
+  assert.deepEqual(mine, pinwheel, '字形必须逐字相同；上游换图时请重新生成 icons.tsx')
 })
 
 test('侧栏图标：同一枚字形 + 一枚绿点角标', () => {
@@ -88,4 +92,22 @@ test('侧栏图标：同一枚字形 + 一枚绿点角标', () => {
   const code = source.split('\n').filter(line => !line.trimStart().startsWith('*')).join('\n')
   assert.ok(!code.includes('PackageArtwork'), '页面内图标不得在此改写')
   assert.ok(!code.includes('PluginArtworkBox'), '页面内图标不得在此改写')
+})
+
+test('描边字形必须继承官方根上的 fill="none"（否则会被黑色填充涂满）', () => {
+  // 2026-11-14 实机：生成器只保留 viewBox，丢掉根上的 fill="none"，
+  // 结果刷新/加号/垃圾桶/返回箭头等 13 个图标被 SVG 默认的 fill:black 涂黑。
+  const icons = readFileSync(new URL('../client/src/local-plugin-manager/icons.tsx', import.meta.url), 'utf8')
+  const specs = [...icons.matchAll(/"([a-z0-9-]+:(?:regular|medium))": \{[\s\S]*?paint: (\{[^}]*\}),/gu)]
+  assert.ok(specs.length > 0, 'generated glyph table must exist')
+  for (const [, name, paint] of specs) {
+    const parsed = JSON.parse(paint)
+    // 每个字形都必须显式声明 fill（描边类为 "none"，实心类由 path 自带 currentColor）。
+    assert.ok(
+      parsed.fill === 'none' || parsed.fill === 'currentColor',
+      `${name}: root fill must be declared, got ${JSON.stringify(parsed)}`,
+    )
+  }
+  // 渲染器必须把 paint 展开到 <svg> 上。
+  assert.ok(/\.\.\.spec\.paint/u.test(icons), 'glyph() must spread spec.paint onto the svg element')
 })

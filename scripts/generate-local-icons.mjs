@@ -143,6 +143,8 @@ export function generateIcons(artworkSource) {
     '  readonly width: number',
     '  readonly height: number',
     '  readonly viewBox: string',
+    '  /** 官方 <svg> 根上的绘制属性（fill="none" 等），逐字继承。 */',
+    '  readonly paint: Readonly<Record<string, string>>',
     '  readonly inner: string',
     '}',
     '',
@@ -150,6 +152,7 @@ export function generateIcons(artworkSource) {
     'function glyph(spec: GlyphSpec, props: IconProps): ReactElement {',
     '  const size = props.size ?? spec.size',
     '  return createElement(\'svg\', {',
+    '    ...spec.paint,',
     '    width: (size * spec.width) / spec.height, height: size, viewBox: spec.viewBox,',
     '    className: props.className, \'aria-hidden\': true, dangerouslySetInnerHTML: { __html: spec.inner },',
     '  })',
@@ -163,6 +166,7 @@ export function generateIcons(artworkSource) {
         `  ${JSON.stringify(entry.glyph + ':' + entry.weight)}: {`,
         `    size: ${String(spec.size)}, width: ${String(spec.width)}, height: ${String(spec.height)},`,
         `    viewBox: ${JSON.stringify(spec.viewBox)},`,
+        `    paint: ${JSON.stringify(spec.paint)},`,
         `    inner: ${JSON.stringify(spec.inner)},`,
         '  },',
       ].join('\n')
@@ -185,17 +189,41 @@ export function generateIcons(artworkSource) {
  * @param svg - 官方 SVG 字符串。
  * @returns 规格。
  */
+/**
+ * 官方 `<svg>` 根上**必须一并保留**的绘制属性。
+ *
+ * ⚠️ 2026-11-14 实机：只保留 viewBox 会导致描边图标被 SVG 默认的 `fill: black` **整个涂黑**
+ * （刷新 / 加号 / 垃圾桶 / 返回箭头…），因为它们的形状来自 stroke，路径围出的区域本应无填充。
+ * 官方每个描边字形都在根上写 `fill="none"`，这里逐字继承。
+ */
+const ROOT_PAINT_ATTRS = Object.freeze([
+  ['fill', 'fill'],
+  ['stroke', 'stroke'],
+  ['stroke-width', 'strokeWidth'],
+  ['stroke-linecap', 'strokeLinecap'],
+  ['stroke-linejoin', 'strokeLinejoin'],
+  ['stroke-miterlimit', 'strokeMiterlimit'],
+  ['fill-rule', 'fillRule'],
+  ['clip-rule', 'clipRule'],
+])
+
 export function parseSvg(svg) {
   const head = /^<svg([^>]*)>/u.exec(svg)
   if (head === null) throw new Error('generate-local-icons: svg root not found')
   const attrs = head[1]
   const viewBox = /viewBox="([^"]+)"/u.exec(attrs)?.[1] ?? '0 0 16 16'
   const [, , boxWidth, boxHeight] = viewBox.split(/\s+/u).map(Number)
+  const paint = {}
+  for (const [attr, prop] of ROOT_PAINT_ATTRS) {
+    const value = new RegExp(`(?:^|\\s)${attr}="([^"]*)"`, 'u').exec(attrs)?.[1]
+    if (value !== undefined) paint[prop] = value
+  }
   return {
     size: 16,
     width: boxWidth,
     height: boxHeight,
     viewBox,
+    paint,
     inner: svgInner(svg),
   }
 }
