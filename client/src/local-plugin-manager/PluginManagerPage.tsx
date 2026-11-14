@@ -31,6 +31,8 @@ import { EXTENSION_BUNDLES, HIDDEN_BUNDLES, MORE_BUNDLES } from './official-shim
 import type { createNavigationStore } from './navigation-store.ts'
 import type { PluginHeaderLayoutFace } from './header-scroll.ts'
 import { rowConfigKey, type ConfigLedger, type OfficialItem } from './config-ledger.ts'
+// 内置项的只读配置兜底（ADR-004「接受只读」）：官方贡献者在本地页缺席时显示当前值。
+import { namespaceFor, ReadonlyConfigSection } from './readonly-config.tsx'
 import { INSTALL_GIT_EXAMPLE, INSTALL_PATH_EXAMPLE, type PluginManagerLocaleKey } from './locales.ts'
 import {
   bundleBusy, asksMirror, githubRecoveryRegistry, isInstallPending, offeredRegistries, rowKey, updateCandidate,
@@ -654,12 +656,14 @@ function packageRef(pkg: PackageView): PluginPackageRef {
  * contributed actions, its title with the contributed badges over its
  * one-liner, the form the entry renders, and the contributed sections.
  */
-function ItemDetail({ item, t, onBack, renderContribution, form }: {
+function ItemDetail({ item, t, onBack, renderContribution, form, readonlyConfig }: {
   readonly item: OfficialItem
   readonly t: Translate
   readonly onBack: () => void
   readonly renderContribution: GuardedRender
   readonly form: ConfigPageForm | undefined
+  /** 内置项当前生效的配置值与所属命名空间（只读展示；官方贡献者在本地页缺席时兜底）。 */
+  readonly readonlyConfig: { readonly namespace: string; readonly value: unknown } | undefined
 }): ReactNode {
   const subject: PluginsSubject = { kind: 'item', id: item.id }
   return (
@@ -680,7 +684,16 @@ function ItemDetail({ item, t, onBack, renderContribution, form }: {
       </div>
       <div className={css.detailSections}>
         <section className={css.detailSection} data-plugin-config>
-          {renderContribution('plugins.item', { view: 'page', form }, { only: item.id })}
+          {readonlyConfig === undefined
+            ? renderContribution('plugins.item', { view: 'page', form }, { only: item.id })
+            : (
+              <ReadonlyConfigSection
+                value={readonlyConfig.value}
+                namespace={readonlyConfig.namespace}
+                notice={t('readonlyConfigNotice')}
+                defaultBadge={t('readonlyConfigDefault')}
+              />
+            )}
         </section>
         {renderContribution('plugins.detail.section', { subject })}
       </div>
@@ -1587,6 +1600,21 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
   // 本页不声明任何 `plugins.*` 子槽（ADR-004），宿主有可能压根不提供渲染器；缺省时就当没有贡献者。
   const renderSlotContribution = (name: string, owner?: object, options?: object): ReactNode =>
     renderContribution(renderSlot, name, owner, options)
+  // 内置项的只读配置：本地页拿不到 `plugins.item` 的渲染器（声明权在官方页），
+  // 但配置值本身能从 `ctx.configForms` 读到 —— 算好交给 ItemDetail 兜底显示。
+  const servedNamespaces = new Set<string>(
+    (configurations ?? []).map((view: { ns: string }) => view.ns),
+  )
+  const readonlyConfigFor = (id: string): { namespace: string; value: unknown } | undefined => {
+    const namespace = namespaceFor(id, servedNamespaces)
+    if (namespace === undefined) return undefined
+    try {
+      const value = props.configForm<Record<string, unknown>>(namespace).getSnapshot().value
+      return value === undefined ? undefined : { namespace, value }
+    } catch {
+      return undefined
+    }
+  }
   const formFor = (id: string): ConfigPageForm | undefined => {
     if (!configurations?.some((view: { ns: string }) => view.ns === id)) return undefined
     const form = props.configForm<Record<string, unknown>>(id)
@@ -1863,7 +1891,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
           )
           : null}
         {onInstalled && loaded && openItem !== undefined
-          ? <ItemDetail form={formFor(openItem.id)} item={openItem} t={t} renderContribution={guarded} onBack={() => { setView({ kind: 'list' }) }} />
+          ? <ItemDetail form={formFor(openItem.id)} item={openItem} t={t} renderContribution={guarded} readonlyConfig={readonlyConfigFor(openItem.id)} onBack={() => { setView({ kind: 'list' }) }} />
           : null}
         {loaded && installedCards
           ? basicCards.length === 0 && official.length === 0 && mine.length === 0 && state.status !== 'error'

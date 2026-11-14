@@ -304,6 +304,8 @@ export const zh = {
   detailInvalid: '插件声明的详细介绍文件无效',
   detailFailed: '无法读取详细介绍',
   detailFootnotes: '脚注',
+  readonlyConfigNotice: '当前生效的配置值（只读，修改请在前台的「插件」页进行）',
+  readonlyConfigDefault: '默认值',
 } satisfies Record<string, string>
 
 /** Plugin manager locale key union. */
@@ -602,6 +604,8 @@ export const en = {
   detailInvalid: 'The plugin declares an invalid details file.',
   detailFailed: 'Could not read the details.',
   detailFootnotes: 'Footnotes',
+  readonlyConfigNotice: 'Current values (read-only; edit them on the Plugins page outside takeover)',
+  readonlyConfigDefault: 'Default',
 } satisfies Record<PluginManagerLocaleKey, string>
 
 /** Japanese copy, checked against the English keys. */
@@ -897,6 +901,8 @@ export const ja = {
   'detailInvalid': 'プラグインが無効な詳細ファイルを宣言しています。',
   'detailFailed': '詳細を読み込めませんでした。',
   'detailFootnotes': '脚注',
+  'readonlyConfigNotice': '現在有効な設定値です（読み取り専用。変更は引き継ぎ中ではない「プラグイン」ページで行ってください）',
+  'readonlyConfigDefault': '既定値',
 } satisfies Record<keyof typeof en, string>
 
 /** Spanish dictionary, checked against the English keys. */
@@ -1192,6 +1198,8 @@ export const es = {
   detailInvalid: 'El complemento declara un archivo de detalles no válido.',
   detailFailed: 'No se pudieron leer los detalles.',
   detailFootnotes: 'Notas a pie de página',
+  readonlyConfigNotice: 'Valores vigentes (solo lectura; edítalos en la página Plugins fuera de la toma de control)',
+  readonlyConfigDefault: 'Predeterminado',
 } satisfies Record<keyof typeof en, string>
 
 /** French dictionary, checked against the English keys. */
@@ -1487,6 +1495,8 @@ export const fr = {
   detailInvalid: 'Le plugin déclare un fichier de détails invalide.',
   detailFailed: 'Impossible de lire les détails.',
   detailFootnotes: 'Notes de bas de page',
+  readonlyConfigNotice: 'Valeurs en vigueur (lecture seule ; modifiez-les dans la page Plugins hors prise de contrôle)',
+  readonlyConfigDefault: 'Par défaut',
 } satisfies Record<keyof typeof en, string>
 
 /** German dictionary, checked against the English keys. */
@@ -1782,6 +1792,8 @@ export const de = {
   detailInvalid: 'Das Plugin deklariert eine ungültige Detaildatei.',
   detailFailed: 'Die Details konnten nicht gelesen werden.',
   detailFootnotes: 'Fußnoten',
+  readonlyConfigNotice: 'Aktuelle Werte (schreibgeschützt; Änderungen auf der Seite „Plugins“ außerhalb der Übernahme)',
+  readonlyConfigDefault: 'Standard',
 } satisfies Record<keyof typeof en, string>
 
 /** Russian dictionary, checked against the English keys. */
@@ -2077,6 +2089,8 @@ export const ru = {
   detailInvalid: 'Плагин объявляет неверный файл сведений.',
   detailFailed: 'Подробности прочитать не удалось.',
   detailFootnotes: 'Сноски',
+  readonlyConfigNotice: 'Действующие значения (только чтение; изменяйте на странице «Плагины» вне перехвата)',
+  readonlyConfigDefault: 'По умолчанию',
 } satisfies Record<keyof typeof en, string>
 
 /** Portuguese dictionary, checked against the English keys. */
@@ -2372,4 +2386,6 @@ export const pt = {
   detailInvalid: 'O plugin declara um arquivo de detalhes inválido.',
   detailFailed: 'Não foi possível ler os detalhes.',
   detailFootnotes: 'Notas de rodapé',
+  readonlyConfigNotice: 'Valores atuais (somente leitura; edite na página Plugins fora da tomada de controle)',
+  readonlyConfigDefault: 'Padrão',
 } satisfies Record<keyof typeof en, string>

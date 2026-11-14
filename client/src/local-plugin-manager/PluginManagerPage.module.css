@@ -2301,3 +2301,57 @@ button.versionSummary:focus-visible {
   align-self: safe start;
   justify-self: safe start;
 }
+
+/* ── 内置插件的只读配置（ADR-004「接受只读」）────────────────────────────── */
+/* 排版刻意对齐官方 SettingsForm：提示行 + 若干「标签 …… 值」字段行。 */
+.readonlyForm {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.readonlyNotice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.readonlyFields {
+  display: flex;
+  flex-direction: column;
+}
+
+.readonlyField {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
+  min-width: 0;
+  padding: 10px 0;
+  border-top: 0.5px solid var(--dsw-alias-border-l3);
+}
+
+.readonlyField:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.readonlyFieldLabel {
+  flex: none;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.readonlyFieldValue {
+  min-width: 0;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-secondary);
+  text-align: end;
+  word-break: break-all;
+}
