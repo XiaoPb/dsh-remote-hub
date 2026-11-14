@@ -33,6 +33,8 @@ import type { PluginHeaderLayoutFace } from './header-scroll.ts'
 import { rowConfigKey, type ConfigLedger, type OfficialItem } from './config-ledger.ts'
 // 内置项的只读配置兜底：官方贡献者的渲染器在本地页不可用，这里显示当前生效值。
 import { namespaceFor, ReadonlyConfigSection } from './readonly-config.tsx'
+// 内置卡片的一行说明：贡献者的 summary 视图拿不到时，从各插件词典里取同名文案。
+import { builtinSummary } from './builtin-summary.ts'
 import { INSTALL_GIT_EXAMPLE, INSTALL_PATH_EXAMPLE, type PluginManagerLocaleKey } from './locales.ts'
 import {
   bundleBusy, asksMirror, githubRecoveryRegistry, isInstallPending, offeredRegistries, rowKey, updateCandidate,
@@ -620,15 +622,19 @@ function PackageCard({ pkg, t, resolveText, busy, highlighted, newer, onOpen, on
  * One official plugin as a card that opens its page: its icon, its title from
  * the registration, and the one-liner the entry renders in its summary view.
  */
-function ItemCard({ item, t, onOpen, renderContribution }: {
+function ItemCard({ item, t, onOpen, renderContribution, summary }: {
   readonly item: OfficialItem
   readonly t: Translate
   readonly onOpen: () => void
   readonly renderContribution: GuardedRender
+  /** 内置项的兜底一行说明（贡献者的 summary 视图在本地页拿不到时使用）。 */
+  readonly summary: string | undefined
 }): ReactNode {
+  // 贡献者的 summary 视图优先；本地页拿不到时退回词典里的同名文案。
+  const contributed = renderContribution('plugins.item', { view: 'summary' }, { only: item.id })
   return (
     <li className={`${css.card} ${css.cardLink}`} data-plugin-item={item.id}>
-      <CardHead title={item.label} t={t} onOpen={onOpen} icon={itemArtwork(item.id)} description={renderContribution('plugins.item', { view: 'summary' }, { only: item.id })} />
+      <CardHead title={item.label} t={t} onOpen={onOpen} icon={itemArtwork(item.id)} description={contributed ?? summary ?? null} />
     </li>
   )
 }
@@ -1719,7 +1725,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
     />
   )
   const basicCards = ledger.items.map(item => (
-    <ItemCard key={`item:${item.id}`} item={item} t={t} renderContribution={guarded} onOpen={() => { setView({ kind: 'item', id: item.id }) }} />
+    <ItemCard key={`item:${item.id}`} item={item} t={t} renderContribution={guarded} summary={builtinSummary((props as { hostLocale?: unknown }).hostLocale, item.id)} onOpen={() => { setView({ kind: 'item', id: item.id }) }} />
   ))
   const renderGroup = (id: 'basic' | 'extensions' | 'bundles', heading: string, cards: readonly ReactNode[]): ReactNode => {
     const offersMore = id === 'extensions' && more.length > 0
