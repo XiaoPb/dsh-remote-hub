@@ -140,7 +140,17 @@ export default defineConfig([
       // surfaces as "entry did not activate". In the browser the shell seeds
       // window.__ModuleLoader__ before loading this bundle, so the shim is inert.
       banner:
-        'if (typeof window === "undefined") { globalThis.window = { __ModuleLoader__: { load(bundle) { globalThis.__DSH_REMOTE_HUB_BUNDLE__ = bundle; } } }; }\n'
+        // factory 的 require 只有在 factory 被调用时才存在。这里把 load 包一层：
+        // 调用 factory 前先把它收到的 require 记到全局，`apply()` 之后就能用
+        // （本地插件页凭它取官方 @deepseek-ai/dsh-client-ui-primitives 的 MarkdownText）。
+        'const __dshHubLoad = window.__ModuleLoader__ && window.__ModuleLoader__.load;\n'
+        + 'if (typeof __dshHubLoad === "function") {\n'
+        + '  window.__ModuleLoader__.load = (bundle) => __dshHubLoad({ ...bundle, factory: (require) => {\n'
+        + '    globalThis.__DSH_REMOTE_HUB_REQUIRE__ = require;\n'
+        + '    return bundle.factory(require);\n'
+        + '  } });\n'
+        + '}\n'
+        + 'if (typeof window === "undefined") { globalThis.window = { __ModuleLoader__: { load(bundle) { globalThis.__DSH_REMOTE_HUB_BUNDLE__ = bundle; } } }; }\n'
         + 'if (typeof globalThis.process === "undefined") { globalThis.process = { env: {}, platform: "browser", argv: [] }; }\n'
         // ⚠️ carrier 内联在 **bundle 顶层**（factory 之外），见文件头注释的时序说明。
         + '/* ===== carrier boot: bundle top-level, BEFORE the plugin factory ===== */\n'

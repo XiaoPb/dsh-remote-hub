@@ -1,26 +1,26 @@
 /**
- * Markdown 渲染的**最小替身**：替代官方 `DetailDocument` 依赖的 `mdast` / `micromark` / `katex` 整棵渲染树。
+ * 详情文档的 Markdown 渲染 —— **优先复用宿主官方渲染器**。
  *
- * ## 为什么（依赖最小化，ADR-009）
+ * ## 为什么改
  *
- * 官方 `DetailDocument` 用 `MarkdownText` 渲染 README：它依赖
- * `mdast` + `mdast-util-*` + `micromark-util-sanitize-uri` + `katex` + 文件链接图标 + 图片灯箱……
- * 这是一整套文档渲染子系统。把它搬进插件会立刻破坏「运行时新增依赖 = 0」。
+ * 这里原本是自研的轻量实现（标题/段落/列表/代码块/粗斜体/链接/图片）。用户实测反馈
+ * 「内容、表格这些 markdown 的渲染都不如官方的」：表格不渲染、没有代码高亮、没有数学公式，
+ * 嵌套图片（README 徽章 `[![alt](img)](href)`）还会漏成纯文本。
  *
- * ## 这里给出什么
+ * 官方页用的是 `@deepseek-ai/dsh-client-ui-primitives` 的 `MarkdownText`（完整 GFM）。
+ * 该包**不单独发布**，但由宿主模块加载器提供 —— 官方 `dsh-client-ui-plugin-manager`
+ * 的 bundle 第一行就是 `require("@deepseek-ai/dsh-client-ui-primitives")`；我们处在同样的
+ * `factory(require)` 语境里，因此用完全相同的方式取用（见 `client/src/index.ts`）。
  *
- * 一个**行为对齐、能力收敛**的渲染器：
+ * ## 兜底
  *
- * - 支持：标题、段落、粗体/斜体/行内代码、代码块、有序/无序列表、引用、链接、图片、分割线、表格；
+ * 宿主若没提供 primitives，退回下面这套轻量渲染，页面不至于整块空白：
+ *
+ * - 支持：标题、段落、粗体/斜体、行内代码、代码块、有序/无序列表、引用、链接、图片、分割线、表格；
  * - **安全**：图片 URL 只允许 `http(s)` / `data:image` / 相对路径；链接只允许 `http(s)` / `mailto` / 相对路径；
- *   其余（`javascript:`、`vbscript:`、`data:text/html`）一律降级成纯文本。
- * - **本地图片改写**：文档里的相对图片路径经 `pathImages.toUrl?.()` 交给宿主路由
- *   （详情图片走 `/api/hub/local-plugin-manager/detail-file`），与官方 `MarkdownPathImages` 语义一致。
- *
- * ## 与官方的差异（登记在 04-verification §6）
- *
- * - 不做代码高亮、不渲染数学公式、不做表格之外的扩展语法（任务列表、脚注等按普通文本处理）；
- * - 不做图片灯箱/拖拽，只渲染 `<img>`。
+ *   其余（`javascript:`、`vbscript:`、`data:text/html`）一律降级成可读文本；
+ * - **本地图片改写**：相对图片路径经 `pathImages.toUrl?.()` 交给宿主路由
+ *   （`/api/hub/local-plugin-manager/detail-file`），与官方 `MarkdownPathImages` 语义一致。
  *
  * @module dsh-remote-hub/client/local-plugin-manager/markdown
  */
@@ -32,6 +32,16 @@ export interface MarkdownPathImages {
 }
 
 /** 文档文案（与官方 MarkdownLabels 对齐的常用子集）。 */
+/** 官方渲染器缺省界面文案（调用方不传 labels 时使用；只影响代码块工具栏等界面标签）。 */
+const DEFAULT_MARKDOWN_LABELS: MarkdownLabels = Object.freeze({
+  copy: 'Copy',
+  copied: 'Copied',
+  collapse: 'Collapse',
+  expand: 'Expand',
+  code: { copyLabel: 'Copy', copiedLabel: 'Copied', toolbarLabels: { codeLabel: 'Code', wrapLabel: 'Wrap', unwrapLabel: 'Unwrap' } },
+  footnotes: 'Footnotes',
+})
+
 export interface MarkdownLabels {
   readonly copy?: string
   readonly copied?: string
@@ -300,9 +310,86 @@ function renderBlocks(blocks: readonly Block[], key = 'b'): ReactNode {
  * @param props.pathImages - 图片地址解析面（本地详情图片路由）。
  * @returns React 节点。
  */
-export function MarkdownText({ markdown, pathImages }: {
-  readonly markdown: string
-  readonly pathImages?: MarkdownPathImages
-}): ReactNode {
+export function fallbackMarkdownText(markdown: string, pathImages?: MarkdownPathImages): ReactNode {
   return createElement('div', { className: 'dsh-local-markdown' }, renderBlocks(parseMarkdown(markdown, pathImages)))
+}
+
+/** 官方 primitives 里我们用到的那一小块。 */
+interface OfficialPrimitives {
+  readonly MarkdownText?: (props: {
+    readonly text: string
+    readonly labels: MarkdownLabels
+    readonly pathImages?: MarkdownPathImages | undefined
+    readonly omitHtml?: boolean
+  }) => ReactNode
+}
+
+/**
+ * 宿主注入的官方 primitives。
+ *
+ * 由 `client/src/index.ts` 在 factory 里 `require` 后登记 —— 那是唯一能拿到
+ * `require` 的地方（模块系统 boot 之后 `create()` 已不可用）。
+ */
+let officialPrimitives: OfficialPrimitives | undefined
+
+/**
+ * 登记宿主提供的官方 primitives。
+ * @param primitives - `@deepseek-ai/dsh-client-ui-primitives` 的导出；falsy 表示宿主没提供。
+ */
+export function installOfficialPrimitives(primitives: unknown): void {
+  officialPrimitives = (primitives ?? undefined) as OfficialPrimitives | undefined
+}
+
+/**
+ * 宿主是否提供了官方 Markdown 渲染器。
+ * @returns 提供了官方 `MarkdownText` 时为 true。
+ */
+export function hasOfficialMarkdown(): boolean {
+  return isRenderable(officialPrimitives?.MarkdownText)
+}
+
+/**
+ * 该导出能不能当作组件渲染。
+ *
+ * 官方 `MarkdownText` 是 `React.memo` 包装：`typeof` 是 `'object'`，
+ * 靠 `$typeof` 标记识别（2026-11-14 实测，只判 function 会白白退回兜底渲染）。
+ * @param candidate - 导出的候选值。
+ * @returns 可作为组件渲染时为 true。
+ */
+function isRenderable(candidate: unknown): boolean {
+  if (typeof candidate === 'function') return true
+  if (typeof candidate !== 'object' || candidate === null) return false
+  // 官方 `MarkdownText` 是 `React.memo` 包装：typeof 是 object，靠 $$typeof 标记识别。
+  // 不能直接比较 Symbol 身份（跨模块实例不相等），只检查形状。
+  const elementType = candidate as { $$typeof?: unknown; type?: unknown }
+  return elementType.$$typeof !== undefined
+    && (typeof elementType.type === 'function' || typeof elementType.type === 'object')
+}
+
+/**
+ * 渲染一篇 Markdown 文档：优先官方 `MarkdownText`，缺失时用本地兜底。
+ * @param props.markdown - Markdown 原文。
+ * @param props.labels - 官方渲染器需要的界面文案。
+ * @param props.pathImages - 图片地址解析面。
+ * @returns React 节点。
+ */
+export function MarkdownText({ markdown, labels, pathImages }: {
+  readonly markdown: string
+  readonly labels?: MarkdownLabels | undefined
+  readonly pathImages?: MarkdownPathImages | undefined
+}): ReactNode {
+  const Official = officialPrimitives?.MarkdownText
+  if (isRenderable(Official)) {
+    // 官方导出是 memo 包装（object），createElement 接受它；这里按组件类型收窄。
+    const Component = Official as NonNullable<OfficialPrimitives['MarkdownText']>
+    return createElement(Component, {
+      text: markdown,
+      // 官方组件（如 DetailDocument）不一定传 labels：这些只是代码块的界面标签，
+      // 缺省用中性英文即可，不影响文档内容本身。
+      labels: labels ?? DEFAULT_MARKDOWN_LABELS,
+      pathImages,
+      omitHtml: true,
+    })
+  }
+  return fallbackMarkdownText(markdown, pathImages)
 }

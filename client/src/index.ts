@@ -20,6 +20,7 @@ import type { Context } from '@deepseek-ai/cordis'
 // 本入口只负责插件本身的装配，不再触发 carrier。
 
 import { applyRemoteHubClient, getRemoteHubClient, type ClientAssemblyOptions } from './plugin.js'
+import { installOfficialPrimitives } from './local-plugin-manager/markdown.tsx'
 import { applyCloudPaths } from './paths/mount.js'
 
 export { applyRemoteHubClient, getRemoteHubClient }
@@ -59,11 +60,43 @@ export type { CloudPathContext, DirectoryListing, WorkspaceListing, PathEntry } 
 export const inject: string[] = []
 
 /**
+ * 从宿主模块加载器取官方 `@deepseek-ai/dsh-client-ui-primitives`。
+ *
+ * ## 为什么要这段
+ *
+ * 本地插件页要复用官方的 Markdown 渲染器（`DetailDocument` → `MarkdownText`），
+ * 与官方页保持一致的表格/代码高亮/数学公式渲染。那个包**不作为独立 npm 包发布**，
+ * 但它由宿主模块加载器提供：官方 `dsh-client-ui-plugin-manager` 的 bundle 开头就是
+ * `require("@deepseek-ai/dsh-client-ui-primitives")`。
+ *
+ * 我们与它处在同一个 `factory(require)` 语境（`lib/client.js` 的 `factory: (require) => {…}`），
+ * 因此用完全相同的方式取用。模块系统 boot 之后 `__ModuleLoader__.create()` 已不可用，
+ * 所以必须在这个时机拿。
+ *
+ * 取不到时不报错：本地页退回自带的轻量渲染（见 `markdown.tsx` 的 `fallbackMarkdownText`）。
+ *
+ * @returns 官方导出；取不到时 undefined。
+ */
+function loadOfficialPrimitives(): unknown {
+  try {
+    const require = (globalThis as { __DSH_REMOTE_HUB_REQUIRE__?: (id: string) => unknown })
+      .__DSH_REMOTE_HUB_REQUIRE__
+    if (typeof require !== 'function') return undefined
+    return require('@deepseek-ai/dsh-client-ui-primitives')
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Cordis 入口。
  * @param ctx - Client Cordis root。
  * @param options - 装配选项（由 loader 传入，可缺省）。
  */
 export function apply(ctx: Context, options: ClientAssemblyOptions = {}): void {
+  // 先把宿主提供的官方 primitives 交给本地插件页的 Markdown 渲染器
+  // （须在任何渲染之前完成，且只在模块系统可用时成功）。
+  installOfficialPrimitives(loadOfficialPrimitives())
   applyRemoteHubClient(ctx, options)
   // 云端路径 UI 内置（0.3.0）：等 slots/commandUi/sessions/conversation 就绪再注册，
   // 本机模式下它自身不注册任何槽位。
