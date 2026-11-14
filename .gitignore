@@ -43,3 +43,5 @@ devices.json
 Thumbs.db
 .DS_Store
 dev/
+# 提交信息草稿（临时）
+commit-msg.tmp
