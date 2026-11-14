@@ -29,6 +29,8 @@ import { mountRemote } from './mount.js'
 import { createRemoteHubPageComponent, classifyPairSecret } from './panel/RemoteHubPage.js'
 import type { CloudDeviceRow } from './panel/RemoteHubPage.js'
 import { RemoteHubNavIcon } from './panel/NavIcon.js'
+import { mountLocalPluginsPanel } from './local-plugin-manager/panel.js'
+import { watchTakeover } from './local-plugin-manager/lifecycle.js'
 
 /** 装配选项（缺省时从 `window.__DSH_REMOTE_HUB__` 读本机注入值）。 */
 export interface ClientAssemblyOptions {
@@ -407,6 +409,39 @@ export function applyRemoteHubClient(ctx: Context, options: ClientAssemblyOption
     })
     const disposeNavFiber = navFiber?.dispose
     if (disposeNavFiber !== undefined) push(() => { void disposeNavFiber() })
+
+    // 6. 本地插件页（仅在「接管云端设备」期间出现）。
+    //
+    //    为什么单独一块：它承载的是**本机**插件管理（官方页此时显示的是云端那份），
+    //    数据走自己的 owner-only 直连通道（`/api/hub/local-plugin-manager/*`），与上面
+    //    的 transport / ctx.remote 完全无关。可见性由 `watchTakeover` 轮询 carrier 状态决定：
+    //    接管出现 → 装配；断开 / 吊销 / 插件卸载 → 立刻撤下（`mountLocalPluginsPanel` 的 dispose
+    //    会收掉侧栏行、主面板、toast、WS 订阅、控制器与样式表）。
+    const localFiber = injectWhenReady(ctx, ['slots', 'locale'], 'local-plugins', scoped => {
+      let panel: { dispose(): void } | undefined
+      const stopWatching = watchTakeover((active) => {
+        if (active && panel === undefined) {
+          try {
+            panel = mountLocalPluginsPanel(scoped)
+          } catch (error) {
+            warnDegrade('local-plugins', error)
+            panel = undefined
+          }
+          return
+        }
+        if (!active && panel !== undefined) {
+          panel.dispose()
+          panel = undefined
+        }
+      })
+      return () => {
+        stopWatching()
+        panel?.dispose()
+        panel = undefined
+      }
+    })
+    const disposeLocalFiber = localFiber?.dispose
+    if (disposeLocalFiber !== undefined) push(() => { void disposeLocalFiber() })
 
     const assembly: ClientAssembly = {
       transport,
