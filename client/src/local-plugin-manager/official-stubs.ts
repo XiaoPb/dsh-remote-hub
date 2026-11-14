@@ -73,6 +73,8 @@ export interface PropsLocale<_Namespace extends string = string> {
 /** 槽位渲染授权（消费者侧形状）。 */
 export type PropsRenderSlots<_Names extends string = string> = {
   renderSlot(name: string, owner: object, options?: { only?: string; entryKey?: string }): ReactNode
+  /** 本页把子槽渲染收在一处，便于在宿主不提供渲染器时降级为空。 */
+  renderSlotContribution(name: string, owner?: object, options?: object): ReactNode
 }
 
 /** 注册方注入面。 */

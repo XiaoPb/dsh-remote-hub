@@ -194,6 +194,17 @@ function normalizeUpstreamError(error: unknown): LocalPluginError {
       mapStatus(shaped.code),
     )
   }
+  // 老版本 Host（例如 0.2.1-rc.4）没有 `readBundleDetail` / `listVersions` 之类的新方法。
+  // 这不是故障，而是「这版 Host 不提供该能力」—— 面板应显示为不可用，而不是报错。
+  const upstreamMessage = typeof shaped?.message === 'string' ? shaped.message : ''
+  if (/is not a function$/u.test(upstreamMessage)) {
+    return new LocalPluginError(
+      LOCAL_PLUGIN_ERRORS.unavailable,
+      upstreamMessage,
+      { capability: 'plugin-manager' },
+      501,
+    )
+  }
   return new LocalPluginError(
     LOCAL_PLUGIN_ERRORS.upstream,
     error instanceof Error ? error.message : String(error),

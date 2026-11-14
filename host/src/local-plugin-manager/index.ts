@@ -271,20 +271,27 @@ function admitUpgrade(
   bus: LocalPluginEventBus,
 ): void {
   const connection = serviceOf(ctx, 'connection') as {
-    requestRejection?: (request: IncomingMessage) => 401 | 403 | undefined
-    admitConnection?: (request: IncomingMessage) => { peer?: PeerLike } | { rejection: number }
+    admit?: (request: IncomingMessage) => { peer?: PeerLike } | { rejection: number; release?: unknown }
+    admitConnection?: (request: IncomingMessage) =>
+      { peer?: PeerLike; release?: () => Promise<void> } | { rejection: number; release?: unknown }
   } | undefined
-  if (connection?.requestRejection !== undefined) {
-    const rejection = connection.requestRejection(req)
-    if (rejection !== undefined) return rejectUpgrade(socket, rejection)
-  }
-  if (connection?.admitConnection === undefined) {
+  if (connection?.admit === undefined && connection?.admitConnection === undefined) {
     // 没有 admission 能力就无法证明 owner 身份 → fail-closed（宁可事件不实时，也不放行）。
     return rejectUpgrade(socket, 403)
   }
+  /**
+   * ⚠️ 这里**只用 `admit()`**，不调 `requestRejection()` / `admitConnection()`：
+   *
+   * - `requestRejection()` 内部就是 `admit()`，重复调用没有意义；
+   * - `admitConnection()` 会顺手把 peer 标成「已拥有 socket」（`ownsSocket = true`），
+   *   而它只能由既有的 `/ws` 升级路径配套释放。我们的路由随后自己 `ws.handleUpgrade`，
+   *   用它换来的是 `409`（2026-11-14 沙箱实测：事件通道永远连不上）。
+   *
+   * 所以顺序是：`admit()` 验 Host/Origin 围栏 + owner 身份 → 再校验 peer 是 owner → 交给我们自己的 ws。
+   */
   let admission: { peer?: PeerLike } | { rejection: number }
   try {
-    admission = connection.admitConnection(req)
+    admission = connection.admit !== undefined ? connection.admit(req) : connection.admitConnection!(req)
   } catch {
     return rejectUpgrade(socket, 403)
   }

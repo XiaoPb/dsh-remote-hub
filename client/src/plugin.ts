@@ -417,7 +417,11 @@ export function applyRemoteHubClient(ctx: Context, options: ClientAssemblyOption
     //    的 transport / ctx.remote 完全无关。可见性由 `watchTakeover` 轮询 carrier 状态决定：
     //    接管出现 → 装配；断开 / 吊销 / 插件卸载 → 立刻撤下（`mountLocalPluginsPanel` 的 dispose
     //    会收掉侧栏行、主面板、toast、WS 订阅、控制器与样式表）。
-    const localFiber = injectWhenReady(ctx, ['slots', 'locale'], 'local-plugins', scoped => {
+    //
+    //    ⚠️ `configForms` 必须列进 inject：vendored 页面的注入面从 `ctx.configForms.describe()/get()`
+    //    取配置账本（官方 `ui-plugin-manager` 同样 inject 这一项）。少了它，fiber 作用域 proxy 在
+    //    读取未注入的服务时抛 `cannot get property "configForms" without inject`，面板会被跳过。
+    const localFiber = injectWhenReady(ctx, ['slots', 'locale', 'configForms'], 'local-plugins', scoped => {
       let panel: { dispose(): void } | undefined
       const stopWatching = watchTakeover((active) => {
         if (active && panel === undefined) {
