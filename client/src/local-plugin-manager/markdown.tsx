@@ -120,12 +120,17 @@ export function parseInline(text: string, pathImages?: MarkdownPathImages): Inli
       rest = rest.slice(image[0].length)
       continue
     }
-    const link = /^\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/u.exec(rest)
+    // 链接的标签里可以再嵌图片：徽章就是 `[![CI](badge.svg)](ci.yml)`。
+    // 标签必须在**这里递归解析**，否则整段会退化成纯文本（2026-11-14：本地页的
+    // CI/Release/npm 三个徽章显示成了 `![CI](https://…)` 原文）。
+    const link = /^\[((?:[^\[\]]|\[[^\]]*\])*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/u.exec(rest)
     if (link !== null) {
+      const label = link[1] ?? ''
       if (SAFE_LINK.test(link[2] ?? '')) {
-        nodes.push({ kind: 'link', href: link[2] ?? '', ...(link[3] === undefined ? {} : { title: link[3] }), children: [{ kind: 'text', text: link[1] ?? '' }] })
+        nodes.push({ kind: 'link', href: link[2] ?? '', ...(link[3] === undefined ? {} : { title: link[3] }), children: parseInline(label, pathImages) })
       } else {
-        pushText(link[1] ?? '')
+        // 不安全的链接：保留标签里的可读内容（图片按图片规则处理）。
+        nodes.push(...parseInline(label, pathImages))
       }
       rest = rest.slice(link[0].length)
       continue
