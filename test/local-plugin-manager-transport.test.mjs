@@ -29,7 +29,7 @@ async function loadBuiltModule(relativeFile) {
   const coreDir = join(directory, 'core', 'src')
   const { mkdir } = await import('node:fs/promises')
   await mkdir(coreDir, { recursive: true })
-  for (const name of ['index', 'protocol', 'local-plugin-manager', 'roles', 'device', 'capabilities', 'capabilities-redlines', 'redact', 'carrier-contract']) {
+  for (const name of ['index', 'protocol', 'local-plugin-manager', 'roles', 'device', 'capabilities', 'capabilities-redlines', 'version-drift', 'redact', 'carrier-contract']) {
     try {
       const text = readFileSync(new URL(`../.build/client/core/src/${name}.js`, import.meta.url), 'utf8')
       await writeFile(join(coreDir, `${name}.js`), text, 'utf8')

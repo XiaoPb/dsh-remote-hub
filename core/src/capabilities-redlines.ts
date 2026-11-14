@@ -77,10 +77,11 @@ export const FULL_ADMIN_ENDPOINTS: readonly string[] = [
   // 宿主原生弹框 `directoryPicker/pick` 仍是红线。
   'directoryPicker/list', 'directoryPicker/createDirectory',
   'workspace/delete',
-  // 0.3.2：动态 Cordis 包管理（Full 权限专属）- 所有方法完全开放给 Full。
-  'dynamicCordisRunner/define', 'dynamicCordisRunner/run', 'dynamicCordisRunner/stop', 'dynamicCordisRunner/undefine',
-  'dynamicCordisRunner/list', 'dynamicCordisRunner/syncInspectManifest',
-  'dynamicCordisRunner/getDefinition', 'dynamicCordisRunner/queryRunning',
+  // 动态 Cordis 包管理（Full 权限专属）- 所有方法完全开放给 Full。
+  // 名单以 DSH 0.2.2-rc.1 / rc.2 的宿主产物为准（两者一致，见 docs/COMPAT.md）。
+  // 旧版里的 define / run / stop / undefine / list / getDefinition / queryRunning
+  // 在 0.2.2 系列里已不存在，登记它们会让权限审计报「矩阵有、注册表没有」。
+  'dynamicCordisRunner/syncInspectManifest',
   'dynamicCordisRunner/getClientCode', 'dynamicCordisRunner/inventory', 'dynamicCordisRunner/invoke',
   'dynamicCordisRunner/reportClientGuardFailure', 'dynamicCordisRunner/reportRenderFailure',
   'dynamicCordisRunner/resolveInspectQuery', 'dynamicCordisRunner/resolveRequestRun',

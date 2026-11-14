@@ -59,7 +59,10 @@ const INTENTIONAL_GAPS = Object.freeze({
 })
 
 // ── 1. 官方注册表 ────────────────────────────────────────────────────────
-const registryFile = join(ROOT, 'node_modules', '@deepseek-ai', 'dsh-api-remotes', 'lib', 'client.js')
+// 默认读本仓库安装的 dsh-api-remotes；`DSH_REGISTRY_FILE` 可指向另一个版本的产物，
+// 用于验证「同一份能力矩阵在 0.2.2-rc.1 与 rc.2 上都成立」（见 docs/COMPAT.md）。
+const registryFile = process.env.DSH_REGISTRY_FILE
+  ?? join(ROOT, 'node_modules', '@deepseek-ai', 'dsh-api-remotes', 'lib', 'client.js')
 const registrySource = readFileSync(registryFile, 'utf8')
 const official = [...new Set(
   [...registrySource.matchAll(/"([a-zA-Z][A-Za-z0-9_]*)\/([A-Za-z0-9_.]+)":\s*\{\s*\n?\s*service/gu)]
@@ -83,6 +86,20 @@ for (const role of ROLES) {
   }
 }
 
+/**
+ * 版本漂移表：受支持的两个 DSH 版本之间会增删的端点。
+ *
+ * 这些端点不进静态矩阵（否则另一端必然报「矩阵有、注册表没有」），
+ * 但也不该算成漏登记 —— 它们属于**已知的版本差异**。
+ * 详见 `core/src/version-drift.ts`。
+ */
+const VERSION_DRIFT = mod.VERSION_DRIFT ?? {}
+
+/** 某 endpoint 是否属于版本差异。 */
+function isVersionDrift(endpoint) {
+  return Object.prototype.hasOwnProperty.call(VERSION_DRIFT, endpoint)
+}
+
 /** 某 endpoint 是否命中「有意不开放」清单（支持 `ns/*` 通配）。 */
 function intentionalGap(endpoint) {
   if (INTENTIONAL_GAPS[endpoint] !== undefined) return INTENTIONAL_GAPS[endpoint]
@@ -95,23 +112,30 @@ const rows = official.map(endpoint => {
   const roles = [...(grantedBy.get(endpoint) ?? [])]
   const redline = mod.isNeverDelegated(endpoint)
   const gap = intentionalGap(endpoint)
+  const drift = isVersionDrift(endpoint)
   let category
   if (roles.length > 0) category = 'granted'
   else if (redline) category = 'redline'
   else if (gap !== undefined) category = 'gap'
+  // 版本差异：运行时仍会被 decide() 拒绝，但不算「未登记遗漏」。
+  else if (drift) category = 'drift'
   else category = 'unregistered'
-  return { endpoint, roles, redline, gap: gap ?? null, category }
+  return { endpoint, roles, redline, gap: gap ?? null, drift, category }
 })
 
 const granted = rows.filter(row => row.category === 'granted')
 const redlines = rows.filter(row => row.category === 'redline')
 const gaps = rows.filter(row => row.category === 'gap')
+const drifts = rows.filter(row => row.category === 'drift')
 const unregistered = rows.filter(row => row.category === 'unregistered')
 
 // 矩阵里有、官方注册表里没有的条目（说明我们登记了不存在的 endpoint）。
 // 排除本插件自有的 hub/* 面：它们由 Remote Hub 自己注册，不在官方注册表里。
 const matrixOnly = [...grantedBy.keys()]
   .filter(endpoint => !official.includes(endpoint) && !endpoint.startsWith('hub/'))
+  // 版本漂移端点豁免：一对更名端点（如 interruptByParent / interruptByUser）必须
+  // 两个都登记才能同时服务 rc.1 与 rc.2，任一版本上"多余"的那一个属于预期差异。
+  .filter(endpoint => !isVersionDrift(endpoint))
   .sort()
 
 // ── 4. 输出 ──────────────────────────────────────────────────────────────
@@ -122,6 +146,7 @@ if (JSON_OUT) {
     redline: redlines.map(row => row.endpoint),
     intentionalGap: gaps.map(row => ({ endpoint: row.endpoint, reason: row.gap })),
     unregistered: unregistered.map(row => row.endpoint),
+    versionDrift: drifts.map(row => row.endpoint),
     matrixOnly,
   }, null, 2)}\n`)
 } else {
@@ -129,6 +154,7 @@ if (JSON_OUT) {
   process.stdout.write(`  已授权        ${String(granted.length).padStart(3)}\n`)
   process.stdout.write(`  红线（有意）  ${String(redlines.length).padStart(3)}\n`)
   process.stdout.write(`  未实现（登记）${String(gaps.length).padStart(3)}\n`)
+  process.stdout.write(`  版本差异      ${String(drifts.length).padStart(3)}\n`)
   process.stdout.write(`  未登记遗漏    ${String(unregistered.length).padStart(3)}\n`)
   process.stdout.write(`  矩阵多余条目  ${String(matrixOnly.length).padStart(3)}\n\n`)
 

@@ -177,22 +177,30 @@ export const ENDPOINT_TABLE: Readonly<Record<string, EndpointFact>> = {
   /** 反馈目录按会话可见性过滤：session 资源（与 fileReferences/skills 同组）。 */
   'messageFeedback/list': { kind: 'session' },
   'messageFeedback/put': { kind: 'global' },
-  // `subagents/prompt` 需要一个存活父会话地址；`interruptByParent` 同域。
+  // `subagents/prompt` 需要一个存活父会话地址；中断端点同域。
+  // 中断端点跨 DSH 版本更名：0.2.2-rc.1 是 `interruptByParent`，rc.2 起是 `interruptByUser`。
+  // 两者都登记形态，运行时只有实际存在的那个会被 decide() 用到（另一个在注册表里不存在）。
   'subagents/prompt': { kind: 'session' },
   'subagents/interruptByParent': { kind: 'session' },
+  'subagents/interruptByUser': { kind: 'session' },
   // Full 维护类
   'schedule/deleteInactive': { kind: 'global' },
   'messageFeedback/delete': { kind: 'global' },
 
-   // ── dynamicCordisRunner（`dynamicCordisRunner`，Full 权限专属）──────────────
-   'dynamicCordisRunner/define': { kind: 'global' },
-   'dynamicCordisRunner/run': { kind: 'global' },
-   'dynamicCordisRunner/stop': { kind: 'global' },
-   'dynamicCordisRunner/undefine': { kind: 'global' },
-   'dynamicCordisRunner/list': { kind: 'global' },
-   'dynamicCordisRunner/syncInspectManifest': { kind: 'global' },
-   'dynamicCordisRunner/getDefinition': { kind: 'global' },
-   'dynamicCordisRunner/queryRunning': { kind: 'global' },
+  // ── dynamicCordisRunner（`dynamicCordisRunner`，Full 权限专属）──────────────
+  // 名单以 DSH 0.2.2-rc.1 的宿主产物为准（audit-permissions 会对账官方注册表）。
+  'dynamicCordisRunner/getClientCode': { kind: 'global' },
+  'dynamicCordisRunner/inventory': { kind: 'global' },
+  'dynamicCordisRunner/invoke': { kind: 'global' },
+  'dynamicCordisRunner/reportClientGuardFailure': { kind: 'global' },
+  'dynamicCordisRunner/reportRenderFailure': { kind: 'global' },
+  'dynamicCordisRunner/resolveInspectQuery': { kind: 'global' },
+  'dynamicCordisRunner/resolveRequestRun': { kind: 'global' },
+  'dynamicCordisRunner/runHostHalf': { kind: 'global' },
+  'dynamicCordisRunner/settleUserRun': { kind: 'global' },
+  'dynamicCordisRunner/stopFromPanel': { kind: 'global' },
+  'dynamicCordisRunner/syncInspectManifest': { kind: 'global' },
+  'dynamicCordisRunner/undefineFromPanel': { kind: 'global' },
 
   // ── 本插件自己的 hub/* 方法（同过 decide()，与官方 endpoint 等权）──────────
   'hub/devices': { kind: 'global', hub: true },
@@ -324,7 +332,7 @@ const CONTROL: RoleMatrix = {
     'agentPresets/select',
     'schedule/create', 'schedule/edit', 'schedule/run',
     'messageFeedback/put',
-    'subagents/prompt', 'subagents/interruptByParent',
+    'subagents/prompt', 'subagents/interruptByParent', 'subagents/interruptByUser',
     'hub/devices',
     'hub/answerApproval',
   ],

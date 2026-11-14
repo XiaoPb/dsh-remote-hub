@@ -3,6 +3,41 @@
 本文件记录 `@xiaopb/dsh-remote-hub` 与伴生包 `@xiaopb/dsh-remote-paths` 的公开变更。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)；`0.x` 期间的次版本号可能包含不兼容变更。
 
+## [0.3.6] - 2026-11-14
+
+**本地插件页：在接管云端设备时可直接管理本机插件，功能与官方插件页对齐。**
+
+侧栏新增「本地插件」入口（带绿点角标，与官方「插件」页区分），页面完整复用官方
+`ui-plugin-manager` 的布局、图标与设计令牌；所有调用走本机直连通道（**不进 RPC 名册**，
+避免云端经由 RPC 触达本机插件管理面）。
+
+### 新增
+
+- **本地插件直连通道**：15 个方法 + 事件流 + 详情图片路由，挂在
+  `/api/hub/local-plugin-manager/*`，仅本机 owner 可用。
+- **本地插件页**：列表 / 开关 / 安装 / 版本 / 更新 / 卸载 / 详情 / 状态全部等价；
+  内置插件配置以只读形式展示当前生效值（配置写入仍在官方页）。
+- **DSH 0.2.2-rc.1 与 0.2.2-rc.2 双版本支持**（rc.3 端点与 rc.2 一致，顺带兼容）。
+
+### 修复
+
+- **图标被涂黑**：生成器只保留 `viewBox`、丢掉根节点的 `fill="none"`，16 个描边图标中 13 个
+  被 SVG 默认黑色填充涂满。
+- **添加插件弹窗过窄**：样式表注入顺序使 `.dialog` 的 380px 覆盖了 `.installDialog` 的 560px。
+- **详情图片裂图**：`readBundleImage` 在 0.2.2 未导出，改为走官方 `PluginManager.serveDetailFile()`。
+- **README 渲染不如官方页**：改用宿主提供的官方 `MarkdownText`（完整 GFM：表格、代码高亮、
+  数学公式），并修复嵌套图片语法 `[![alt](img)](href)` 被当作文本泄漏的问题。
+- **内置卡片缺少说明**：从各插件词典取回副标题文案。
+
+### 兼容性
+
+- **端点差异按版本隔离**：0.2.2-rc.1 与 rc.2 之间有 18 个端点不同（含
+  `officeToPdf/*` → `officeKit/*`、`subagents/interruptByParent` → `interruptByUser` 等更名）。
+  建立 `core/src/version-drift.ts` 登记「版本差异」，不进静态矩阵也不判为漏登记；
+  `audit-permissions` 支持 `DSH_REGISTRY_FILE` 对不同版本逐一校验。
+- `dynamicCordisRunner` 端点清单对齐 0.2.2 实际产物（移除已不存在的 7 个旧端点）。
+- 兼容范围：`>=0.2.2-rc.1 <0.3.0`；**0.3.0 尚未发布**，不声明。
+
 ## [0.3.5] - 2026-11-14
 
 **权限补齐：完全接管 `dynamicCordisRunner` 端点权限管理（19 个方法全部 Full 权限）。**

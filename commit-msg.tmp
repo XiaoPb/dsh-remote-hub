@@ -1,0 +1,34 @@
+chore(release): support DSH 0.2.2-rc.1 and rc.2, bump to 0.3.6
+
+The permission matrix was written for a much earlier DSH and had drifted from
+what 0.2.2 actually ships, which made three CI gates fail. Diffing the real
+dsh-api-remotes artifacts of 0.2.1-rc.4 / 0.2.2-rc.1 / rc.2 / rc.3 (135 / 150 /
+158 / 158 endpoints) showed where the drift is:
+
+- dynamicCordisRunner lost seven endpoints we still granted (define, run, stop,
+  undefine, list, getDefinition, queryRunning); the list now matches 0.2.2.
+- rc.1 and rc.2 differ in 18 endpoints, including the renames
+  officeToPdf/* -> officeKit/*, subagents/interruptByParent -> interruptByUser
+  and the account notification surface. rc.2 and rc.3 are identical.
+
+Since this package must support both rc.1 and rc.2, those 18 cannot be pinned in
+a static matrix: whichever side we wrote, the other version failed the audit.
+They now live in core/src/version-drift.ts as a recorded, reasoned table that
+the audit treats as "known version difference" rather than a missing grant.
+The renamed subagent interrupt pair is declared for both versions so either
+host resolves the endpoint it actually has, and the audit exempts a matrix
+entry that is version-drift (expected on one side only).
+
+audit-permissions gained DSH_REGISTRY_FILE so any release's registry can be
+checked; CI now audits against rc.1 AND rc.2, which is what would have caught
+this drift. Verified locally: all three supported versions pass (rc.1 150
+endpoints, rc.2/rc.3 158, 9 drifted).
+
+Also: bump to 0.3.6, refresh the README/DESIGN version stamps that were still
+at 0.3.4, add the 0.3.6 changelog entry, and register version-drift in the
+transport test fixture.
+
+Local CI parity: typecheck, build, package contract, 60/60 test files, version
+gate, contract check, source fence, red lines, permission audit (x3 versions),
+API matrix, release consistency 13/13, tarball contents, consumer install, and
+release-notes generation all pass.

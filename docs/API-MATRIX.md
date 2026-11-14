@@ -18,8 +18,8 @@
 | 角色 | 中文 | 能做什么 | 不能做什么 | 授权数量 |
 | --- | --- | --- | --- | ---: |
 | `read-only` | 只读 | 看列表、历史、状态、文件内容、任务面板、只读目录 | 任何写入、执行、上传 | 60 |
-| `control` | 控制 | 只读 + 驱动会话（prompt / cancel / create / fork / rename / 队列）、审批与提问 | 碰文件系统与终端 | 92 |
-| `full` | 完全 | 控制 + 上传文件、工作区文件读写、终端、`job/kill` | **不等于 DSH owner**：凭据、账号、插件安装、动态执行仍然全部拒绝 | 139 |
+| `control` | 控制 | 只读 + 驱动会话（prompt / cancel / create / fork / rename / 队列）、审批与提问 | 碰文件系统与终端 | 93 |
+| `full` | 完全 | 控制 + 上传文件、工作区文件读写、终端、`job/kill` | **不等于 DSH owner**：凭据、账号、插件安装、动态执行仍然全部拒绝 | 133 |
 
 **未知 endpoint 一律拒绝（fail-closed）**。三档角色严格包含：`read-only ⊆ control ⊆ full`。
 
@@ -37,12 +37,12 @@
 | 红线（前缀） | `NEVER_DELEGATED_NAMESPACES`：整条关闭，但共享只读目录可豁免 |
 | 红线（Gateway 内部面） | `$events` / `$events/result`，非 owner 由 `interactions:'none'` 挡住 |
 
-## 2. 已授权接口（139 个）
+## 2. 已授权接口（133 个）
 
 按资源种类分组。资源种类决定 binding 挂法：没有参数指明资源时是 `global`，
 由 `sessionId` / `workspaceFileScopeId` / `agentId` 解析出来的是 `session`。
 
-### 2.1 global 资源（101 个）
+### 2.1 global 资源（94 个）
 
 | endpoint | 资源 | 形式 | 只读 | 控制 | 完全 | 判定依据 |
 | --- | --- | --- | :---: | :---: | :---: | --- |
@@ -55,24 +55,17 @@
 | `credentials/unset` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `directoryPicker/createDirectory` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `directoryPicker/list` | global | 一元 | — | — | ✓ | Full 专属管理面 |
-| `dynamicCordisRunner/define` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `dynamicCordisRunner/getClientCode` | global | 一元 | — | — | ✓ | Full 专属管理面 |
-| `dynamicCordisRunner/getDefinition` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `dynamicCordisRunner/inventory` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `dynamicCordisRunner/invoke` | global | 一元 | — | — | ✓ | Full 专属管理面 |
-| `dynamicCordisRunner/list` | global | 一元 | — | — | ✓ | Full 专属管理面 |
-| `dynamicCordisRunner/queryRunning` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `dynamicCordisRunner/reportClientGuardFailure` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `dynamicCordisRunner/reportRenderFailure` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `dynamicCordisRunner/resolveInspectQuery` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `dynamicCordisRunner/resolveRequestRun` | global | 一元 | — | — | ✓ | Full 专属管理面 |
-| `dynamicCordisRunner/run` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `dynamicCordisRunner/runHostHalf` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `dynamicCordisRunner/settleUserRun` | global | 一元 | — | — | ✓ | Full 专属管理面 |
-| `dynamicCordisRunner/stop` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `dynamicCordisRunner/stopFromPanel` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `dynamicCordisRunner/syncInspectManifest` | global | 一元 | — | — | ✓ | Full 专属管理面 |
-| `dynamicCordisRunner/undefine` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `dynamicCordisRunner/undefineFromPanel` | global | 一元 | — | — | ✓ | Full 专属管理面 |
 | `goals/clear` | global | 一元 | — | — | ✓ | 文件/终端 |
 | `goals/complete` | global | 一元 | — | ✓ | ✓ | 会话驱动 |
@@ -148,7 +141,7 @@
 | `workspace/unarchiveSession` | global | 一元 | — | ✓ | ✓ | 会话驱动 |
 | `workspace/unpinSession` | global | 一元 | — | ✓ | ✓ | 会话驱动 |
 
-### 2.2 session 资源（38 个）
+### 2.2 session 资源（39 个）
 
 | endpoint | 资源 | 形式 | 只读 | 控制 | 完全 | 判定依据 |
 | --- | --- | --- | :---: | :---: | :---: | --- |
@@ -174,6 +167,7 @@
 | `sessionReferenceResolver/candidates` | session | 一元 | ✓ | ✓ | ✓ | 只读业务 |
 | `skills/list` | session | 一元 | ✓ | ✓ | ✓ | 只读业务 |
 | `subagents/interruptByParent` | session | 一元 | — | ✓ | ✓ | 会话驱动 |
+| `subagents/interruptByUser` | session | 一元 | — | ✓ | ✓ | 会话驱动 |
 | `subagents/prompt` | session | 一元 | — | ✓ | ✓ | 会话驱动 |
 | `terminal/attach` | session | stream | — | — | ✓ | 文件/终端 |
 | `terminal/close` | session | 一元 | — | — | ✓ | 文件/终端 |
@@ -228,13 +222,28 @@
 > 明文密钥不会出现在日志里。审批机制本身保留在 `host/src/sensitive-approval.ts`，
 > 需要恢复时只需往 `APPROVAL_REQUIRED_ENDPOINTS` 加回条目。
 
-## 4. 未授予任何角色的 endpoint（3 个）
+## 4. 未授予任何角色的 endpoint（18 个）
 
 这些方法登记在网络可见的 endpoint 表里（用于对账与未来的窄化设计），但任何角色都无法调用：
 
 | endpoint | 资源 | 形式 | 归类 |
 | --- | --- | --- | --- |
 | `directoryPicker/pick` | global | 一元 | 红线（逐条枚举） |
+| `hub/localPluginManager/cancelInstall` | global | hub 自有 | 红线（前缀 `hub/localPluginManager/*`） |
+| `hub/localPluginManager/fastestRegistry` | global | hub 自有 | 红线（前缀 `hub/localPluginManager/*`） |
+| `hub/localPluginManager/inspect` | global | hub 自有 | 红线（前缀 `hub/localPluginManager/*`） |
+| `hub/localPluginManager/installBundle` | global | hub 自有 | 红线（前缀 `hub/localPluginManager/*`） |
+| `hub/localPluginManager/listBundles` | global | hub 自有 | 红线（前缀 `hub/localPluginManager/*`） |
+| `hub/localPluginManager/listInventory` | global | hub 自有 | 红线（前缀 `hub/localPluginManager/*`） |
+| `hub/localPluginManager/listPlugins` | global | hub 自有 | 红线（前缀 `hub/localPluginManager/*`） |
+| `hub/localPluginManager/listVersions` | global | hub 自有 | 红线（前缀 `hub/localPluginManager/*`） |
+| `hub/localPluginManager/readBundleDetail` | global | hub 自有 | 红线（前缀 `hub/localPluginManager/*`） |
+| `hub/localPluginManager/registries` | global | hub 自有 | 红线（前缀 `hub/localPluginManager/*`） |
+| `hub/localPluginManager/removeBundle` | global | hub 自有 | 红线（前缀 `hub/localPluginManager/*`） |
+| `hub/localPluginManager/setBundleEnabled` | global | hub 自有 | 红线（前缀 `hub/localPluginManager/*`） |
+| `hub/localPluginManager/setPluginEnabled` | global | hub 自有 | 红线（前缀 `hub/localPluginManager/*`） |
+| `hub/localPluginManager/updateBundle` | global | hub 自有 | 红线（前缀 `hub/localPluginManager/*`） |
+| `hub/localPluginManager/waitForInstall` | global | hub 自有 | 红线（前缀 `hub/localPluginManager/*`） |
 | `session/openWorkspacePath` | global | 一元 | 未授予任何角色 |
 | `session/page` | session | 一元 | 未授予任何角色 |
 
