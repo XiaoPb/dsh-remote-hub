@@ -282,9 +282,13 @@ export function compileCssModule(source, fileId) {
  * @returns ES 模块源码。
  */
 export function moduleSource(fileId, compiled, prelude) {
+  // 编译产物文件名是 `x.module.css.mjs`，但**样式表标识**必须是 `x.module.css`：
+  // 它同时是 `data-plugin-css` 的值、类名哈希种子，以及面板 `installStylesheet()` 的键。
+  // 带上 `.mjs` 后缀会让运行期永远找不到这张表（2026-11-14 沙箱实测：样式一条都不注入）。
+  const sheetId = String(fileId).replace(/\.mjs$/u, '')
   return [
     `import { __dshLocalRegisterStylesheet } from ${JSON.stringify(prelude)}`,
-    `__dshLocalRegisterStylesheet(${JSON.stringify(fileId)}, {`,
+    `__dshLocalRegisterStylesheet(${JSON.stringify(sheetId)}, {`,
     `  classes: ${JSON.stringify(compiled.classes)},`,
     `  text: ${JSON.stringify(compiled.text)},`,
     '})',

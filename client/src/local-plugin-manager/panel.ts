@@ -36,7 +36,34 @@ import { activeLanguage, bindLanguage, registerDictionaries, translate } from '.
 export const LOCAL_PANEL_ID = LOCAL_PANEL_KEY
 
 /** 样式表标识（`data-plugin-css` 的值，与编译期生成的 id 一致）。 */
-const STYLESHEET_ID = 'PluginManagerPage.module.css'
+
+/**
+ * 除主页面外还要在挂载时注入的样式表。
+ *
+ * 官方页面把 `css.*` 类名分散在 `PluginManagerPage.module.css` 与若干原子组件里；
+ * 少注入任何一张，对应控件就会退化成浏览器原生外观（2026-11-14 实机：按钮就是原生控件）。
+ * 这里是**全部** vendored 样式表（`scripts/copy-client-css.mjs` 编译进 bundle 的那些）。
+ */
+const STYLESHEET_IDS: readonly string[] = [
+  'PluginManagerPage.module.css',
+  'Button.module.css',
+  'Checkbox.module.css',
+  'CommandText.module.css',
+  'DetailDocument.module.css',
+  'MenuSurface.module.css',
+  'Input.module.css',
+  'Menu.module.css',
+  'Modal.module.css',
+  'Pill.module.css',
+  'SegmentedTabs.module.css',
+  'ShortcutKeys.module.css',
+  'StateDot.module.css',
+  'Switch.module.css',
+  'Tag.module.css',
+  'TerminalBlock.module.css',
+  'Toast.module.css',
+  'Tooltip.module.css',
+]
 
 /** 宿主槽位注册表的最小形状。 */
 interface SlotsFace {
@@ -128,8 +155,20 @@ export function mountLocalPluginsPanel(
     else setup()
   }
 
-  // ③ 样式：编译期打进 bundle 的那份 CSS，挂载时注入一次（卸载时移除）。
-  installStylesheet(STYLESHEET_ID)
+  // ③ 样式：把 vendored 的每一张样式表都注入一次（卸载时全部移除）。
+  //    只注入主页面那张会让原子组件退回浏览器默认外观 —— 按钮就是原生 `<button>`。
+  const installed: string[] = []
+  for (const id of STYLESHEET_IDS) {
+    try {
+      installStylesheet(id)
+      installed.push(id)
+    } catch (error) {
+      // 某张表没打进 bundle：其余样式照常注入，不整体失败。
+      // 打开 `globalThis.__DSH_REMOTE_HUB_DEBUG__ = true` 可看到具体原因。
+      const debug = (globalThis as { __DSH_REMOTE_HUB_DEBUG__?: boolean }).__DSH_REMOTE_HUB_DEBUG__ === true
+      if (typeof console !== 'undefined') console.warn(`dsh-remote-hub: stylesheet ${id} was not injected`, debug ? error : '')
+    }
+  }
 
   // ④ 主面板：官方页面组件 + 本地 face。不声明 `plugins.*` 子槽（ADR-004）。
   declare('main', () => {
@@ -177,7 +216,8 @@ export function mountLocalPluginsPanel(
       subscription.dispose()
       transport.dispose()
       controller.dispose()
-      removeStylesheet(STYLESHEET_ID)
+      for (const id of installed) removeStylesheet(id)
+      installed.length = 0
     },
   }
 }

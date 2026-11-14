@@ -127,3 +127,30 @@ test('官方样式表：哈希与文件标识绑定（不同文件不撞名）',
   const b = compileCssModule('.page{color:red}', 'b.module.css')
   assert.notEqual(a.classes.page, b.classes.page)
 })
+
+test('样式表标识必须是 x.module.css（构建产物名带 .mjs，但注册名不能带）', () => {
+  // 2026-11-14 沙箱实测：若注册名带 `.mjs`，面板的 installStylesheet('X.module.css') 永远取不到表，
+  // 一条样式都不注入，按钮退化成原生控件。
+  const compiled = compileCssModule('.a{color:red}', 'Button.module.css')
+  const source = moduleSource('Button.module.css.mjs', compiled, './css-modules.js')
+  assert.match(source, /__dshLocalRegisterStylesheet\("Button\.module\.css",/u)
+  assert.ok(!source.includes('.css.mjs"'), 'the registered id must not carry the artifact suffix')
+})
+
+test('真实 client bundle 里的每一张样式表都以 x.module.css 注册', () => {
+  const bundle = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const ids = [...new Set([...bundle.matchAll(/__dshLocalRegisterStylesheet\("([^"]+)"/gu)].map(match => match[1]))]
+  assert.ok(ids.length > 0, 'the bundle must carry compiled stylesheets')
+  for (const id of ids) {
+    assert.match(id, /\.module\.css$/u, `stylesheet id must be x.module.css, got ${id}`)
+  }
+})
+
+test('面板声明的样式表清单与 bundle 实际注册的完全一致', () => {
+  // 少一张 → 对应控件退回浏览器原生外观；多一张 → 运行期 warn（说明清单漂移了）。
+  const bundle = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+  const registered = [...new Set([...bundle.matchAll(/__dshLocalRegisterStylesheet\("([^"]+)"/gu)].map(m => m[1]))].sort()
+  const panel = readFileSync(new URL('../client/src/local-plugin-manager/panel.ts', import.meta.url), 'utf8')
+  const declared = [...panel.matchAll(/^ {2}'([A-Za-z]+\.module\.css)',$/gmu)].map(m => m[1]).sort()
+  assert.deepEqual(declared, registered)
+})

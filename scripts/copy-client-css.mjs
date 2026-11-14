@@ -68,23 +68,34 @@ for (const file of walk(from)) {
   if (!file.endsWith('.module.css')) continue
   const target = join(to, relative(from, file))
   mkdirSync(dirname(target), { recursive: true })
+  // id 必须是**原始文件名**（`Button.module.css`）：它同时是 `data-plugin-css` 的值与类名哈希种子，
+  // 面板按 `installStylesheet('Button.module.css')` 取表。若带上 `.mjs` 后缀，运行期永远找不到它，
+  // 结果一条样式都不会注入（2026-11-14 沙箱实测：按钮退化成原生控件）。
   const fileId = file.split(/[\\/]/u).slice(-1)[0]
-  const sheet = compileCssModule(readFileSync(file, 'utf8'), fileId)
+  const sheet = compileCssModule(readFileSync(file, 'utf8'), fileId.replace(/\.mjs$/u, ''))
   const depth = relative(to, dirname(target)).split(/[\\/]/u).filter(part => part !== '').length
   // 编译产物放在被编译样式表**同一目录**（`x.module.css.mjs`）。回来的路径只有两种：
   // `local-plugin-manager/` 顶层的文件用 `./css-modules.js`，`ui/` 之类的下一层用 `../css-modules.js`。
   // rolldown 不接受「先向上越级再向下」的多段相对路径，所以只生成这两种形态。
   const prelude = `${'../'.repeat(Math.max(depth - 1, 0))}${depth > 1 ? '' : './'}css-modules.js`
-  writeFileSync(`${target}.mjs`, moduleSource(fileId, sheet, prelude), 'utf8')
+  // 产物文件名是 `x.module.css.mjs`；样式表**标识**保持 `x.module.css`（见上）。
+  writeFileSync(`${target}.mjs`, moduleSource(`${fileId}.mjs`, sheet, prelude), 'utf8')
   compiled += 1
 }
 
 // ② 把产物 JS 里的 `'./x.module.css'` 改写成 `'./x.module.css.mjs'`。
 let rewritten = 0
 for (const file of walk(to)) {
-  if (!file.endsWith('.js') && !file.endsWith('.mjs')) continue
+  // 只改**源码产物**（`client/src/**` 下 tsc emit 出来的 .js），且**幂等**：
+  // `.module.css` 后面已经跟着 `.mjs` 的不再重复加后缀。
+  // ⚠️ 2026-11-14：早先这里把 `lib/client.js` 也当 `.js` 处理过（产物目录擦边），
+  // 结果样式表标识被二次改写，面板样式一条都注入不进去。
+  if (!file.endsWith('.js')) continue
   const source = readFileSync(file, 'utf8')
-  const next = source.replace(/(\.module\.css)(?=['"])/gu, '$1.mjs')
+  // ⚠️ 只改**模块说明符**：`from './x.module.css'` / `import('./x.module.css')`。
+  // 不能改普通字符串 —— `panel.ts` 里 `installStylesheet('Button.module.css')` 是**运行时键**，
+  // 带上 `.mjs` 就再也找不到登记表（2026-11-14：面板样式一条都注入不进去，按钮退回原生外观）。
+  const next = source.replace(/(\bfrom\s*|\bimport\s*\(\s*)(['"])([^'"]*\.module\.css)\2/gu, '$1$2$3.mjs$2')
   if (next === source) continue
   writeFileSync(file, next, 'utf8')
   rewritten += 1
