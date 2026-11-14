@@ -29,6 +29,19 @@
   数学公式），并修复嵌套图片语法 `[![alt](img)](href)` 被当作文本泄漏的问题。
 - **内置卡片缺少说明**：从各插件词典取回副标题文案。
 
+### 文档
+
+- **新增 [docs/USAGE.md](docs/USAGE.md)**：面向首次使用者的安装 / 使用指南，覆盖
+  本机自用、**局域网内使用**（`network: 'lan'` + 私有地址绑定 + Origin 围栏要点）与
+  **隧道远程接入**（`publicAuthorities` / cloudflared / 完整往返流程 / 自检清单）三档，
+  并给出三档配置对照与常见问题。
+- **新增 [docs/TUNNEL.md](docs/TUNNEL.md)**：按平台给出完整的隧道部署教程
+  （Windows / Linux / macOS），覆盖 Cloudflare 命名隧道的安装、登录、`config.yml`、
+  `ingress validate` 校验、DNS 路由、后台常驻与验证；含 Windows 服务方式的凭证目录
+  （`systemprofile`）这一高频坑、自有服务器 SSH 反向隧道 + nginx 反代、
+  Quick Tunnel 与 Tailscale 方案，以及排错对照表与上线自检清单。
+  文中 Cloudflare 步骤已对照官方文档核对。
+
 ### 兼容性
 
 - **端点差异按版本隔离**：0.2.2-rc.1 与 rc.2 之间有 18 个端点不同（含

@@ -3,6 +3,8 @@
 Public documentation describes the current release only.
 
 - [README (中文)](../README.md) ｜ [README (English)](../README.en.md): features, installation, limitations.
+- [Getting started](USAGE.md): install, first run, LAN access, tunnel-based remote operation.
+- [Tunnel deployment](TUNNEL.md): expose the guard through Cloudflare Tunnel / own server / Tailscale, per platform (Windows, Linux, macOS).
 - [Deployment](DEPLOY.md): Host setup, guard exposure, operations.
 - [Release process](RELEASE.md): CI/CD versioning, publishing controls, troubleshooting.
 - [Architecture](ARCHITECTURE.md): data paths, identity, authorization, persistence.
