@@ -43,6 +43,10 @@ export interface AccountPageState {
   policy: PasswordPolicy
   /** 对端账号（出站信任记录）——与本机账号是两套身份。 */
   peers: readonly PeerAccountRow[]
+  /** TOTP 绑定流程中的一次性材料（start 之后、确认之前）。 */
+  totp: { secret: string; otpauth: string; backupCodes: readonly string[] } | null
+  /** TOTP 表单草稿（确认码 / 关闭时所需口令）。 */
+  totpDraft: { code: string; password: string }
   /**
    * 待确认的提权：服务端拒绝把上限抬高（要求新鲜 2FA）时记录目标，
    * 页面显示「验证以提权」表单，验证通过后自动重试。
@@ -80,6 +84,16 @@ export interface AccountPageActions {
   onEscalationSubmit(): void
   /** 放弃提权。 */
   onEscalationCancel(): void
+  /** 开始绑定两步验证（返回一次性密钥）。 */
+  onStartTotp(): void
+  /** 修改 TOTP 表单草稿。 */
+  onTotpChange(field: 'code' | 'password', value: string): void
+  /** 用 6 位码确认绑定。 */
+  onConfirmTotp(): void
+  /** 关闭两步验证（口令 + 动态码）。 */
+  onDisableTotp(): void
+  /** 取消绑定流程。 */
+  onCancelTotp(): void
   onTrustClient(label: string, ceiling: RoleName): void
   onRevokeClient(clientId: string): void
   onSetRole(clientId: string, role: RoleName): void
@@ -422,6 +436,10 @@ export function renderAccountPage(
   const active = clients.filter(client => client.revokedAt === null)
   // 兼容早期调用方（未提供该字段即视为无待确认提权）。
   const escalation = state.escalation ?? null
+  const totpEnabled = status?.totpEnabled === true
+  // 旧调用方可能没有这两个字段。
+  const totp = state.totp ?? null
+  const totpDraft = state.totpDraft ?? { code: '', password: '' }
   return React.createElement('div', { 'data-testid': 'account-page', 'data-phase': 'ready' },
     header,
     // 两套账号必须分开显示：本机账号决定「谁能登录这台机器」，
@@ -511,6 +529,83 @@ export function renderAccountPage(
       style: { ...buttonStyle, marginTop: 10 },
     }, '保存新口令'),
     passwordChecklist(draft, state.policy, status?.username ?? '')),
+
+    React.createElement('section', { 'data-testid': 'totp-section', style: { marginTop: 18 } },
+      React.createElement('strong', { style: { fontSize: 13, display: 'block' } },
+        `两步验证${totpEnabled ? '（已启用）' : '（未启用）'}`),
+      React.createElement('p', { style: { fontSize: 12, color: 'var(--dsw-alias-text-tertiary, #8b949e)', margin: '4px 0 8px' } },
+        '信任浏览器与跨机登记公钥都要求先绑定两步验证；绑定后登录需要输入动态码。'),
+      totpEnabled
+        ? React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' } },
+          React.createElement('input', {
+            type: 'password',
+            'data-testid': 'totp-disable-password',
+            placeholder: '当前口令',
+            value: totpDraft.password,
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
+              actions.onTotpChange('password', event.currentTarget.value),
+            style: { ...buttonStyle, padding: '8px 10px', flex: '1 1 160px' },
+          }),
+          React.createElement('input', {
+            type: 'text',
+            inputMode: 'numeric',
+            'data-testid': 'totp-disable-code',
+            placeholder: '6 位动态码',
+            value: totpDraft.code,
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
+              actions.onTotpChange('code', event.currentTarget.value),
+            style: { ...buttonStyle, padding: '8px 10px', width: 140 },
+          }),
+          React.createElement('button', {
+            type: 'button',
+            'data-testid': 'totp-disable',
+            disabled: state.busy || totpDraft.password === '' || totpDraft.code === '',
+            onClick: () => actions.onDisableTotp(),
+            style: { ...buttonStyle, color: 'var(--dsw-alias-state-error-primary, #f85149)' },
+          }, '关闭两步验证'))
+        : totp === null
+          ? React.createElement('button', {
+            type: 'button',
+            'data-testid': 'totp-start',
+            disabled: state.busy,
+            onClick: () => actions.onStartTotp(),
+            style: buttonStyle,
+          }, '开始绑定两步验证')
+          : React.createElement('div', null,
+            React.createElement('p', { style: { fontSize: 12, color: 'var(--dsw-alias-text-tertiary, #8b949e)', margin: '0 0 6px' } },
+              '用认证器 App 导入下面的密钥，然后填 6 位动态码确认；备用码只显示这一次。'),
+            React.createElement('code', { 'data-testid': 'totp-secret', style: { fontSize: 12, wordBreak: 'break-all' } },
+              totp.secret),
+            React.createElement('div', {
+              'data-testid': 'totp-otpauth',
+              style: { fontSize: 11, color: 'var(--dsw-alias-text-tertiary, #8b949e)', wordBreak: 'break-all', margin: '4px 0' },
+            }, totp.otpauth),
+            React.createElement('div', { 'data-testid': 'totp-backup-codes', style: { fontSize: 11.5, margin: '4px 0 8px', wordBreak: 'break-all' } },
+              `备用码：${totp.backupCodes.join(' ')}`),
+            React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+              React.createElement('input', {
+                type: 'text',
+                inputMode: 'numeric',
+                'data-testid': 'totp-confirm-code',
+                placeholder: '6 位动态码',
+                value: totpDraft.code,
+                onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
+                  actions.onTotpChange('code', event.currentTarget.value),
+                style: { ...buttonStyle, padding: '8px 10px', width: 140 },
+              }),
+              React.createElement('button', {
+                type: 'button',
+                'data-testid': 'totp-confirm',
+                disabled: state.busy || totpDraft.code === '',
+                onClick: () => actions.onConfirmTotp(),
+                style: buttonStyle,
+              }, '确认绑定'),
+              React.createElement('button', {
+                type: 'button',
+                'data-testid': 'totp-cancel',
+                onClick: () => actions.onCancelTotp(),
+                style: buttonStyle,
+              }, '取消')))),
 
     React.createElement('section', { style: { marginTop: 18 } },
       React.createElement('strong', { style: { fontSize: 13 } }, `本机已信任的客户端（${active.length}）`),

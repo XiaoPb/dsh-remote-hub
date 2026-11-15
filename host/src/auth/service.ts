@@ -660,6 +660,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
         ready: true,
         bootstrapped: account !== null,
         mfaEnabled: requireMfa,
+        totpEnabled: account?.totp?.verified === true,
         session: session?.view ?? null,
         username: account?.username ?? null,
         // 策略是部署事实，不敏感：登录页/引导页据此显示规则清单。

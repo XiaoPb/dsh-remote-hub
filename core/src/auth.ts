@@ -37,6 +37,8 @@ export const AUTH_ROUTES = {
   policy: '/remote-auth/policy',
   /** 在当前会话上重新验证口令 + TOTP（提权前的新鲜 2FA 窗口）。 */
   reauth: '/remote-auth/reauth',
+  /** 两步验证绑定：start / confirm / disable。 */
+  totp: '/remote-auth/totp',
 } as const
 
 export type AuthRoutePath = (typeof AUTH_ROUTES)[keyof typeof AUTH_ROUTES]
@@ -173,6 +175,8 @@ export interface AuthStatusResponse {
   bootstrapped: boolean
   /** 是否启用 MFA（默认启用）。 */
   mfaEnabled: boolean
+  /** 账号是否**已绑定** TOTP（`mfaEnabled` 只表示部署是否要求 2FA）。 */
+  totpEnabled?: boolean
   /** 当前浏览器会话；未登录为 null。 */
   session: AuthSessionView | null
   /** 当前账号名（未引导时为 null）。 */

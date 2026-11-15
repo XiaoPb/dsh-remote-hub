@@ -397,6 +397,45 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
         return
       }
 
+      // ── 两步验证绑定（start / confirm / disable；都要求已登录会话）──────────
+      if (path === AUTH_ROUTES.totp) {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'method not allowed' })
+          return
+        }
+        if (!originFenceOk()) {
+          sendJson(res, 403, { ok: false, code: AUTH_ERROR_CODES.forbidden, message: 'cross-origin request refused' })
+          return
+        }
+        if (token === undefined) {
+          sendJson(res, 401, { ok: false, code: AUTH_ERROR_CODES.unauthorized, message: 'session required' })
+          return
+        }
+        const body = await readJson(req)
+        if (body === undefined) {
+          sendJson(res, 400, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'invalid body' })
+          return
+        }
+        const action = String(body.action ?? '')
+        if (action === 'start') {
+          const setup = await service.startTotpSetup(token)
+          sendJson(res, 200, { ok: true, ...setup })
+          return
+        }
+        if (action === 'confirm') {
+          await service.confirmTotp(token, String(body.code ?? ''))
+          sendJson(res, 200, { ok: true })
+          return
+        }
+        if (action === 'disable') {
+          await service.disableTotp(token, String(body.password ?? ''), String(body.code ?? ''))
+          sendJson(res, 200, { ok: true })
+          return
+        }
+        sendJson(res, 400, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'unknown action' })
+        return
+      }
+
       // ── 口令策略（设置页开关；管理员会话）──────────────────────────────────
       if (path === AUTH_ROUTES.policy) {
         if (req.method !== 'GET' && req.method !== 'POST') {

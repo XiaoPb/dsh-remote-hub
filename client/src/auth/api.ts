@@ -60,6 +60,17 @@ export interface AuthApi {
   changePassword(input: { currentPassword: string; newPassword: string }): Promise<void>
   /** 读取当前口令策略。 */
   policy(): Promise<PasswordPolicy>
+  /** 两步验证绑定（start 返回一次性密钥与备用码）。 */
+  totp(action:
+    | { action: 'start' }
+    | { action: 'confirm'; code: string }
+    | { action: 'disable'; password: string; code: string }): Promise<{
+      ok: true
+      secret?: string
+      otpauth?: string
+      backupCodes?: string[]
+      secondsRemaining?: number
+    }>
   /** 提权前重新验证（口令 + TOTP），刷新 2FA 窗口而不换会话。 */
   reauth(input: { password: string; code: string }): Promise<void>
   /** 切换口令策略（立即生效）。 */
@@ -179,6 +190,9 @@ export function createAuthApi(options: AuthApiOptions = {}): AuthApi {
     async reauth(input) {
       const response = await post(AUTH_ROUTES.reauth, input)
       if (!response.ok) throw await failure(response)
+    },
+    async totp(action) {
+      return readJson(await post(AUTH_ROUTES.totp, action))
     },
     async enroll(input) {
       return readJson<EnrollClientResponse>(await post(AUTH_ROUTES.enroll, input))

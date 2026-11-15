@@ -90,6 +90,11 @@ function noopActions() {
     onEscalationChange() {},
     onEscalationSubmit() {},
     onEscalationCancel() {},
+    onStartTotp() {},
+    onTotpChange() {},
+    onConfirmTotp() {},
+    onDisableTotp() {},
+    onCancelTotp() {},
     onSetPasswordPolicy() {},
     onTrustClient() {},
     onRevokeClient() {},
@@ -242,6 +247,8 @@ test('account page asks for bootstrap when no account exists', async () => {
       policy: 'strong',
       peers: [],
       escalation: null,
+      totp: null,
+      totpDraft: { code: '', password: '' },
       status: { ready: true, bootstrapped: false, mfaEnabled: true, session: null, username: null },
       binding: null,
       enrollment: null,
@@ -266,6 +273,8 @@ test('account page gates on MFA and never renders a session while pending', asyn
       policy: 'strong',
       peers: [],
       escalation: null,
+      totp: null,
+      totpDraft: { code: '', password: '' },
       status: { ready: true, bootstrapped: true, mfaEnabled: true, session: null, username: 'owner' },
       binding: null,
       enrollment: null,
@@ -302,6 +311,8 @@ test('ready page lists trusted clients with role controls and offers trust', asy
       policy: 'strong',
       peers: [],
       escalation: null,
+      totp: null,
+      totpDraft: { code: '', password: '' },
       status: {
         ready: true,
         bootstrapped: true,
@@ -337,6 +348,8 @@ test('first sign-in with the default account is gated on a password change', asy
       policy: 'strong',
       peers: [],
       escalation: null,
+      totp: null,
+      totpDraft: { code: '', password: '' },
       status: {
         ready: true,
         bootstrapped: true,
@@ -373,6 +386,8 @@ test('a revoked client is rendered disabled', async () => {  const markup = awai
       policy: 'strong',
       peers: [],
       escalation: null,
+      totp: null,
+      totpDraft: { code: '', password: '' },
       status: {
         ready: true,
         bootstrapped: true,
@@ -590,4 +605,44 @@ test('lazy signer reads the per-origin binding on first use', async () => {
   const missing = lazyModule.createLazySigner('http://never-trusted.test', { keyring: ring })
   await assert.rejects(() => missing.headers({ method: 'POST', path: '/remote/rpc', body: '{}' }),
     /尚未受信/u)
+})
+
+test('settings offers TOTP enrollment until it is enabled', async () => {
+  const state = (overrides) => ({
+    phase: 'ready',
+    status: {
+      ready: true, bootstrapped: true, mfaEnabled: true, totpEnabled: false, username: 'admin',
+      passwordPolicy: 'strong',
+      session: {
+        accountId: 'admin', username: 'admin', role: 'admin',
+        createdAt: new Date().toISOString(), expiresAt: Date.now() + 1000, lastMfaAt: Date.now(),
+      },
+      clients: [],
+    },
+    binding: null, enrollment: null, notice: null, busy: false, mfaToken: null,
+    policy: 'strong', peers: [], escalation: null,
+    totp: null, totpDraft: { code: '', password: '' },
+    ...overrides,
+  })
+
+  const idle = await renderMarkup(accountPage.renderAccountPage(state({}), noopActions(), accountPage.initialDraft(), () => {}))
+  assert.match(idle, /data-testid="totp-section"/u)
+  assert.match(idle, /data-testid="totp-start"/u)
+  assert.doesNotMatch(idle, /data-testid="totp-secret"/u)
+
+  const setup = await renderMarkup(accountPage.renderAccountPage(
+    state({ totp: { secret: 'ABCDEF', otpauth: 'otpauth://totp/dsh?secret=ABCDEF', backupCodes: ['aaaa-bbbb'] } }),
+    noopActions(), accountPage.initialDraft(), () => {},
+  ))
+  assert.match(setup, /data-testid="totp-secret"/u)
+  assert.match(setup, /data-testid="totp-otpauth"/u)
+  assert.match(setup, /data-testid="totp-backup-codes"/u)
+  assert.match(setup, /data-testid="totp-confirm"/u)
+
+  const enabled = await renderMarkup(accountPage.renderAccountPage(
+    state({ status: { ...state({}).status, totpEnabled: true } }),
+    noopActions(), accountPage.initialDraft(), () => {},
+  ))
+  assert.match(enabled, /data-testid="totp-disable"/u)
+  assert.doesNotMatch(enabled, /data-testid="totp-start"/u)
 })

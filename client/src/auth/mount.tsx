@@ -71,6 +71,8 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
       policy: 'strong',
       peers: [],
       escalation: null,
+      totp: null,
+      totpDraft: { code: '', password: '' },
       enrollment: null,
       notice: null,
       busy: false,
@@ -257,6 +259,48 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
       },
       onEscalationCancel() {
         patch({ escalation: null })
+      },
+      onStartTotp() {
+        patch({ busy: true, notice: null })
+        void api.totp({ action: 'start' })
+          .then(result => {
+            const secret = result.secret ?? ''
+            const otpauth = result.otpauth ?? ''
+            patch({
+              busy: false,
+              totp: { secret, otpauth, backupCodes: result.backupCodes ?? [] },
+              totpDraft: { code: '', password: '' },
+            })
+          })
+          .catch(error => patch({ busy: false, notice: messageOf(error) }))
+      },
+      onTotpChange(field, value) {
+        setState(current => ({ ...current, totpDraft: { ...current.totpDraft, [field]: value } }))
+      },
+      onConfirmTotp() {
+        patch({ busy: true, notice: null })
+        void api.totp({ action: 'confirm', code: state.totpDraft.code })
+          .then(() => {
+            patch({ busy: false, totp: null, totpDraft: { code: '', password: '' }, notice: '两步验证已启用。' })
+            return load()
+          })
+          .catch(error => patch({ busy: false, notice: messageOf(error) }))
+      },
+      onDisableTotp() {
+        patch({ busy: true, notice: null })
+        void api.totp({
+          action: 'disable',
+          password: state.totpDraft.password,
+          code: state.totpDraft.code,
+        })
+          .then(() => {
+            patch({ busy: false, totpDraft: { code: '', password: '' }, notice: '两步验证已关闭。' })
+            return load()
+          })
+          .catch(error => patch({ busy: false, notice: messageOf(error) }))
+      },
+      onCancelTotp() {
+        patch({ totp: null, totpDraft: { code: '', password: '' } })
       },
       onEscalationSubmit() {
         const pending = state.escalation
