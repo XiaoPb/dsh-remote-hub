@@ -354,6 +354,33 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
         return
       }
 
+      // ── 提权前的重新验证（口令 + TOTP，只刷新 2FA 窗口）────────────────────
+      if (path === AUTH_ROUTES.reauth) {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'method not allowed' })
+          return
+        }
+        if (!originFenceOk()) {
+          sendJson(res, 403, { ok: false, code: AUTH_ERROR_CODES.forbidden, message: 'cross-origin request refused' })
+          return
+        }
+        if (token === undefined) {
+          sendJson(res, 401, { ok: false, code: AUTH_ERROR_CODES.unauthorized, message: 'session required' })
+          return
+        }
+        const body = await readJson(req)
+        if (body === undefined) {
+          sendJson(res, 400, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'invalid body' })
+          return
+        }
+        const result = await service.reauth(token, {
+          password: String(body.password ?? ''),
+          code: String(body.code ?? ''),
+        })
+        sendJson(res, 200, result)
+        return
+      }
+
       // ── 口令策略（设置页开关；管理员会话）──────────────────────────────────
       if (path === AUTH_ROUTES.policy) {
         if (req.method !== 'GET' && req.method !== 'POST') {

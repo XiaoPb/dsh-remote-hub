@@ -119,6 +119,15 @@ export interface AuthService extends HubAuthPort {
   revokeClient(sessionToken: string | undefined, clientId: string): Promise<void>
   setActiveRole(sessionToken: string | undefined, clientId: string, role: RoleName): Promise<TrustedClientView>
   setRoleCeiling(sessionToken: string | undefined, clientId: string, role: RoleName): Promise<TrustedClientView>
+  /**
+   * 在当前会话上重新做一次双因素验证（口令 + TOTP/备用码）。
+   *
+   * 只刷新 `lastMfaAt`（提权窗口），不签发新会话。
+   */
+  reauth(
+    sessionToken: string | undefined,
+    input: { password: string; code: string },
+  ): Promise<{ ok: true; session: AuthSessionView }>
   /** 用客户端私钥证明换取 / 轮换租约（无需浏览器会话）。 */
   renewLease(input: {
     /** 当前租约明文（`Authorization: Bearer` 里的值）。 */
@@ -569,6 +578,21 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     return session
   }
 
+  /**
+   * 提权前的「新鲜双因素」检查。
+   *
+   * 只对**抬高**权限的动作生效（例如把客户端上限提到 `full`）：一个 7 天前
+   * 验证过的会话不足以提权，必须重新过口令 + TOTP。
+   */
+  function requireFreshMfa(session: { record: SessionRecord }): void {
+    const at = session.record.lastMfaAt
+    if (at === null || now() - at > MFA_TRUST_WINDOW_MS) {
+      throw Object.assign(new Error('recent two-factor verification required to raise privileges'), {
+        code: AUTH_ERROR_CODES.mfaRequired,
+      })
+    }
+  }
+
   const service: AuthService = {
     serviceName: 'remoteHubAuth',
 
@@ -878,7 +902,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     },
 
     async setRoleCeiling(sessionToken, clientId, role) {
-      await requireReadySession(sessionToken)
+      const session = await requireReadySession(sessionToken)
       const client = store.data.clients.find(row => row.clientId === clientId)
       if (client === undefined) {
         throw Object.assign(new Error('unknown client'), { code: AUTH_ERROR_CODES.clientInvalid })
@@ -886,6 +910,10 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       if (!isRoleName(role)) {
         throw Object.assign(new Error('invalid role'), { code: AUTH_ERROR_CODES.badRequest })
       }
+      // 提权（把上限抬高）必须来自**新鲜**的双因素验证；降级/不变不要求。
+      // 否则一个被盗的 7 天会话就能把客户端推到 full，与「2FA 之后才提权」相悖。
+      const raising = role !== client.roleCeiling && !roleAtMost(role, client.roleCeiling)
+      if (raising) requireFreshMfa(session)
       await store.mutate((data) => {
         const row = data.clients.find(item => item.clientId === clientId)
         if (row === undefined) return
@@ -895,6 +923,48 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       const next = store.data.clients.find(row => row.clientId === clientId)!
       for (const listener of [...roleListeners]) listener(clientId, next.activeRole)
       return clientView(next)
+    },
+
+    /**
+     * 在当前会话上重新做一次双因素验证（口令 + TOTP/备用码）。
+     *
+     * 只刷新 `lastMfaAt`，**不**签发新会话：避免提权时把旧会话悄悄换成一个
+     * 全新的 7 天凭据。
+     */
+    async reauth(sessionToken, input) {
+      const session = await requireReadySession(sessionToken)
+      const account = accountOf(store)
+      if (account === null) {
+        throw Object.assign(new Error('account missing'), { code: AUTH_ERROR_CODES.forbidden })
+      }
+      const password = String(input.password ?? '')
+      if (password === '' || !await verifyPassword(password, account.passwordHash)) {
+        throw Object.assign(new Error('invalid password'), { code: AUTH_ERROR_CODES.invalidCredentials })
+      }
+      if (account.totp?.verified !== true) {
+        throw Object.assign(new Error('MFA is not enabled'), { code: AUTH_ERROR_CODES.mfaRequired })
+      }
+      const code = String(input.code ?? '').trim()
+      let ok = /^\d{6}$/u.test(code) && verifyTotp(account.totp.secret, code, { now })
+      if (!ok) {
+        const hash = hashBackupCode(code.toUpperCase())
+        const entry = account.backupCodes?.find(row => row.hash === hash && row.usedAt === undefined)
+        if (entry !== undefined) {
+          entry.usedAt = now()
+          ok = true
+        }
+      }
+      if (!ok) {
+        throw Object.assign(new Error('invalid code'), { code: AUTH_ERROR_CODES.mfaInvalid })
+      }
+      const at = now()
+      await store.mutate((data) => {
+        const row = data.sessions.find(item => item.sid === session.record.sid)
+        if (row !== undefined) row.lastMfaAt = at
+        if (data.account !== null) data.account.lastLoginAt = at
+      })
+      const view = sessionView(store.data.sessions.find(item => item.sid === session.record.sid)!)
+      return { ok: true as const, session: view }
     },
 
     async renewLease(input) {

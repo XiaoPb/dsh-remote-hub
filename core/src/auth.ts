@@ -35,6 +35,8 @@ export const AUTH_ROUTES = {
   password: '/remote-auth/password',
   /** 口令策略读取 / 切换（仅管理员）。 */
   policy: '/remote-auth/policy',
+  /** 在当前会话上重新验证口令 + TOTP（提权前的新鲜 2FA 窗口）。 */
+  reauth: '/remote-auth/reauth',
 } as const
 
 export type AuthRoutePath = (typeof AUTH_ROUTES)[keyof typeof AUTH_ROUTES]
