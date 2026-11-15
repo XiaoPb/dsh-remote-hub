@@ -27,7 +27,7 @@ import net from 'node:net'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import type { IncomingMessage } from 'node:http'
 
-import { GUARD_ROUTES, HUB_PROTOCOL_HEADER, PROTOCOL_VERSION, type HubAuthPort, type RoleName } from '@core/index.js'
+import { GUARD_ROUTES, HUB_PROTOCOL_HEADER, PROTOCOL_VERSION, type AuthHttpSurface, type HubAuthPort, type RoleName } from '@core/index.js'
 
 import { createApprovalBridge, deviceTargetsResolver, type ApprovalAuditRow } from './approval-bridge.js'
 import { Config, DEFAULT_CONFIG, validateConfig, type Config as ConfigType } from './config.js'
@@ -390,22 +390,28 @@ export function applyRemoteHub(ctx: Context, config: ConfigType = DEFAULT_CONFIG
   const deps: string[] = ['connection', 'typertGateway', 'remoteAccess']
   // 账号认证开启时，再加一等公民依赖：认证插件 `provide('remoteHubAuth')`。
   // 认证插件缺席/未就绪 → 回调不执行 → 守卫不监听（fail-closed，零暴露）。
-  if (config.accountAuth.enabled) deps.push('remoteHubAuth')
+  if (config.accountAuth.enabled) deps.push('remoteHubAuth', 'remoteHubAuthHttp')
   ;(ctx as unknown as {
     inject(deps: readonly string[], callback: (scoped: Context) => void): { dispose?: () => unknown } | undefined
   }).inject(deps, scoped => {
     writeStatus(config, { phase: 'services-ready', accountAuth: config.accountAuth.enabled })
-    const auth = config.accountAuth.enabled
-      ? (ctx as unknown as {
-        reflect?: { get?: (name: string, strict?: boolean) => unknown }
-      }).reflect?.get?.('remoteHubAuth', false) as HubAuthPort | undefined
-      : undefined
-    if (config.accountAuth.enabled && auth === undefined) {
+    const read = (name: string): unknown => {
+      try {
+        return (ctx as unknown as {
+          reflect?: { get?: (service: string, strict?: boolean) => unknown }
+        }).reflect?.get?.(name, false)
+      } catch {
+        return undefined
+      }
+    }
+    const auth = config.accountAuth.enabled ? read('remoteHubAuth') as HubAuthPort | undefined : undefined
+    const authHttp = config.accountAuth.enabled ? read('remoteHubAuthHttp') as AuthHttpSurface | undefined : undefined
+    if (config.accountAuth.enabled && (auth === undefined || authHttp === undefined)) {
       // 声明了依赖却拿不到实现：宁可不开门。
       writeStatus(config, { phase: 'failed', stage: 'auth-service', error: 'remoteHubAuth missing' })
       return
     }
-    assembleRemoteHub(scoped, config, auth)
+    assembleRemoteHub(scoped, config, auth, authHttp)
   })
 
   // ── 本地插件管理直连通道：**独立的注入 fiber** ────────────────────────────────
@@ -577,7 +583,12 @@ function withHostOrigin(request: IncomingMessage, hostOrigin: string): IncomingM
 export type GuardWsInjection = NonNullable<GuardDeps['ws']>
 
 /** `ctx.inject` 回调里的真实装配（三个服务此时已就绪）。 */
-function assembleRemoteHub(ctx: Context, config: ConfigType, auth?: HubAuthPort): void {
+function assembleRemoteHub(
+  ctx: Context,
+  config: ConfigType,
+  auth?: HubAuthPort,
+  authHttp?: AuthHttpSurface,
+): void {
   ctx.effect(async () => {
     const disposers: (() => void | Promise<void>)[] = []
     const push = (dispose: () => void | Promise<void>): void => { disposers.push(dispose) }
@@ -809,6 +820,7 @@ function assembleRemoteHub(ctx: Context, config: ConfigType, auth?: HubAuthPort)
         onSessionDisplaced: deviceId => { dropDevice(deviceId, 'displaced') },
         ...(ws === undefined ? {} : { ws }),
         ...(auth === undefined ? {} : { auth }),
+        ...(authHttp === undefined ? {} : { authHttp }),
       })
       at('guard:up')
       push(() => guard?.dispose())

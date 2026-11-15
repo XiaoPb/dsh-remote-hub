@@ -86,6 +86,8 @@ describe('守卫：账号认证模式', () => {
   let enrolled
   let key
   let store
+  let totpSecret
+  let clockNow = () => Date.now()
 
   before(async () => {
     dir = await mkdtemp(join(tmpdir(), 'hub-auth-guard-'))
@@ -97,10 +99,12 @@ describe('守卫：账号认证模式', () => {
     }
 
     store = await auth.createAuthStore(join(dir, 'auth.json'))
-    let clock = Date.now()
-    service = auth.createAuthService({ store, now: () => clock })
+    const clock = Date.now()
+    clockNow = () => clock
+    service = auth.createAuthService({ store, now: clockNow })
     const boot = await service.bootstrap({ username: 'owner', password: 'Correct-Horse-9-Battery!' })
     const setup = await service.startTotpSetup(boot.cookie)
+    totpSecret = setup.secret
     await service.confirmTotp(boot.cookie, auth.totpCodeAt(setup.secret, clock))
     const login = await service.login({ username: 'owner', password: 'Correct-Horse-9-Battery!' })
     const mfa = await service.verifyMfa({
@@ -135,6 +139,14 @@ describe('守卫：账号认证模式', () => {
       devices,
       pairIssueToken: 'test-issue-token',
       auth: service,
+      // 跨源「账号 + TOTP」面：同一个处理器，头会话版本。
+      authHttp: {
+        paths: Object.values(auth.AUTH_ROUTES),
+        handle: (request, response) => auth.createAuthHandler({
+          service,
+          allowHeaderSession: true,
+        })(request, response),
+      },
     })
     base = guard.origin
   })
@@ -251,6 +263,51 @@ describe('守卫：账号认证模式', () => {
     const grant = await granted.json()
     assert.match(grant.ticket, /^[A-Za-z0-9_-]{40,}$/u)
     assert.ok(grant.expiresAt > Date.now())
+  })
+
+  it('serves the account surface on the guard for cross-origin clients', async () => {
+    // 不要求 x-hub-protocol：这是给控制端浏览器用的标准 JSON API。
+    const status = await fetch(`${base}/remote-auth/status`)
+    assert.equal(status.status, 200)
+    const statusBody = await status.json()
+    assert.equal(statusBody.bootstrapped, true)
+
+    const login = await fetch(`${base}/remote-auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'owner', password: 'wrong' }),
+    })
+    assert.equal(login.status, 401)
+    assert.equal((await login.json()).code, 'auth-invalid-credentials')
+
+    // 头会话：登录 → 第二步 → 拿 sessionToken，之后用它读写设置面。
+    const ok = await fetch(`${base}/remote-auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'owner', password: 'Correct-Horse-9-Battery!' }),
+    })
+    assert.equal(ok.status, 200)
+    const challenge = await ok.json()
+    assert.equal(challenge.mfaRequired, true, 'MFA is bound, so login stops at the second step')
+
+    const second = await fetch(`${base}/remote-auth/mfa`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        mfaToken: challenge.mfaToken,
+        code: auth.totpCodeAt(totpSecret, clockNow()),
+      }),
+    })
+    assert.equal(second.status, 200)
+    const token = (await second.json()).sessionToken
+    assert.equal(typeof token, 'string')
+    const clients = await fetch(`${base}/remote-auth/clients`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ action: 'list' }),
+    })
+    assert.equal(clients.status, 200, 'header session must authenticate without a cookie')
+    assert.equal((await clients.json()).ok, true)
   })
 
   it('refuses legacy invitation redemption while account auth is enabled', async () => {

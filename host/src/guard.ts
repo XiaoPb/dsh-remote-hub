@@ -38,6 +38,7 @@ import {
   LIMITS,
   PROTOCOL_VERSION,
   STREAM_BUDGET,
+  type AuthHttpSurface,
   type HubAuthPort,
 } from '@core/index.js'
 import { isRoleName, type RoleName } from '@core/roles.js'
@@ -138,6 +139,13 @@ export interface GuardDeps {
    * 缺省时维持旧的设备令牌路径（兼容已有部署与测试）。
    */
   auth?: HubAuthPort
+  /**
+   * 认证面的 HTTP 处理器（认证插件提供）。
+   *
+   * 给出时守卫把自己的 `/remote-auth/*` 也开出来：控制端可跨源完成
+   * 「账号 + TOTP → 登记客户端公钥」，随后用租约 + 签名访问 Hub。
+   */
+  authHttp?: AuthHttpSurface
 }
 
 /** 一次性 WS 升级票据的 TTL（秒级短窗：只能换一次握手）。 */
@@ -406,12 +414,16 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
     try {
       const url = new URL(origin)
       allowed = (url.protocol === 'http:' || url.protocol === 'https:')
-        && isLoopbackHostname(url.hostname)
+        && (isLoopbackHostname(url.hostname)
+          // 显式声明的跨机 origin（与来源围栏同一份白名单）：只放行这两个头，
+          // 不因为 CORS 而放宽认证判定。
+          || config.allowedOrigins.includes(origin))
     } catch {
       allowed = false
     }
     if (!allowed) return false
     res.setHeader('access-control-allow-origin', origin)
+    res.setHeader('access-control-allow-credentials', 'true')
     res.setHeader('vary', 'Origin')
     return true
   }
@@ -473,6 +485,10 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
 
       // ① 路由白名单：不在表里一律 404（含 /api/*、/remote/stream/*）。
       const known = new Set<string>(Object.values(GUARD_ROUTES))
+      // 认证面（账号 + TOTP → 登记客户端公钥）也开在守卫上，供控制端跨源调用。
+      const authPaths = deps.authHttp?.paths ?? []
+      for (const authPath of authPaths) known.add(authPath)
+      const isAuthPath = authPaths.includes(path)
       if (!known.has(path)) {
         reject(res, rpcId, failure(ERROR_CODES.notFound, 404, 'not found'))
         return
@@ -481,14 +497,17 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
       // ①.5 CORS 预检（必须在版本头检查之前：预检不携带自定义头）。
       if (handlePreflight(req, res, rpcId)) return
 
-      // 其它真实请求：回环 origin 需要 CORS 宣告，浏览器才能读取响应。
+      // 其它真实请求：回环 / 已声明 origin 需要 CORS 宣告，浏览器才能读取响应。
       applyLoopbackCors(req, res)
 
       // ② 自有面版本头：不符即 400，不降级、不猜测。
-      const version = req.headers[HUB_PROTOCOL_HEADER]
-      if (version !== protocolHeader) {
-        reject(res, rpcId, failure(ERROR_CODES.protocolVersionMismatch, 400, 'protocol version mismatch'))
-        return
+      //    认证面是标准 JSON API（浏览器客户端不塞自定义协议头），这里不要求版本头。
+      if (!isAuthPath) {
+        const version = req.headers[HUB_PROTOCOL_HEADER]
+        if (version !== protocolHeader) {
+          reject(res, rpcId, failure(ERROR_CODES.protocolVersionMismatch, 400, 'protocol version mismatch'))
+          return
+        }
       }
 
       // ③ 三段来源围栏（对所有路由生效，包括 health 与签发端）。
@@ -496,8 +515,8 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
         publicAuthorities: config.publicAuthorities,
         protocol,
         allowPrivate: config.network === 'lan',
-        // 本机管理端点：web 页面与守卫同主机不同端口，Origin authority 天然不等。
-        allowLoopbackCrossPortOrigin: ADMIN_ROUTE_SET.has(path),
+        // 本机管理端点 / 认证面：web 页面与守卫同主机不同端口，Origin authority 天然不等。
+        allowLoopbackCrossPortOrigin: ADMIN_ROUTE_SET.has(path) || isAuthPath,
         // 跨机接管：主控端页面的 origin 必须被显式放行（默认空 = fail-closed）。
         allowedOrigins: config.allowedOrigins,
         // lan 模式：自动放行来自私有地址的 Origin（主控端页面在对端机器上，
@@ -507,6 +526,12 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
       if (!fence.ok) {
         audit('source-rejected', { path, reason: fence.reason })
         reject(res, rpcId, failure(ERROR_CODES.forbidden, 403, 'source not allowed'))
+        return
+      }
+
+      // ③.5 认证面：交给认证插件提供的处理器（头会话，无 Cookie 依赖）。
+      if (isAuthPath && deps.authHttp !== undefined) {
+        await deps.authHttp.handle(req, res)
         return
       }
 

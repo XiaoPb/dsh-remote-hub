@@ -219,6 +219,17 @@ export function apply(ctx: Context, config: AuthConfig = DEFAULT_AUTH_CONFIG): v
     }
     push(toDisposer(provide.call(ctx, 'remoteHubAuth', service)))
 
+    // 1.5) 守卫也可挂认证面（跨源「账号 + TOTP → 登记公钥」）：
+    //      用**头会话**版本，避免跨源 Cookie 的 SameSite 限制。
+    const guardHandler = createAuthHandler({ service, secureCookie: config.secureCookie, allowHeaderSession: true })
+    push(toDisposer(provide.call(ctx, 'remoteHubAuthHttp', {
+      paths: Object.values(AUTH_ROUTES),
+      handle: (request: unknown, response: unknown) => guardHandler(
+        request as IncomingMessage,
+        response as ServerResponse,
+      ),
+    })))
+
     // 2) 挂认证 HTTP 面（webServer 就绪时）。
     const handler = createAuthHandler({ service, secureCookie: config.secureCookie })
     const mount = (): void => {

@@ -357,6 +357,22 @@ export const DEFAULT_ACCOUNT = {
 export const INITIAL_PASSWORD_FILE = 'initial-password'
 
 /**
+ * 认证面的 HTTP 处理器句柄（认证插件 `provide('remoteHubAuthHttp')`）。
+ *
+ * 守卫据此把 `/remote-auth/*` 也开在自己的监听上，让控制端能跨源完成
+ * 「账号 + TOTP → 登记客户端公钥」；同源 Web 面仍走 webServer 的 Cookie 版本。
+ */
+export interface AuthHttpSurface {
+  /** 该处理器负责的路径集合。 */
+  readonly paths: readonly string[]
+  /**
+   * 处理一次请求（请求/响应是 `node:http` 对象，跨包只按 unknown 传递）。
+   * @returns 处理完成即 resolve。
+   */
+  handle(request: unknown, response: unknown): Promise<void>
+}
+
+/**
  * 口令策略。
  *
  * - `strong`（默认）：至少 12 位，且包含小写、大写、数字、符号；不得包含用户名。
@@ -390,8 +406,7 @@ export type PasswordFailure =
   | 'contains-username'
   | 'only-whitespace'
 
-/** 一条可展示的规则。 */
-export interface PasswordRule {
+/** 一条可展示的规则。 */export interface PasswordRule {
   id: PasswordFailure
   /** 中文提示（设置页/登录页直接显示）。 */
   zh: string

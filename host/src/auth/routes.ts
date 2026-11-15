@@ -30,6 +30,13 @@ export interface AuthRouteDeps {
   service: AuthService
   /** 是否允许非 HTTPS 部署（`Secure` 属性取决于部署，默认按请求协议判断）。 */
   secureCookie?: boolean
+  /**
+   * 是否接受 `Authorization: Bearer <session>` 作为会话来源。
+   *
+   * 守卫上的认证面（跨源调用）用它替代 Cookie：跨源 Cookie 受 SameSite 限制，
+   * 而显式请求头没有「环境凭据」问题，因此也不做同源围栏。
+   */
+  allowHeaderSession?: boolean
 }
 
 const MAX_BODY_BYTES = 64 * 1024
@@ -174,7 +181,17 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
   return async function handle(req, res): Promise<void> {
     const path = new URL(req.url ?? '/', 'http://hub.invalid').pathname
     const secure = deps.secureCookie ?? (req.headers['x-forwarded-proto'] === 'https')
-    const token = cookieValue(req.headers.cookie, SESSION_COOKIE)
+    const cookieToken = cookieValue(req.headers.cookie, SESSION_COOKIE)
+    // 显式会话头（跨源/非浏览器客户端）：优先于 Cookie，且不需要同源围栏。
+    const authorization = req.headers.authorization
+    const headerToken = deps.allowHeaderSession === true
+      && typeof authorization === 'string'
+      && authorization.startsWith('Bearer ')
+      ? authorization.slice('Bearer '.length).trim()
+      : undefined
+    const token = headerToken ?? cookieToken
+    /** 无环境凭据（头）时才需要 CSRF 同源围栏。 */
+    const originFenceOk = (): boolean => headerToken !== undefined || sameOriginOk(req)
 
     try {
       // ── 状态（无鉴权）──────────────────────────────────────────────────────
@@ -201,7 +218,7 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
           })
           return
         }
-        if (!sameOriginOk(req)) {
+        if (!originFenceOk()) {
           sendJson(res, 403, { ok: false, code: AUTH_ERROR_CODES.forbidden, message: 'cross-origin request refused' })
           return
         }
@@ -217,6 +234,8 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
         sendJson(res, 200, {
           ok: true,
           session: issued.session,
+          // 头模式（守卫跨源面）需要把会话明文回给调用方；同源 Cookie 面不给。
+          ...(deps.allowHeaderSession === true ? { sessionToken: issued.cookie } : {}),
           totpSecret: issued.totpSecret,
           otpauth: issued.otpauth,
           backupCodes: issued.backupCodes,
@@ -230,7 +249,7 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
           sendJson(res, 405, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'method not allowed' })
           return
         }
-        if (!sameOriginOk(req)) {
+        if (!originFenceOk()) {
           sendJson(res, 403, { ok: false, code: AUTH_ERROR_CODES.forbidden, message: 'cross-origin request refused' })
           return
         }
@@ -261,6 +280,9 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
           ok: true,
           mfaRequired: false,
           session: result.response.session,
+          ...(result.cookie !== undefined && deps.allowHeaderSession === true
+            ? { sessionToken: result.cookie }
+            : {}),
         }, result.cookie === undefined ? undefined : sessionCookie(result.cookie, secure, 7 * 24 * 60 * 60))
         return
       }
@@ -271,7 +293,7 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
           sendJson(res, 405, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'method not allowed' })
           return
         }
-        if (!sameOriginOk(req)) {
+        if (!originFenceOk()) {
           sendJson(res, 403, { ok: false, code: AUTH_ERROR_CODES.forbidden, message: 'cross-origin request refused' })
           return
         }
@@ -290,7 +312,11 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
           return
         }
         const ok = issued as { session: unknown; cookie: string }
-        sendJson(res, 200, { ok: true, session: ok.session }, sessionCookie(ok.cookie, secure, 7 * 24 * 60 * 60))
+        sendJson(res, 200, {
+          ok: true,
+          session: ok.session,
+          ...(deps.allowHeaderSession === true ? { sessionToken: ok.cookie } : {}),
+        }, sessionCookie(ok.cookie, secure, 7 * 24 * 60 * 60))
         return
       }
 
@@ -311,7 +337,7 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
           sendJson(res, 405, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'method not allowed' })
           return
         }
-        if (!sameOriginOk(req)) {
+        if (!originFenceOk()) {
           sendJson(res, 403, { ok: false, code: AUTH_ERROR_CODES.forbidden, message: 'cross-origin request refused' })
           return
         }
@@ -334,7 +360,7 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
           sendJson(res, 405, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'method not allowed' })
           return
         }
-        if (!sameOriginOk(req)) {
+        if (!originFenceOk()) {
           sendJson(res, 403, { ok: false, code: AUTH_ERROR_CODES.forbidden, message: 'cross-origin request refused' })
           return
         }
@@ -363,7 +389,7 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
           sendJson(res, 405, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'method not allowed' })
           return
         }
-        if (!sameOriginOk(req)) {
+        if (!originFenceOk()) {
           sendJson(res, 403, { ok: false, code: AUTH_ERROR_CODES.forbidden, message: 'cross-origin request refused' })
           return
         }
@@ -392,7 +418,7 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
           sendJson(res, 405, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'method not allowed' })
           return
         }
-        if (!sameOriginOk(req)) {
+        if (!originFenceOk()) {
           sendJson(res, 403, { ok: false, code: AUTH_ERROR_CODES.forbidden, message: 'cross-origin request refused' })
           return
         }
