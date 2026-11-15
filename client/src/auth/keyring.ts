@@ -42,6 +42,8 @@ const DB_NAME = 'dsh-remote-hub-auth'
 const STORE_NAME = 'client-keys'
 const RECORD_KEY = 'primary'
 const BINDING_KEY = 'binding'
+/** 按 origin 存绑定的键前缀（一个浏览器可同时受信于多台目标）。 */
+const BINDING_ORIGIN_PREFIX = 'binding:'
 
 /** 是否支持 IndexedDB（Node / 隐私模式没有）。 */
 function indexedDbAvailable(): boolean {
@@ -204,39 +206,72 @@ export function createKeyring(backend?: KeyringBackend): {
   load(): Promise<ClientIdentity | null>
   loadOrCreate(): Promise<{ identity: ClientIdentity; created: boolean }>
   clear(): Promise<void>
-  loadBinding(): Promise<ClientBinding | null>
-  saveBinding(binding: ClientBinding): Promise<void>
-  clearBinding(): Promise<void>
+  /**
+   * 读取某个 origin 的绑定。
+   *
+   * 一个浏览器可能同时受信于多台目标（本机 + 若干对端），所以绑定必须按
+   * origin 分开存；只存一份会让「连第二台」覆盖掉第一台（P7）。
+   * @param origin - 目标 origin；缺省用当前页面 origin。
+   */
+  loadBinding(origin?: string): Promise<ClientBinding | null>
+  /** 写入某个 origin 的绑定。 */
+  saveBinding(binding: ClientBinding, origin?: string): Promise<void>
+  /** 删除某个 origin 的绑定。 */
+  clearBinding(origin?: string): Promise<void>
 } {
   const store = backend ?? (indexedDbAvailable() ? indexedDbBackend() : memoryBackend())
-  let memoryBinding: ClientBinding | null = null
+  const memoryBindings = new Map<string, ClientBinding>()
 
-  async function readBinding(): Promise<ClientBinding | null> {
-    if (!indexedDbAvailable()) return memoryBinding
+  /** 当前页面 origin（无 location 时用一个稳定的占位键）。 */
+  function currentOrigin(): string {
+    try {
+      const origin = (globalThis as { location?: { origin?: string } }).location?.origin
+      return typeof origin === 'string' && origin !== '' && origin !== 'null' ? origin : 'unknown'
+    } catch {
+      return 'unknown'
+    }
+  }
+
+  function storageKey(origin: string): string {
+    return `${BINDING_ORIGIN_PREFIX}${origin}`
+  }
+
+  async function readBinding(origin: string): Promise<ClientBinding | null> {
+    const scoped = memoryBindings.get(origin)
+    if (!indexedDbAvailable()) return scoped ?? null
     const db = await openDatabase()
     try {
       const transaction = db.transaction(STORE_NAME, 'readonly')
-      const record = await requestToPromise(transaction.objectStore(STORE_NAME).get(BINDING_KEY)) as
-        | ClientBinding
-        | undefined
-      return record ?? null
+      const objectStore = transaction.objectStore(STORE_NAME)
+      const record = await requestToPromise(objectStore.get(storageKey(origin))) as ClientBinding | undefined
+      if (record !== undefined && record !== null) return record
+      // 兼容旧版单绑定：读一次并迁移到按 origin 的键上。
+      const legacy = await requestToPromise(objectStore.get(BINDING_KEY)) as ClientBinding | undefined
+      if (legacy === undefined || legacy === null) return null
+      await writeBinding(legacy, origin)
+      return legacy
     } catch {
-      return null
+      return scoped ?? null
     } finally {
       db.close()
     }
   }
 
-  async function writeBinding(binding: ClientBinding | null): Promise<void> {
+  async function writeBinding(binding: ClientBinding | null, origin: string): Promise<void> {
     // 内存后端没有 IDB：始终镜像一份，保证同一会话内可用。
-    memoryBinding = binding
+    if (binding === null) memoryBindings.delete(origin)
+    else memoryBindings.set(origin, binding)
     if (!indexedDbAvailable()) return
     const db = await openDatabase()
     try {
       const transaction = db.transaction(STORE_NAME, 'readwrite')
       const objectStore = transaction.objectStore(STORE_NAME)
-      if (binding === null) await requestToPromise(objectStore.delete(BINDING_KEY))
-      else await requestToPromise(objectStore.put(binding, BINDING_KEY))
+      if (binding === null) {
+        await requestToPromise(objectStore.delete(storageKey(origin)))
+        await requestToPromise(objectStore.delete(BINDING_KEY))
+      } else {
+        await requestToPromise(objectStore.put(binding, storageKey(origin)))
+      }
     } finally {
       db.close()
     }
@@ -253,12 +288,12 @@ export function createKeyring(backend?: KeyringBackend): {
     },
     async clear() {
       await store.clear()
-      await writeBinding(null)
+      await writeBinding(null, currentOrigin())
     },
-    loadBinding: readBinding,
-    saveBinding: writeBinding,
-    async clearBinding() {
-      await writeBinding(null)
+    loadBinding: (origin?: string) => readBinding(origin ?? currentOrigin()),
+    saveBinding: (binding: ClientBinding, origin?: string) => writeBinding(binding, origin ?? currentOrigin()),
+    async clearBinding(origin?: string) {
+      await writeBinding(null, origin ?? currentOrigin())
     },
   }
 }

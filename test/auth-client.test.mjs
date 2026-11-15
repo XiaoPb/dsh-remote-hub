@@ -553,3 +553,16 @@ test('settings separates the local account from peer accounts', async () => {
 })
 
 
+
+test('bindings are keyed by origin so two targets do not overwrite each other', async () => {
+  const ring = keyring.createKeyring()
+  const a = { clientId: 'c-a', keyId: 'k-a', lease: 'a.1.secret', generation: 1, expiresAt: Date.now() + 1000 }
+  const b = { clientId: 'c-b', keyId: 'k-b', lease: 'b.1.secret', generation: 1, expiresAt: Date.now() + 1000 }
+  await ring.saveBinding(a, 'http://127.0.0.1:3091')
+  await ring.saveBinding(b, 'http://192.168.1.20:8443')
+  assert.equal((await ring.loadBinding('http://127.0.0.1:3091')).clientId, 'c-a')
+  assert.equal((await ring.loadBinding('http://192.168.1.20:8443')).clientId, 'c-b')
+  await ring.clearBinding('http://192.168.1.20:8443')
+  assert.equal(await ring.loadBinding('http://192.168.1.20:8443'), null)
+  assert.equal((await ring.loadBinding('http://127.0.0.1:3091')).clientId, 'c-a', '清除一个不能影响另一个')
+})
