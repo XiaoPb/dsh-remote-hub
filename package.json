@@ -132,6 +132,7 @@
     "lib/index.js",
     "lib/auth.js",
     "lib/client.js",
+    "lib/*.js",
     "lib/types/**/*.d.ts",
     "bin/dsh-remote-hub-pair.mjs",
     "cordis.patch.yml"
