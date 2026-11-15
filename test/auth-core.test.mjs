@@ -597,21 +597,23 @@ test('raising a client ceiling requires a fresh MFA; lowering does not', { skip:
     const lowered = await env.service.setRoleCeiling(env.sessionCookie, enrolled.client.clientId, 'read-only')
     assert.equal(lowered.roleCeiling, 'read-only')
 
-    // 重新验证后（只刷新窗口，不换会话）可以再次提升。
+    // 重新验证：刷新 2FA 窗口并**轮换会话密钥**，旧令牌立即失效。
     const sessionBefore = (await env.service.status(env.sessionCookie)).session
-    await env.service.reauth(env.sessionCookie, {
+    const rotated = await env.service.reauth(env.sessionCookie, {
       password: 'Correct-Horse-9-Battery!',
       code: auth.totpCodeAt(env.secret, env.now()),
     })
-    const sessionAfter = (await env.service.status(env.sessionCookie)).session
+    assert.notEqual(rotated.cookie, env.sessionCookie, '会话密钥必须轮换')
+    assert.equal((await env.service.status(env.sessionCookie)).session, null, '旧令牌必须失效')
+    const sessionAfter = (await env.service.status(rotated.cookie)).session
     assert.equal(sessionAfter.accountId, sessionBefore.accountId)
-    const raisedAgain = await env.service.setRoleCeiling(env.sessionCookie, enrolled.client.clientId, 'full')
+    const raisedAgain = await env.service.setRoleCeiling(rotated.cookie, enrolled.client.clientId, 'full')
     assert.equal(raisedAgain.roleCeiling, 'full')
 
     // 口令错也必须拒绝，不能只凭验证码提权。
     env.advanceMs(11 * 60 * 1000)
     await assert.rejects(
-      () => env.service.reauth(env.sessionCookie, {
+      () => env.service.reauth(rotated.cookie, {
         password: 'wrong', code: auth.totpCodeAt(env.secret, env.now()),
       }),
       (error) => error.code === 'auth-invalid-credentials',
@@ -677,6 +679,29 @@ test('anonymous status hides the account name and password policy', { skip: !dyn
     const authed = await env.service.status(env.sessionCookie)
     assert.equal(authed.username, 'owner')
     assert.equal(authed.passwordPolicy, 'strong')
+  } finally {
+    rmSync(env.dir, { recursive: true, force: true })
+  }
+})
+
+test('header sessions can be issued with a shorter TTL', { skip: !dynamic }, async () => {
+  const env = await bootstrappedService('header-ttl')
+  try {
+    const login = await env.service.login({
+      username: 'owner', password: 'Correct-Horse-9-Battery!', sessionTtlMs: 60_000,
+    })
+    assert.equal(login.ok, true)
+    const issued = await env.service.verifyMfa({
+      mfaToken: login.response.mfaToken,
+      code: auth.totpCodeAt(env.secret, env.now()),
+      sessionTtlMs: 60_000,
+    })
+    assert.equal('error' in issued, false)
+    assert.ok(issued.session.expiresAt - env.now() <= 61_000, '跨源会话应显著短于 7 天')
+
+    // 超过短 TTL 后会话失效（不必等到 7 天）。
+    env.advanceMs(120_000)
+    assert.equal((await env.service.status(issued.cookie)).session, null)
   } finally {
     rmSync(env.dir, { recursive: true, force: true })
   }

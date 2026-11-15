@@ -143,12 +143,12 @@ export interface AuthService extends HubAuthPort {
   /**
    * 在当前会话上重新做一次双因素验证（口令 + TOTP/备用码）。
    *
-   * 只刷新 `lastMfaAt`（提权窗口），不签发新会话。
+   * 只刷新 `lastMfaAt`（提权窗口）；**同时轮换会话密钥**并返回新 cookie。
    */
   reauth(
     sessionToken: string | undefined,
     input: { password: string; code: string },
-  ): Promise<{ ok: true; session: AuthSessionView }>
+  ): Promise<{ ok: true; session: AuthSessionView; cookie: string }>
   /** 用客户端私钥证明换取 / 轮换租约（无需浏览器会话）。 */
   renewLease(input: {
     /** 当前租约明文（`Authorization: Bearer` 里的值）。 */
@@ -329,7 +329,10 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     return `${sid}.${secret}`
   }
 
-  async function createSession(record: { lastMfaAt: number | null }): Promise<IssuedSession> {
+  async function createSession(
+    record: { lastMfaAt: number | null },
+    ttlMs: number = SESSION_TTL_MS,
+  ): Promise<IssuedSession> {
     const at = now()
     const sid = newSessionSid()
     const secret = randomToken()
@@ -337,7 +340,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       sid,
       secretHash: sha256Hex(secret),
       createdAt: at,
-      expiresAt: at + SESSION_TTL_MS,
+      expiresAt: at + ttlMs,
       lastSeenAt: at,
       lastMfaAt: record.lastMfaAt,
       revokedAt: null,
@@ -838,7 +841,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
       const totpVerified = account.totp?.verified === true && requireMfa
       if (!totpVerified) {
-        const issued = await createSession({ lastMfaAt: null })
+        const issued = await createSession({ lastMfaAt: null }, input.sessionTtlMs)
         return {
           ok: true,
           response: { ok: true, mfaRequired: false, session: issued.session },
@@ -906,7 +909,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       await store.mutate((data) => {
         if (data.account !== null) data.account.lastLoginAt = at
       })
-      const issued = await createSession({ lastMfaAt: at })
+      const issued = await createSession({ lastMfaAt: at }, input.sessionTtlMs)
       return issued
     },
 
@@ -1050,13 +1053,19 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
         throw Object.assign(new Error('invalid code'), { code: AUTH_ERROR_CODES.mfaInvalid })
       }
       const at = now()
+      // 重新验证同时**轮换会话密钥**：同一个 sid，新 secret，旧令牌立即失效。
+      // 这样一次被截获的令牌不会因为用户「重新验证以提权」而继续有效。
+      const secret = randomToken()
       await store.mutate((data) => {
         const row = data.sessions.find(item => item.sid === session.record.sid)
-        if (row !== undefined) row.lastMfaAt = at
+        if (row !== undefined) {
+          row.lastMfaAt = at
+          row.secretHash = sha256Hex(secret)
+        }
         if (data.account !== null) data.account.lastLoginAt = at
       })
       const view = sessionView(store.data.sessions.find(item => item.sid === session.record.sid)!)
-      return { ok: true as const, session: view }
+      return { ok: true as const, session: view, cookie: issueCookie(session.record.sid, secret) }
     },
 
     async renewLease(input) {

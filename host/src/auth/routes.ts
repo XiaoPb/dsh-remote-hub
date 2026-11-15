@@ -19,6 +19,7 @@ import type { ClientPublicKeyJwk, ClientType } from '@core/auth.js'
 import {
   AUTH_ERROR_CODES,
   AUTH_ROUTES,
+  HEADER_SESSION_TTL_MS,
   SESSION_COOKIE,
 } from '@core/auth.js'
 import { isRoleName } from '@core/roles.js'
@@ -277,6 +278,8 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
           // 只信 socket 地址：不读取 X-Forwarded-For，否则攻击者可以用它
           // 伪造来源绕过按来源限流。
           source: sessionSource(req),
+          // 跨源（头会话）令牌是 JS 可读的明文：签发更短的绝对有效期。
+          ...(deps.allowHeaderSession === true ? { sessionTtlMs: HEADER_SESSION_TTL_MS } : {}),
         })
         if (!result.ok) {
           sendJson(res, statusFor(result.code), { ok: false, code: result.code, message: result.reason })
@@ -321,6 +324,7 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
         const issued = await service.verifyMfa({
           mfaToken: String(body.mfaToken ?? ''),
           code: String(body.code ?? ''),
+          ...(deps.allowHeaderSession === true ? { sessionTtlMs: HEADER_SESSION_TTL_MS } : {}),
         })
         if ('error' in (issued as { error?: string })) {
           const failure = issued as { error: string; reason: string }
@@ -393,7 +397,12 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
           password: String(body.password ?? ''),
           code: String(body.code ?? ''),
         })
-        sendJson(res, 200, result)
+        // 轮换后的会话令牌：Cookie 面用 Set-Cookie，头会话面额外回 body。
+        sendJson(res, 200, {
+          ok: true,
+          session: result.session,
+          ...(deps.allowHeaderSession === true ? { sessionToken: result.cookie } : {}),
+        }, sessionCookie(result.cookie, secure, 7 * 24 * 60 * 60))
         return
       }
 

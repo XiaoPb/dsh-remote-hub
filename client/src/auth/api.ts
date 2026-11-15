@@ -188,8 +188,8 @@ export function createAuthApi(options: AuthApiOptions = {}): AuthApi {
       return body.policy === 'basic' ? 'basic' : 'strong'
     },
     async reauth(input) {
-      const response = await post(AUTH_ROUTES.reauth, input)
-      if (!response.ok) throw await failure(response)
+      // readJson 顺带接住轮换后的会话令牌（头模式）。
+      await readJson(await post(AUTH_ROUTES.reauth, input))
     },
     async totp(action) {
       return readJson(await post(AUTH_ROUTES.totp, action))

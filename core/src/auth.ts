@@ -205,6 +205,12 @@ export interface LoginRequest {
    * 服务端自己填；客户端传了也会被覆盖。缺省 `local`（测试/本机调用）。
    */
   source?: string
+  /**
+   * 服务端内部：本次签发的会话有效期（跨源头会话更短）。
+   *
+   * 客户端传了也会被服务端覆盖，不属于对外契约。
+   */
+  sessionTtlMs?: number
 }
 
 /** 登录成功（或需要第二步）的响应。 */
@@ -217,6 +223,12 @@ export interface MfaRequest {
   mfaToken: string
   /** 6 位动态码，或一次性备用码。 */
   code: string
+  /**
+   * 服务端内部：本次签发的会话有效期（跨源头会话更短）。
+   *
+   * 客户端传了也会被服务端覆盖，不属于对外契约。
+   */
+  sessionTtlMs?: number
 }
 
 /** 注册可信客户端请求体。 */
@@ -314,6 +326,14 @@ export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
  * 往往在很久之后才被使用。
  */
 export const SESSION_IDLE_MS = 12 * 60 * 60 * 1000
+
+/**
+ * 跨源（头会话）登录签发的会话有效期。
+ *
+ * 头会话没有 `HttpOnly` 保护，令牌是 JS 读得到的一段明文，因此比同源 Cookie
+ * 会话更短命；重新验证（reauth）会轮换密钥并延长它。
+ */
+export const HEADER_SESSION_TTL_MS = 12 * 60 * 60 * 1000
 
 /** 完成 2FA 之后允许「信任新客户端」的时效窗口。 */
 export const MFA_TRUST_WINDOW_MS = 10 * 60_000
