@@ -239,13 +239,11 @@ const RemoteHubPage = createRemoteHubPageComponent({
   async revokeDevices(input) {
     return createAdminTransport().revokeDevices(input)
   },
-  async issueTicket({ origin, pairIssueToken, role }) {
-    const transport = createTransport({ origin, pairIssueToken, adminChannel: '' })
-    return transport.issueTicket(role)
+  async issueTicket() {
+    throw new Error('邀请已移除：请使用「用对端账号登录」')
   },
-  async issueCode({ origin, pairIssueToken, role }) {
-    const transport = createTransport({ origin, pairIssueToken, adminChannel: '' })
-    return transport.issueCode(role)
+  async issueCode() {
+    throw new Error('邀请已移除：请使用「用对端账号登录」')
   },
   /**
    * 同源签发（桌面端唯一可行路径）。
@@ -253,14 +251,8 @@ const RemoteHubPage = createRemoteHubPageComponent({
    * 走 `hub/admin.issue`：owner 页面经 Electron `forwardWebRequest` 同源转发，
    * 不需要 pin，也不受 `dsh-app://app` 跨协议限制。
    */
-  async adminIssue({ kind, role }) {
-    const transport = createAdminTransport()
-    if (kind === 'ticket') {
-      const issued = await transport.issueTicket(role)
-      return { kind: 'ticket' as const, value: issued.ticket, expiresAt: issued.expiresAt, role: issued.role }
-    }
-    const issued = await transport.issueCode(role)
-    return { kind: 'code' as const, value: issued.code, expiresAt: issued.expiresAt, role: issued.role }
+  async adminIssue() {
+    throw new Error('邀请已移除：请使用「对端账号登录」')
   },
   /**
    * 本机连接信息（局域网 IPv4 + 端口）。
@@ -295,44 +287,8 @@ const RemoteHubPage = createRemoteHubPageComponent({
   reload() {
     globalThis.location?.reload()
   },
-  async connect({ origin, secret }) {
-    const transport = createTransport({ origin })
-    const kind = classifyPairSecret(secret)
-    if (kind === null) throw new Error('pair-invalid：无法识别的配对凭据')
-    // 账号认证模式：邀请兑换 = 登记这把公钥，因此先准备身份（幂等）。
-    const keyring = createKeyring()
-    const { identity } = await keyring.loadOrCreate()
-    const issued = await transport.redeem({
-      ...(kind === 'ticket' ? { ticket: secret } : { code: secret }),
-      clientLabel: 'DSH 主控端',
-      publicKey: identity.publicKey,
-    })
-    if ('lease' in issued) {
-      await keyring.saveBinding({
-        clientId: issued.clientId,
-        keyId: issued.keyId,
-        lease: issued.lease,
-        generation: issued.generation,
-        expiresAt: issued.expiresAt,
-      }, origin)
-      return {
-        clientId: issued.clientId,
-        role: issued.role,
-        deviceId: issued.clientId,
-        label: issued.clientId,
-        lease: issued.lease,
-        generation: issued.generation,
-        expiresAt: issued.expiresAt,
-        ...(issued.displacedDevices === undefined ? {} : { displacedDevices: issued.displacedDevices }),
-      }
-    }
-    return {
-      token: issued.token,
-      role: issued.role,
-      deviceId: issued.deviceId,
-      label: issued.deviceId,
-      ...(issued.displacedDevices === undefined ? {} : { displacedDevices: issued.displacedDevices }),
-    }
+  async connect() {
+    throw new Error('邀请已移除：请在下方用对端账号登录')
   },
   // ③ 运行指标（守卫 /remote/stats；旧版本 404 → 页面降级卡）。
   async stats() {

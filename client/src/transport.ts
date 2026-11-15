@@ -226,17 +226,6 @@ export interface RemoteTransport {
   /** 开始轮询循环；返回停止函数。 */
   subscribe(onEvent: (frame: unknown) => void): () => void
   /** 兑换票据/短码。 */
-  redeem(input: {
-    ticket?: string
-    code?: string
-    clientLabel: string
-    /** 账号认证模式：兑换即登记这把公钥（守卫返回租约而不是令牌）。 */
-    publicKey?: ClientPublicKeyJwk
-  }): Promise<IssuedDeviceToken | IssuedClientLease>
-  /** 签发 QR 票据（本机）。 */
-  issueTicket(role: RoleName): Promise<{ ticket: string; expiresAt: number; role: RoleName }>
-  /** 签发短码（本机）。 */
-  issueCode(role: RoleName): Promise<{ code: string; expiresAt: number; role: RoleName }>
   /** 健康检查。 */
   health(): Promise<{ ok: boolean; protocolVersion: number }>
   /** 守卫健康与实例信息（同源管理面；桌面端唯一可用路径）。 */
@@ -789,74 +778,6 @@ export function createTransport(options: TransportOptions): RemoteTransport {
         }
       })()
       return () => loop.stop()
-    },
-    async redeem(input) {
-      const { status, text } = await rawFetch(GUARD_ROUTES.pair, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          ...(input.ticket === undefined ? {} : { ticket: input.ticket }),
-          ...(input.code === undefined ? {} : { code: input.code }),
-          clientLabel: input.clientLabel,
-        }),
-      })
-      let parsed: Record<string, unknown>
-      try { parsed = JSON.parse(text) as Record<string, unknown> } catch {
-        throw new RemoteHubError(ERROR_CODES.internal, 'malformed pairing response', status)
-      }
-      if (status !== 200) {
-        const code = typeof (parsed.result as { error?: { code?: unknown } } | undefined)?.error?.code === 'string'
-          ? (parsed.result as { error: { code: string } }).error.code
-          : (typeof parsed.error === 'object' && parsed.error !== null
-            ? String((parsed.error as { code?: unknown }).code ?? ERROR_CODES.pairInvalid)
-            : ERROR_CODES.pairInvalid)
-        throw new RemoteHubError(code, 'pairing credential rejected', status)
-      }
-      const issued = parsed as unknown as IssuedDeviceToken | IssuedClientLease
-      // 账号模式没有长期令牌：租约为空即可（请求靠租约 + 签名）。
-      token = 'token' in issued ? issued.token : ''
-      unauthorizedCalled = false
-      options.onAccessSnapshot?.({ role: issued.role })
-      return issued
-    },
-    async issueTicket(role) {
-      if (options.adminChannel !== '') {
-        // 同源优先：桌面页面无法跨协议访问守卫。
-        const issued = await adminCall<{ ok: true; kind: string; value: string; expiresAt: number; role: string }>(
-          hubEndpoint(HUB_METHODS.adminIssue),
-          { kind: 'ticket', role },
-        )
-        return { ticket: issued.value, expiresAt: issued.expiresAt, role: issued.role as RoleName }
-      }
-      const { status, text } = await rawFetch(GUARD_ROUTES.pairTicket, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-pair-issue-token': options.pairIssueToken ?? '',
-        },
-        body: JSON.stringify({ role }),
-      })
-      if (status !== 200) throw new RemoteHubError(ERROR_CODES.forbidden, 'pairing issue refused', status)
-      return JSON.parse(text) as { ticket: string; expiresAt: number; role: RoleName }
-    },
-    async issueCode(role) {
-      if (options.adminChannel !== '') {
-        const issued = await adminCall<{ ok: true; kind: string; value: string; expiresAt: number; role: string }>(
-          hubEndpoint(HUB_METHODS.adminIssue),
-          { kind: 'code', role },
-        )
-        return { code: issued.value, expiresAt: issued.expiresAt, role: issued.role as RoleName }
-      }
-      const { status, text } = await rawFetch(GUARD_ROUTES.pairCode, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-pair-issue-token': options.pairIssueToken ?? '',
-        },
-        body: JSON.stringify({ role }),
-      })
-      if (status !== 200) throw new RemoteHubError(ERROR_CODES.forbidden, 'pairing issue refused', status)
-      return JSON.parse(text) as { code: string; expiresAt: number; role: RoleName }
     },
     async health() {
       const { status, text } = await rawFetch(GUARD_ROUTES.health, { method: 'GET' })
