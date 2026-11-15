@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -126,20 +126,56 @@ test('bashless bootstrap is loopback-only by route contract', () => {
   assert.match(routes, /SameSite=Strict/u)
 })
 
-test('auth store is atomic, 0600, and fails closed on corruption', { skip: !dynamic }, async () => {
+test('auth store lives in SQLite, is 0600, and fails closed on corruption', { skip: !dynamic }, async () => {
   const { dir, path } = tempStore('store')
   try {
     const store = await auth.createAuthStore(path)
     await store.dispose()
-    const mode = statSync(path).mode & 0o777
-    if (process.platform !== 'win32') assert.equal(mode, 0o600)
-    const raw = JSON.parse(readFileSync(path, 'utf8'))
-    assert.equal(raw.version, 1)
-    assert.equal(raw.account, null)
-    // 损坏的 JSON：必须拒绝启动，而不是静默清空。
-    const { writeFileSync } = await import('node:fs')
-    writeFileSync(path, '{ not json', 'utf8')
-    await assert.rejects(() => auth.createAuthStore(path), /fail-closed|not valid JSON/u)
+    const dbPath = path.replace(/\.json$/u, '.db')
+    assert.ok(existsSync(dbPath), '应创建 auth.db')
+    if (process.platform !== 'win32') assert.equal(statSync(dbPath).mode & 0o777, 0o600)
+    // 损坏的库文件：必须拒绝启动，而不是静默重建。
+    writeFileSync(dbPath, 'not a database', 'utf8')
+    await assert.rejects(() => auth.createAuthStore(path), /not a database|fail-closed|unsupported/u)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('legacy auth.json is imported once and renamed', { skip: !dynamic }, async () => {
+  const { dir, path } = tempStore('import')
+  try {
+    const passwordHash = await auth.hashPassword('Correct-Horse-9-Battery!')
+    const legacy = {
+      version: 1,
+      account: {
+        username: 'owner',
+        passwordHash,
+        totp: { secret: 'JBSWY3DPEHPK3PXP', verified: true, createdAt: 1 },
+        createdAt: 1,
+        updatedAt: 1,
+        lastLoginAt: null,
+      },
+      clients: [],
+      sessions: [],
+      challenges: [],
+      nonces: {},
+      settings: { passwordPolicy: 'strong' },
+    }
+    writeFileSync(path, JSON.stringify(legacy), 'utf8')
+    const store = await auth.createAuthStore(path)
+    assert.equal(store.data.account?.username, 'owner')
+    assert.equal(store.data.account?.isAdmin, true)
+    assert.equal(store.data.account?.roleCeiling, 'full')
+    assert.equal(store.data.settings?.passwordPolicy, 'strong')
+    await store.dispose()
+    assert.ok(!existsSync(path), 'auth.json 应被改名')
+    assert.ok(existsSync(`${path}.imported`), '必须保留 auth.json.imported 作为回滚退路')
+
+    // 再次打开：不重复导入，数据仍在。
+    const again = await auth.createAuthStore(path)
+    assert.equal(again.data.account?.username, 'owner')
+    await again.dispose()
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

@@ -27,6 +27,8 @@ import { isClientPublicKeyJwk, sha256Hex } from './crypto.js'
 
 /** 账号记录。 */
 export interface AccountRecord {
+  /** 稳定账号 id（`acc_xxx`）；v1 单账号为 `acc_admin`。 */
+  accountId?: string
   username: string
   /** `scrypt$N$r$p$salt$hash`。 */
   passwordHash: string
@@ -34,6 +36,12 @@ export interface AccountRecord {
   totp?: { secret: string; verified: boolean; createdAt: number }
   /** 备用码 sha256；`usedAt` 非空即已消费。 */
   backupCodes?: { hash: string; usedAt?: number }[]
+  /** 账号上限（P2 起生效）；缺省按 `full` 处理（单管理员）。 */
+  roleCeiling?: RoleName
+  /** 是否管理员；缺省 true（单管理员）。 */
+  isAdmin?: boolean
+  /** 非空即禁用（P2 起生效）。 */
+  disabledAt?: number | null
   createdAt: number
   updatedAt: number
   lastLoginAt: number | null
@@ -47,6 +55,8 @@ export interface AccountRecord {
 
 /** 可信客户端记录。 */
 export interface ClientRecord {
+  /** 归属账号；v1 单账号为 `acc_admin`。 */
+  accountId?: string
   clientId: string
   keyId: string
   label: string
@@ -70,6 +80,8 @@ export interface ClientRecord {
 
 /** 浏览器会话记录。 */
 export interface SessionRecord {
+  /** 归属账号。 */
+  accountId?: string
   sid: string
   /** sha256(secret)；Cookie 里是 `<sid>.<secret>`。 */
   secretHash: string
@@ -83,6 +95,8 @@ export interface SessionRecord {
 
 /** 一次性 MFA 挑战。 */
 export interface MfaChallengeRecord {
+  /** 归属账号。 */
+  accountId?: string
   tokenHash: string
   createdAt: number
   expiresAt: number
@@ -146,6 +160,21 @@ export interface AuthStore {
   flush(): Promise<void>
   /** 停止节流器并落盘。 */
   dispose(): Promise<void>
+  /** 追加审计事件（SQLite 实现提供；JSON 回退实现没有）。 */
+  appendAudit?(event: {
+    at: number
+    kind: string
+    accountId?: string | null
+    clientId?: string | null
+    source?: string | null
+    detail?: string | null
+  }): void
+  /** 读取最近审计（SQLite 实现提供）。 */
+  readAudit?(limit?: number): Promise<unknown[]>
+  /** 写入登录限流计数（SQLite 实现提供）。 */
+  bumpThrottle?(key: string, input: { failures: number; windowStart: number; blockedUntil?: number | null }): void
+  /** 读取登录限流计数（SQLite 实现提供）。 */
+  readThrottle?(key: string): { failures: number; windowStart: number; blockedUntil: number | null } | null
 }
 
 /** 严格解析一条客户端记录（形状不对即抛，绝不静默丢弃）。 */
@@ -198,7 +227,38 @@ function parseClient(value: unknown): ClientRecord {
  * @param path - 文件路径。
  * @returns 存储句柄。
  */
+/**
+ * 打开认证存储：默认 SQLite（`node:sqlite`），不可用时回退 JSON。
+ *
+ * 回退条件仅限「模块不可用」（Electron 旧版 / 受限运行时），
+ * 数据损坏等错误必须冒泡——绝不静默清空。
+ * @param path - 逻辑存储路径（`auth.json` 形式）；SQLite 实现会映射成同目录的 `.db`。
+ * @returns 存储句柄。
+ */
 export async function createAuthStore(path: string = defaultAuthStorePath()): Promise<AuthStore> {
+  if (process.env.DSH_REMOTE_HUB_STORE === 'json') return createJsonAuthStore(path)
+  try {
+    const { createSqliteAuthStore } = await import('./store-sqlite.js')
+    return await createSqliteAuthStore(path)
+  } catch (error) {
+    if (!isSqliteUnavailable(error)) throw error
+    console.warn(`[remote-hub] node:sqlite unavailable (${(error as Error).message}); falling back to JSON store`)
+    return createJsonAuthStore(path)
+  }
+}
+
+/** 判断是否「SQLite 模块不可用」（而不是数据错误）。 */
+function isSqliteUnavailable(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  if (code === 'ERR_UNKNOWN_BUILTIN_MODULE' || code === 'ERR_MODULE_NOT_FOUND' || code === 'ERR_INVALID_MODULE_SPECIFIER') {
+    return true
+  }
+  const message = error instanceof Error ? error.message : String(error)
+  return /Cannot find module 'node:sqlite'|No such built-in module: node:sqlite|node:sqlite is not available/iu.test(message)
+}
+
+/** JSON 实现（v1 兼容路径；仅在 SQLite 不可用时使用）。 */
+async function createJsonAuthStore(path: string = defaultAuthStorePath()): Promise<AuthStore> {
   let raw: string | null = null
   try {
     raw = await readFile(path, 'utf8')
