@@ -2175,7 +2175,7 @@ export interface RemoteHubPageDeps {
     password: string
     code: string
     role: RoleName
-  }) => Promise<{ clientId: string; deviceLabel?: string; role?: string }>
+  }) => Promise<{ clientId: string; deviceLabel?: string; role?: string; targetId?: string }>
   saveOutboundTarget?: (target: Omit<OutboundTarget, 'id'> & {
     token?: string
     account?: boolean
@@ -2784,18 +2784,16 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
               return
             }
             const label = result.deviceLabel ?? result.clientId
-            const at = await deps.carrierWrite({
-              mode: 'cloud',
+            // 带上 targetId：磁盘 carrier 状态靠它关联出站档案，重启才能续上。
+            const carrierState = {
+              mode: 'cloud' as const,
               origin: target,
               account: true,
+              ...(result.targetId === undefined ? {} : { targetId: result.targetId }),
               ...(label === undefined ? {} : { deviceLabel: label }),
-            })
-            writeCarrierMode({
-              mode: 'cloud',
-              origin: target,
-              account: true,
-              ...(label === undefined ? {} : { deviceLabel: label }),
-            }, storage)
+            }
+            const at = await deps.carrierWrite(carrierState)
+            writeCarrierMode(carrierState, storage)
             lastCarrierAtRef.current = at
             setAccountDraft(current => ({ ...current, password: '', code: '' }))
             reload()

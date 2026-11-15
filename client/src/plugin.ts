@@ -179,7 +179,7 @@ async function connectWithAccount(input: {
   password: string
   code: string
   role: RoleName
-}): Promise<{ clientId: string; deviceLabel?: string; role?: string }> {
+}): Promise<{ clientId: string; deviceLabel?: string; role?: string; targetId?: string }> {
   const api = createAuthApi({ origin: input.origin, headerSession: true })
   const login = await api.login({ username: input.username, password: input.password })
   if (login.mfaRequired) {
@@ -202,7 +202,7 @@ async function connectWithAccount(input: {
     expiresAt: enrolled.lease.expiresAt,
   }, input.origin)
   const deviceLabel = `${input.origin} · ${enrolled.client.label}`
-  await createAdminTransport().saveOutboundTarget({
+  const saved = await createAdminTransport().saveOutboundTarget({
     origin: input.origin,
     account: true,
     accountId: enrolled.client.clientId,
@@ -210,7 +210,9 @@ async function connectWithAccount(input: {
     role: input.role,
     lastConnectedAt: Date.now(),
   })
-  return { clientId: enrolled.client.clientId, deviceLabel, role: input.role }
+  // 必须把档案 id 交给页面：carrier-mode.json 靠 targetId 关联到这条账号目标，
+  // 否则重启后读不到（只剩 origin，会被当成旧版 bearer 记录而回退到本机）。
+  return { clientId: enrolled.client.clientId, deviceLabel, role: input.role, targetId: saved.id }
 }
 
 const RemoteHubPage = createRemoteHubPageComponent({

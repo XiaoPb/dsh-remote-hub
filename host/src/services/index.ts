@@ -175,6 +175,8 @@ export async function writeCarrierFile(mode: Record<string, unknown>): Promise<n
     ? {
       mode: 'cloud',
       origin: String(mode.origin ?? ''),
+      // 账号模式：没有 bearer，凭据在浏览器；这里只留「是账号目标」+ targetId。
+      ...(mode.account === true ? { account: true } : {}),
       ...(typeof mode.targetId === 'string' && mode.targetId !== '' ? { targetId: mode.targetId } : {}),
       ...(typeof mode.targetId !== 'string' && typeof mode.token === 'string' ? { token: mode.token } : {}),
       ...(typeof mode.deviceLabel === 'string' && mode.deviceLabel !== ''
