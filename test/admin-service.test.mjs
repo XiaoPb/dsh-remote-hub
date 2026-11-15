@@ -70,8 +70,9 @@ describe('同源管理面服务契约', () => {
       new URL('../host/src/services/index.ts', import.meta.url),
       'utf8',
     )
+    // 邀请签发（admin.issue）随短码链路移除，不再纳入回归清单。
     for (const marker of [
-      "admin.health", "admin.devices", "admin.deviceForget", "admin.stats", "admin.config", "admin.configPatch", "admin.issue",
+      "admin.health", "admin.devices", "admin.deviceForget", "admin.stats", "admin.config", "admin.configPatch",
     ]) {
       assert.ok(
         source.includes(`@Remote('${marker}')`),
