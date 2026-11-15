@@ -84,6 +84,57 @@ The complete per-endpoint matrix is in [API permission matrix](docs/API-MATRIX.m
 
 ---
 
+## Account authentication and trusted clients (optional, recommended)
+
+The guard's built-in device token is a static bearer: whoever holds it holds that
+device's authority. This version adds a second Cordis row,
+`@xiaopb/dsh-remote-hub/auth`, so Hub access becomes **password + TOTP to establish
+trust, then a per-request client-key signature**:
+
+```yaml
+- insert:
+    - id: remote-hub
+      name: '@xiaopb/dsh-remote-hub'
+      config:
+        accountAuth:
+          enabled: true      # legacy device tokens stop working immediately
+- insert:
+    - id: remote-hub-auth
+      name: '@xiaopb/dsh-remote-hub/auth'
+```
+
+- **A stolen lease is not enough.** Every Hub request also carries an ECDSA P-256
+  signature over method, path, target authority, timestamp, one-time nonce,
+  client/key id, lease generation and body digest.
+- **Seven-day leases rotate silently** in the background. Replaying a rotated
+  generation is treated as theft and revokes that client.
+- **Trust is per client key**, never derived from the IP, User-Agent or a canvas
+  fingerprint. Those appear in the list for human recognition only.
+- **1Password / Google Authenticator / Authy** work out of the box (RFC 6238 TOTP),
+  with ten one-time backup codes.
+- **Role switches inside a trusted client do not ask for 2FA again**; exceeding the
+  server-side role ceiling is refused instead.
+- **WebSocket upgrades use a 30-second, single-use ticket** so the lease never
+  appears in a URL.
+
+Rollout: open **Login & accounts**, create the first administrator (loopback only),
+bind TOTP, trust this browser, and only then flip `accountAuth.enabled` to `true`
+and restart the Host. Flipping it before you have trusted a client locks every
+existing device out (escape hatch: set it back to `false` and restart).
+
+Honest limits: an attacker who controls an already-trusted browser can act as you
+(revocation and audit are the mitigation, not a guarantee); clearing site data or
+using a browser without IndexedDB loses the private key and requires re-trusting;
+the TOTP secret must be stored to compute codes and therefore relies on the
+`0600` file permission; DSH is still single-tenant across accounts.
+
+The scrypt/TOTP approach was informed by the MIT-licensed
+[`@xgone/dsh-remote`](https://github.com/xgone/dsh-remote); this repository is an
+independent reimplementation and deliberately does not reuse its stateless HMAC
+sessions or its plaintext-legacy-verifier branch.
+
+---
+
 ## Install
 
 ### From npm (recommended)
