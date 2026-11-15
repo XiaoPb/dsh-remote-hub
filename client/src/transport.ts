@@ -235,14 +235,6 @@ export interface RemoteTransport {
     guard: { origin: string; loopbackOrigin: string; port: number }
     singleController: boolean
   }>
-  /** 同源签发配对凭据（桌面端「生成二维码/短码」的唯一可用路径）。 */
-  adminIssue(input: { kind: 'ticket' | 'code'; role: RoleName }): Promise<{
-    ok: true
-    kind: 'ticket' | 'code'
-    value: string
-    expiresAt: number
-    role: string
-  }>
   /** 本机对外监听信息（局域网 IPv4 + 端口；来自 admin.endpoints）。 */
   endpoints(): Promise<{
     port: number
@@ -798,13 +790,6 @@ export function createTransport(options: TransportOptions): RemoteTransport {
         guard: { origin, loopbackOrigin: origin, port: Number(new URL(origin || 'http://127.0.0.1:8443').port) },
         singleController: true,
       }
-    },
-    async adminIssue(input) {
-      // 同源通道：owner 页面专用，不需要 pin（也不需要跨协议 fetch）。
-      return adminCall(hubEndpoint(HUB_METHODS.adminIssue), {
-        kind: input.kind,
-        role: input.role,
-      })
     },
     async endpoints() {
       return adminCall(hubEndpoint(HUB_METHODS.adminEndpoints), {})

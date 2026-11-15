@@ -70,7 +70,7 @@ describe('同源管理面服务契约', () => {
       new URL('../host/src/services/index.ts', import.meta.url),
       'utf8',
     )
-    // 邀请签发（admin.issue）随短码链路移除，不再纳入回归清单。
+    // `admin.issue` 常量与方法已随邀请链路删除（P4 阶段 B）。
     for (const marker of [
       "admin.health", "admin.devices", "admin.deviceForget", "admin.stats", "admin.config", "admin.configPatch",
     ]) {
@@ -89,8 +89,6 @@ describe('同源管理面服务契约', () => {
     )
     const adminMethods = Object.entries(mod.HUB_METHODS)
       .filter(([, value]) => typeof value === 'string' && value.startsWith('admin.'))
-      // 邀请签发随短码链路移除；常量保留只为旧客户端编译，方法已不存在。
-      .filter(([, value]) => value !== 'admin.issue')
       .map(([, value]) => value)
     assert.ok(adminMethods.length >= 6, '管理面端点数量异常')
     for (const method of adminMethods) {

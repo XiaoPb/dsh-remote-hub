@@ -41,10 +41,10 @@ function baseState(overrides = {}) {
   return {
     mode: { mode: 'local' },
     guard: { host: '127.0.0.1', port: 8443, origin: 'http://h:8443', protocolVersion: 1, singleController: true },
-    guardError: null, devices: [], loading: false, autoReissue: true, pairIssueToken: 'p',
-    originDraft: '', secretDraft: '', deviceFilter: 'all', stats: null, statsError: null,
+    guardError: null, devices: [], loading: false, pairIssueToken: 'p',
+    originDraft: '', deviceFilter: 'all', stats: null, statsError: null,
     config: null, configDraft: null, configSaving: false, configSavedAt: null,
-    busy: null, error: null, issued: null, issuedCode: null, now: 1_000_000_000,
+    busy: null, error: null, now: 1_000_000_000,
     injection: { hasPin: true, instanceId: 'i', pid: 1, injectedAt: '', protocolVersion: 1 },
     diagnostic: null, logs: [], retry: { attempts: 0, nextRetryAt: null },
     ...overrides,

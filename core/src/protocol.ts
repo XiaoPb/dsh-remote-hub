@@ -62,10 +62,6 @@ export const PAIR_ISSUE_HEADER = 'x-pair-issue-token'
 export const GUARD_ROUTES = {
   /** 无鉴权的最小事实：`{ ok, protocolVersion }`。不回显设备数，不暴露其它配置。 */
   health: '/remote/health',
-  /** 已废弃的邀请路由：守卫已移除处理器，仅为旧客户端编译保留常量。 */
-  pairTicket: '/remote/pair/ticket',
-  pairCode: '/remote/pair/code',
-  pair: '/remote/pair',
   /** 一元入口：Bearer 令牌 + 来源围栏 + 设备 → Peer → official `/api` 派发。 */
   rpc: '/remote/rpc',
   /** 设备管理（只读）：本机页面列出已配对设备。**双条件回环门控**。 */
@@ -124,8 +120,6 @@ export const HUB_METHODS = {
   adminConfig: 'admin.config',
   adminConfigPatch: 'admin.configPatch',
   adminHealth: 'admin.health',
-  /** 签发配对凭据（owner 页面同源调用；仍需进程内 pin 作为第二因子）。 */
-  adminIssue: 'admin.issue',
   /** 本机连接信息：局域网 IPv4 + 端口（供其他设备填写 / 生成二维码链接）。 */
   adminEndpoints: 'admin.endpoints',
   /**

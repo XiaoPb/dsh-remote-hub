@@ -36,7 +36,6 @@ import {
 } from '../rhui/index.js'
 import { RH_CSS } from '../rhui/tokens.js'
 import { encodeQr } from './qr.js'
-import { QrScanner } from './QrScanner.js'
 import { DeviceDeleteDialog } from './DeviceDeleteDialog.js'
 
 /** 一条已配对设备（守卫 `/remote/devices` 返回行）。 */
@@ -205,15 +204,6 @@ export interface GuardStatus {
 /** 角色（与 core/roles.ts 同名）。 */
 export type RoleName = 'read-only' | 'control' | 'full'
 
-/** 一次签发结果。 */
-export interface IssuedPairing {
-  kind: 'ticket' | 'code'
-  /** 票据原文或 8 位短码。 */
-  value: string
-  role: string
-  expiresAt: number
-}
-
 /** 守卫运行指标（/remote/stats；缺字段时页面按 '—' 降级）。 */
 export interface HubMetrics {
   startedAt: string
@@ -245,26 +235,14 @@ export interface RemoteHubPageState {
   devices: readonly CloudDeviceRow[]
   /** 被控端：状态读取中。 */
   loading: boolean
-  /** 被控端：本机签发凭据；缺省时隐藏签发区。 */
-  pairIssueToken?: string
-  /** 签发时选定的角色。 */
-  role: RoleName
-  /** 最近一次签发（票据→二维码 / 短码→文本）。 */
-  /** 最近一次签发的票据（二维码 + 链接来源）。 */
-  issued: IssuedPairing | null
-  /** 最近一次签发的短码（独立于票据）。 */
-  issuedCode: IssuedPairing | null
-  /** ① 票据/短码过期后自动重签（默认开）。 */
-  autoReissue: boolean
-  /** 同源管理通道是否可用（桌面端签发/管理唯一路径）。 */
+  /** 同源管理通道是否可用（宿主注入了管理 transport）。 */
   adminAvailable?: boolean
   /** 本机局域网候选地址（`http://<ip>:<port>`，供其他设备填写）。 */
   lanCandidates?: readonly string[]
-  /** 推荐地址（二维码 / 链接使用；无候选时回退 origin）。 */
+  /** 推荐地址（告诉对方填哪个地址）。 */
   listenAddress?: string
-  /** 主控端：连接表单。 */
+  /** 主控端：连接表单（目标地址）。 */
   originDraft: string
-  secretDraft: string
   /** 对端账号登录草稿（账号认证模式，跨源）。 */
   accountDraft: { username: string; password: string; code: string; role: RoleName }
   /** ② 设备筛选。 */
@@ -282,7 +260,7 @@ export interface RemoteHubPageState {
   /** ④ 最近一次保存结果（ok / error 文案）。 */
   configSavedAt: number | null
   /** 进行中的异步操作。 */
-  busy: null | 'connect' | 'account' | 'issue' | 'revoke' | 'delete' | 'refresh' | 'detach'
+  busy: null | 'connect' | 'account' | 'revoke' | 'delete' | 'refresh' | 'detach'
   /** 错误信息。 */
   error: string | null
   /** 注入状态（诊断区展示；不含凭据本身）。 */
@@ -300,15 +278,11 @@ export interface RemoteHubPageState {
 /** 页面动作。 */
 export interface RemoteHubPageActions {
   onRefresh(): void
-  onRoleChange(role: RoleName): void
-  onIssue(kind: 'ticket' | 'code'): void
   onForgetDevice?(deviceId: string): void
   onForgetOutbound?(target: OutboundTarget): void
   onRevoke(deviceId: string): void
   onRevokeAll(): void
   onOriginChange(value: string): void
-  onSecretChange(value: string): void
-  onScan(): void
   onConnect(): void
   /** 修改对端账号草稿字段。 */
   onAccountChange(field: 'username' | 'password' | 'code' | 'role', value: string): void
@@ -317,11 +291,10 @@ export interface RemoteHubPageActions {
   onReconnect(target: OutboundTarget): void
   onDetach(): void
   onCopy(text: string): void
-  /** ① 切换自动重签。 */
-  onAutoReissueChange(enabled: boolean): void
   /** ② 切换设备筛选。 */
   onFilterChange(filter: 'all' | 'inbound'): void
-  /** ④ 修改配置草稿（未保存）。 */  onConfigChange(key: string, value: unknown): void
+  /** ④ 修改配置草稿（未保存）。 */
+  onConfigChange(key: string, value: unknown): void
   /** ④ 保存配置草稿。 */
   onConfigSave(): void
 }
@@ -346,15 +319,9 @@ const STRINGS = {
   singleOn: '已启用（新客户端连接会挤掉旧客户端）',
   singleOff: '已关闭（允许多设备同时控制）',
   paired: '已信任',
-  role: '授权角色：',
-  issueTicket: '生成邀请二维码',
-  issuing: '生成中…',
-  issueCode: '生成邀请短码',
-  ticketHint: '每 15 秒自动轮换 · 邀请只用于发现，权限与撤销在设置页管理',
-  pairUnavailable: '未检测到本机签发凭据：本机未启用被控端，或页面不是从本机 127.0.0.1 打开。',
   devicesTitle: '可信客户端',
   devicesEmptyLoading: '正在读取…',
-  devicesEmpty: '还没有可信客户端。用上方「邀请」让另一台设备完成首次信任（账号 + 2FA）后即可出现。',
+  devicesEmpty: '还没有可信客户端。在设置页「登录与账号」信任本浏览器，或从其他设备用账号登录后登记公钥。',
   revoked: ' · 已撤销',
   never: ' · 从未连接',
   recent: ' · 最近 ',
@@ -368,18 +335,6 @@ const STRINGS = {
   netLoopback: '仅本机',
   singleOnShort: '单控已启用',
   singleOffShort: '单控已关闭',
-  issueTitle: '邀请新设备',
-  issuedKind: '凭据类型',
-  issuedRole: '授权角色',
-  issuedTicket: '邀请二维码',
-  issuedCodeLabel: '邀请短码',
-  issuedLinkLabel: '邀请链接',
-  issuedNone: '尚未签发',
-  qrPending: '尚未生成二维码',
-  codePending: '点击右侧生成短码',
-  linkPending: '点击右侧生成二维码以获取链接',
-  countdownLabel: '有效期倒计时',
-  scanHint: '用另一台设备扫码，或在下方主控端粘贴链接。',
   revokedShort: '已撤销',
   neverShort: '从未连接',
   notConnectedShort: '未连接',
@@ -431,37 +386,27 @@ const STRINGS = {
   cfgBridge: '审批桥接',
   cfgBridgeDesc: '远程操作审批走桌面原生卡片',
   cfgRole: '默认授权角色',
-  cfgRoleDesc: '保存后同步顶部邀请权限，并重新生成邀请二维码与短码；不会改变已信任客户端的权限（那些在设置页管理）',
-  cfgAttempts: '短码最大尝试次数',
-  cfgAttemptsDesc: '超过次数短码立即作废（1–100）',
+  cfgRoleDesc: '新客户端首次信任时建议授予的上限；不会改变已信任客户端的权限（那些在设置页管理）',
+  cfgAttempts: '登录尝试次数上限',
+  cfgAttemptsDesc: '同一来源在窗口内的失败次数上限（1–100）',
   cfgColdNote: '以下参数可修改，保存后写入本机配置；需重启 dsh web，重启后生效',
   cfgRestartPending: '有修改待重启生效',
   cfgPort: '监听端口',
   cfgPortDesc: '守卫绑定端口（1–65535）。被占用时启动会自动顺延 +1，并在诊断里标注实际端口',
   cfgNetworkDesc: 'loopback 仅本机可连；lan 允许同网段直连（公网仍需隧道）',
-  cfgQrTtl: '票据有效期',
-  cfgCodeTtl: '短码有效期',
+  cfgTtl: '票据有效期',
   cfgTunnel: '隧道类型',
-  // ① 令牌区
-  autoReissue: '过期自动重签',
-  qrFreshHint: '过期后自动生成新凭据并刷新二维码',
+  // 连接其他设备（主控端）
   clientTitle: '连接其他设备 · 主控端',
   clientSub: '连接成功后整机切换到该设备：侧栏工作区、会话、插件全部显示那台机器的数据。',
   connected: '已连接',
   detach: '断开并切回本机',
   notConnected: '当前指向本机，未连接其他设备。',
   originPlaceholder: '目标设备地址，例如 http://192.168.1.10:8443',
-  secretPlaceholder: '短码（8 位）／票据／完整二维码链接 #dshrh=… 均可',
-  scan: '📷 扫码',
   connect: '连接',
   connecting: '连接中…',
-  secretInvalid: '无法识别：短码为 8 位（不含 I/L/O/U），或粘贴完整二维码链接。',
   originInvalid: '地址格式不正确：需要形如 http://主机:端口，且不带路径。',
   advanced: '连接参数（高级）',
-  qrTitle: '配对二维码',
-  qrTooLong: '二维码内容过长，请改用短码。',
-  copyLink: '复制链接',
-  copyCode: '复制短码',
   // 守卫诊断
   diagTitle: '守卫诊断',
   diagInjection: '注入握手',
@@ -499,8 +444,6 @@ const STRINGS = {
   listenHint: '其他设备连接时填这些地址（局域网 IPv4）',
   listenUnavailable: '未获取到监听地址',
   copyAddress: '复制',
-  issueEquivalent: '二维码、短码、链接三者等价，任选其一交给对方即可',
-  secretHint: '粘贴对方给的短码（8 位）、票据或完整二维码链接',
 } as const
 
 const ROLES: readonly RoleName[] = ['read-only', 'control', 'full']
@@ -550,14 +493,6 @@ export function remainingSeconds(expiresAt: number, now: number): number {
   return Math.max(0, Math.ceil((expiresAt - now) / 1000))
 }
 
-/** 密钥分类：8 位 Crockford 短码 / base64url 票据 / 非法。 */
-export function classifyPairSecret(secret: string): 'code' | 'ticket' | null {
-  const value = secret.trim()
-  if (/^[0-9A-HJKMNP-TV-Z]{8}$/u.test(value)) return 'code'
-  if (/^[A-Za-z0-9_-]{40,120}$/u.test(value)) return 'ticket'
-  return null
-}
-
 /** 校验并规范化 guard 地址；非法返回 undefined。 */
 export function normalizeOrigin(raw: string): string | undefined {
   try {
@@ -569,66 +504,6 @@ export function normalizeOrigin(raw: string): string | undefined {
   } catch {
     return undefined
   }
-}
-
-/**
- * 配对链接的片段标记（二维码内容）。
- *
- * 形如 `http://127.0.0.1:8443#dshrh=<ticket>`：比自定义 scheme 短 ~40 字节
- * （QR 版本 5-L 只有 106 字节容量），且对扫码软件仍然是一个可读 URL。
- */
-export const PAIR_LINK_MARKER = '#dshrh='
-
-/** 构造配对链接（二维码内容）。 */
-export function buildPairLink(origin: string, ticket: string): string {
-  return `${origin.replace(/\/+$/u, '')}${PAIR_LINK_MARKER}${ticket}`
-}
-
-/** 解析配对链接；不是链接时返回 null。 */
-export function parsePairLink(text: string): { origin: string; secret: string } | null {
-  const value = text.trim()
-  const at = value.indexOf(PAIR_LINK_MARKER)
-  if (at <= 0) return null
-  const origin = value.slice(0, at)
-  const secret = value.slice(at + PAIR_LINK_MARKER.length)
-  if (normalizeOrigin(origin) === undefined || classifyPairSecret(secret) === null) return null
-  return { origin, secret }
-}
-
-export function connectionAddressDraft(value: string): { origin: string; secret?: string } {
-  const link = parsePairLink(value)
-  return link === null ? { origin: value } : { origin: link.origin, secret: link.secret }
-}
-
-/** 渲染 QR（白底 + 黑色模块；需显式白底，深色主题下也能扫——唯一允许的硬编码色）。 */
-function renderQr(link: string): React.ReactNode {
-  let matrix: ReturnType<typeof encodeQr>
-  try {
-    matrix = encodeQr(link)
-  } catch {
-    return React.createElement('p', { className: 'rh-k' }, STRINGS.qrTooLong)
-  }
-  const cells: React.ReactNode[] = []
-  for (let y = 0; y < matrix.size; y++) {
-    for (let x = 0; x < matrix.size; x++) {
-      if (!matrix.modules[y]?.[x]) continue
-      cells.push(React.createElement('rect', { key: `${x}-${y}`, x, y, width: 1, height: 1 }))
-    }
-  }
-  return React.createElement(
-    'svg',
-    {
-      'data-testid': 'pair-qr',
-      viewBox: `-2 -2 ${matrix.size + 4} ${matrix.size + 4}`,
-      width: 216,
-      height: 216,
-      role: 'img',
-      'aria-label': STRINGS.qrTitle,
-      style: { background: '#fff', borderRadius: 8, display: 'block', flex: 'none', border: '1px solid var(--rh-border)' },
-    },
-    React.createElement('rect', { x: -2, y: -2, width: matrix.size + 4, height: matrix.size + 4, fill: '#fff' }),
-    React.createElement('g', { fill: '#000' }, ...cells),
-  )
 }
 
 // ── 轻量节点助手（参数自动分类：字符串→className、普通对象→props、其余→children）─
@@ -669,22 +544,6 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
   const isCloud = state.mode.mode === 'cloud'
   const guardUp = state.guard !== null
   const activeDevices = state.devices.filter(device => device.revokedAt == null)
-  // 签发可用性：有同源管理通道，或本机注入了 pin（回退路径）。
-  const canIssue = state.adminAvailable === true
-    || (state.pairIssueToken !== undefined && state.pairIssueToken !== '')
-  // 二维码 / 链接的目标地址：**必须是其他设备可达的局域网地址**，
-  // 守卫在 loopback 模式下公告的是 127.0.0.1，扫码方会被指向它自己的回环。
-  const pairOrigin = (state.listenAddress !== undefined && state.listenAddress !== '')
-    ? state.listenAddress
-    : (state.guard?.origin ?? '')
-  const link = state.issued !== null && state.issued.kind === 'ticket' && pairOrigin !== ''
-    ? buildPairLink(pairOrigin, state.issued.value)
-    : null
-
-  // 签发结果块：三件套（二维码 / 短码 / 链接）始终渲染，未就绪时显示占位与引导。
-  const issuedBlock = canIssue
-    ? el('div', 'rh-qr-wrap', { 'data-testid': 'issued' }, renderIssuedBody(state, actions, link))
-    : null
 
   // ── 区块 1：页头（守卫状态 pill + 快捷入口）──────────────────────────────
   const pageHead = React.createElement('header', { className: 'rh-page-head' },
@@ -763,48 +622,6 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
             }))))
         : null,
 
-      // 签发区（角色胶囊组 + 生成按钮 + 签发结果；阶段 B 整体删除）
-      canIssue
-        ? React.createElement('div', { 'data-testid': 'pair-issue', style: { marginTop: 16 } },
-          React.createElement('div', { className: 'rh-section-head' },
-            React.createElement('span', { className: 'rh-cfg-title' }, STRINGS.issueTitle),
-            React.createElement(Segmented, {
-              ariaLabel: STRINGS.issuedRole,
-              value: state.role,
-              disabled: state.busy !== null,
-              options: ROLES.map(role => ({
-                value: role,
-                label: ROLE_LABEL[role],
-                testId: 'role',
-                disabled: state.busy !== null,
-              })),
-              onChange: value => actions.onRoleChange(value as RoleName),
-            })),
-          React.createElement('div', { className: 'rh-row', style: { marginTop: 8 } },
-            React.createElement(Button, {
-              'data-testid': 'issue-ticket',
-              variant: 'primary',
-              disabled: state.busy !== null,
-              children: state.busy === 'issue' ? STRINGS.issuing : STRINGS.issueTicket,
-              onClick: () => actions.onIssue('ticket'),
-            }),
-            React.createElement(Button, {
-              'data-testid': 'issue-code',
-              disabled: state.busy !== null,
-              children: STRINGS.issueCode,
-              onClick: () => actions.onIssue('code'),
-            }),
-            React.createElement('span', { className: 'rh-k' }, STRINGS.ticketHint)),
-          React.createElement('p', { className: 'rh-k', style: { margin: '8px 0 0' } }, STRINGS.issueEquivalent),
-          issuedBlock,
-          React.createElement('label', { className: 'rh-row', style: { gap: 6, cursor: 'pointer', marginTop: 12 } },
-            React.createElement('input', {
-              type: 'checkbox', 'data-testid': 'auto-reissue', checked: state.autoReissue,
-              onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAutoReissueChange(event.currentTarget.checked),
-            }),
-            React.createElement('span', { className: 'rh-k' }, `${STRINGS.autoReissue} · ${STRINGS.qrFreshHint}`)))
-        : React.createElement(Notice, { 'data-testid': 'pair-issue-unavailable', tone: 'warning' },
-          STRINGS.pairUnavailable),
     ),
   })
 
@@ -856,7 +673,15 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
                 target?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
               },
             })),
-          renderOutboundCard(state, actions))
+          (state.outboundTargets ?? []).length === 0
+            ? React.createElement('div', { className: 'rh-dev', 'data-testid': 'outbound-none' },
+              React.createElement('div', { className: 'rh-dev-top' },
+                React.createElement('div', { className: 'rh-dev-ico' }, '🔗'),
+                React.createElement('div', { className: 'rh-dev-meta' },
+                  React.createElement('div', { className: 'rh-dev-nm' }, STRINGS.notConnected),
+                  React.createElement('div', { className: 'rh-dev-sub' }, STRINGS.clientSub))))
+            : React.createElement('p', { className: 'rh-cfg-desc' },
+              `已保存 ${(state.outboundTargets ?? []).length} 个目标，在「${STRINGS.clientTitle}」里选择连接。`))
         : null),
   })
 
@@ -896,10 +721,16 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
       })),
     desc: STRINGS.clientSub,
     children: React.createElement(React.Fragment, null,
+      // ── 3D 已连接 ─────────────────────────────────────────────────────────
       isCloud
-        ? React.createElement('div', { className: 'rh-row', 'data-testid': 'connected-to' },
-          React.createElement('span', { className: 'rh-k' },
-            `${state.mode.deviceLabel ?? ''} ${state.mode.origin ?? ''}`.trim()),
+        ? React.createElement('div', { className: 'rh-stack', 'data-testid': 'connected-to' },
+          React.createElement('div', { className: 'rh-row' },
+            React.createElement(Pill, { tone: 'online', dot: true, children: STRINGS.connected }),
+            React.createElement('span', { className: 'rh-item-name' },
+              state.mode.deviceLabel ?? state.mode.origin ?? STRINGS.modeCloud),
+            React.createElement('code', { className: 'rh-inline-code' }, state.mode.origin ?? '')),
+          React.createElement('p', { className: 'rh-meta', style: { margin: 0 } },
+            '当前数据面已切换到该设备：侧栏、会话、插件都读取那台机器的数据。'),
           React.createElement(Button, {
             'data-testid': 'detach',
             size: 'small',
@@ -909,99 +740,94 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
           }))
         : React.createElement('p', { className: 'rh-k', 'data-testid': 'not-connected', style: { margin: 0 } }, STRINGS.notConnected),
 
+      // ── 3A 未连接：目标地址 + 连接（已保存目标走 3C 卡片）──────────────────
       React.createElement(Field, {
-        label: '目标设备地址',
-        hint: STRINGS.originPlaceholder,
-        children: React.createElement(Input, {
-          'data-testid': 'origin-input',
-          ariaLabel: '目标设备地址',
-          type: 'url',
-          inputMode: 'url',
-          autoComplete: 'url',
-          placeholder: STRINGS.originPlaceholder,
-          value: state.originDraft,
-          onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onOriginChange(event.currentTarget.value),
-        }),
-      }),
-      React.createElement(Field, {
-        label: '配对凭据',
+        label: '目标地址',
+        hint: '填写对端 DSH 守卫地址（IP:端口），例如 http://192.168.1.10:8443',
         children: React.createElement('div', { className: 'rh-row' },
           React.createElement(Input, {
-            'data-testid': 'secret-input',
-            ariaLabel: '配对短码、票据或链接',
-            inputMode: 'text',
-            autoComplete: 'off',
-            placeholder: STRINGS.secretPlaceholder,
-            value: state.secretDraft,
-            onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onSecretChange(event.currentTarget.value),
-          }),
-          React.createElement(Button, {
-            'data-testid': 'scan',
-            title: '打开摄像头扫描二维码',
-            ariaLabel: '打开摄像头扫描二维码',
-            disabled: state.busy !== null,
-            children: STRINGS.scan,
-            onClick: () => actions.onScan(),
+            'data-testid': 'origin-input',
+            ariaLabel: '目标设备地址',
+            type: 'url',
+            inputMode: 'url',
+            autoComplete: 'url',
+            placeholder: STRINGS.originPlaceholder,
+            value: state.originDraft,
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onOriginChange(event.currentTarget.value),
           }),
           React.createElement(Button, {
             'data-testid': 'connect',
             variant: 'primary',
-            disabled: state.busy !== null || normalizeOrigin(state.originDraft) === undefined
-              || (classifyPairSecret(state.secretDraft) === null && parsePairLink(state.secretDraft) === null),
+            disabled: state.busy !== null,
             loading: state.busy === 'connect',
             children: state.busy === 'connect' ? STRINGS.connecting : STRINGS.connect,
             onClick: () => actions.onConnect(),
           })),
       }),
-      state.secretDraft.trim() !== ''
-        && classifyPairSecret(state.secretDraft) === null
-        && parsePairLink(state.secretDraft) === null
-        ? React.createElement(Notice, { 'data-testid': 'secret-invalid', tone: 'error' }, STRINGS.secretInvalid)
-        : null,
       state.originDraft.trim() !== '' && normalizeOrigin(state.originDraft) === undefined
         ? React.createElement(Notice, { 'data-testid': 'origin-invalid', tone: 'error' }, STRINGS.originInvalid)
         : null,
 
-      // 账号认证模式：跨机接管不需要邀请码，直接登录对端账号。
+      // ── 已保存目标（3C）：用 keyring 里的绑定直连，无需再输口令 ────────────
+      (state.outboundTargets ?? []).length > 0
+        ? React.createElement('div', { style: { marginTop: 12 } },
+          React.createElement('div', { className: 'rh-k' }, `已保存的目标（${state.outboundTargets.length}）`),
+          renderOutboundCard(state, actions))
+        : null,
+
+      // ── 3B 首次连接：账号登录（MFA 在同一表单内切换，不跳页）───────────────
       React.createElement('hr', { className: 'rh-divider' }),
       React.createElement('div', { className: 'rh-row', 'data-testid': 'account-login-hint' },
-        React.createElement('span', { className: 'rh-cfg-title' }, '用对端账号登录'),
-        React.createElement('span', { className: 'rh-k' }, '先登录，再登记本浏览器公钥')),
+        React.createElement('span', { className: 'rh-cfg-title' }, '用目标设备的账号登录'),
+        React.createElement('span', { className: 'rh-k' }, '登录成功后本机公钥会被自动登记，之后重连不再需要 2FA')),
       React.createElement('div', { className: 'rh-row' },
-        React.createElement(Input, {
-          'data-testid': 'account-user',
-          ariaLabel: '对端账号',
-          autoComplete: 'username',
-          placeholder: '对端账号',
-          value: accountDraft.username,
-          onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('username', event.currentTarget.value),
+        React.createElement(Field, {
+          label: '用户名',
+          children: React.createElement(Input, {
+            'data-testid': 'account-user',
+            ariaLabel: '对端账号',
+            autoComplete: 'username',
+            placeholder: '对端账号',
+            value: accountDraft.username,
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('username', event.currentTarget.value),
+          }),
         }),
-        React.createElement(PasswordInput, {
-          'data-testid': 'account-password',
-          ariaLabel: '对端口令',
-          autoComplete: 'current-password',
-          placeholder: '对端口令',
-          value: accountDraft.password,
-          onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('password', event.currentTarget.value),
-        }),
-        React.createElement(Input, {
-          'data-testid': 'account-code',
-          ariaLabel: '两步验证码',
-          inputMode: 'numeric',
-          autoComplete: 'one-time-code',
-          placeholder: '6 位验证码（已启用 2FA 时必填）',
-          value: accountDraft.code,
-          onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('code', event.currentTarget.value),
+        React.createElement(Field, {
+          label: '口令',
+          children: React.createElement(PasswordInput, {
+            'data-testid': 'account-password',
+            ariaLabel: '对端口令',
+            autoComplete: 'current-password',
+            placeholder: '对端口令',
+            value: accountDraft.password,
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('password', event.currentTarget.value),
+          }),
         })),
       React.createElement('div', { className: 'rh-row' },
-        React.createElement(Select, {
-          'data-testid': 'account-role',
-          ariaLabel: '申请的角色',
-          value: accountDraft.role,
-          options: ROLES.map(role => ({ value: role, label: ROLE_LABEL[role] })),
-          onChange: (event: React.ChangeEvent<HTMLSelectElement>) =>
-            actions.onAccountChange('role', event.currentTarget.value),
+        React.createElement(Field, {
+          label: '动态码（目标要求 2FA 时填写）',
+          children: React.createElement(Input, {
+            'data-testid': 'account-code',
+            ariaLabel: '两步验证码',
+            inputMode: 'numeric',
+            autoComplete: 'one-time-code',
+            placeholder: '6 位验证码（可选）',
+            value: accountDraft.code,
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('code', event.currentTarget.value),
+          }),
         }),
+        React.createElement(Field, {
+          label: '申请的角色',
+          children: React.createElement(Select, {
+            'data-testid': 'account-role',
+            ariaLabel: '申请的角色',
+            value: accountDraft.role,
+            options: ROLES.map(role => ({ value: role, label: ROLE_LABEL[role] })),
+            onChange: (event: React.ChangeEvent<HTMLSelectElement>) =>
+              actions.onAccountChange('role', event.currentTarget.value),
+          }),
+        })),
+      React.createElement('div', { className: 'rh-row' },
         React.createElement(Button, {
           'data-testid': 'account-connect',
           variant: 'primary',
@@ -1010,7 +836,7 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
             || accountDraft.username.trim() === ''
             || accountDraft.password === '',
           loading: state.busy === 'account',
-          children: state.busy === 'account' ? '登录中…' : '登录并信任',
+          children: state.busy === 'account' ? '登录中…' : '登录并信任本机',
           onClick: () => actions.onAccountConnect(),
         })),
     ),
@@ -1387,23 +1213,8 @@ function renderOutboundCard(state: RemoteHubPageState, actions: RemoteHubPageAct
   }
 
   const paired = state.outboundTargets ?? []
-  return el('div', 'rh-stack', { 'data-testid': 'outbound-paired-list' },
-    paired.length === 0
-      ? el('div', 'rh-dev', { 'data-testid': 'outbound-none' },
-        el('div', 'rh-dev-top', undefined,
-          el('div', 'rh-dev-ico', undefined, '🔗'),
-          el('div', 'rh-dev-meta', undefined,
-            el('div', 'rh-dev-nm', undefined, STRINGS.notConnected),
-            el('div', 'rh-dev-sub', undefined, STRINGS.clientSub))),
-        el('div', 'rh-dev-foot', undefined,
-          el('button', 'rh-btn is-small is-primary', {
-            type: 'button', 'data-testid': 'connect-entry',
-            onClick: () => {
-              document?.querySelector('[data-testid="client-section"]')
-                ?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
-            },
-          }, `+ ${STRINGS.connect}`)))
-      : paired.map(target => el('div', 'rh-dev is-offline', {
+  return el('div', 'rh-devgrid', { 'data-testid': 'outbound-paired-list' },
+    paired.map(target => el('div', 'rh-dev is-offline', {
         key: outboundTargetIdentity(target),
         'data-testid': 'outbound-paired',
         'data-origin': target.origin,
@@ -1624,10 +1435,10 @@ function renderConfigBody(state: RemoteHubPageState, actions: RemoteHubPageActio
           })))),
     el('div', 'rh-kv', { style: { marginTop: 12 } },
       el('div', undefined,
-        el('div', 'rh-k', undefined, STRINGS.cfgQrTtl),
+        el('div', 'rh-k', undefined, STRINGS.cfgTtl),
         el('div', 'rh-v', undefined, `${Math.round(Number(value('pairQrTtlMs') ?? 0) / 1000)}s`)),
       el('div', undefined,
-        el('div', 'rh-k', undefined, STRINGS.cfgCodeTtl),
+        el('div', 'rh-k', undefined, '票据轮换'),
         el('div', 'rh-v', undefined, `${Math.round(Number(value('pairCodeTtlMs') ?? 0) / 1000)}s`)),
       el('div', undefined,
         el('div', 'rh-k', undefined, STRINGS.cfgTunnel),
@@ -1656,107 +1467,10 @@ function renderConfigBody(state: RemoteHubPageState, actions: RemoteHubPageActio
  * @param link - 票据对应的配对链接（无票据时为 null）。
  * @returns React 节点。
  */
-/** 签发有效期（毫秒）：票据与短码都是 15 秒轮换——用于倒计时进度条比例。 */
-const ISSUE_TTL: Record<IssuedPairing['kind'], number> = { ticket: 15_000, code: 15_000 }
-
-function renderIssuedBody(
-  state: RemoteHubPageState,
-  actions: RemoteHubPageActions,
-  link: string | null,
-): React.ReactNode {
-  const ticket = state.issued !== null && state.issued.kind === 'ticket' ? state.issued : null
-  const code = state.issuedCode !== null && state.issuedCode.kind === 'code' ? state.issuedCode : null
-  // 二维码：票据存在时渲染；否则显示占位提示（引导点击「生成二维码」）。
-  const qr = link !== null
-    ? renderQr(link)
-    : el('div', 'rh-qr-placeholder', { 'data-testid': 'qr-placeholder' },
-      el('div', 'rh-empty-ic', undefined, '▦'),
-      el('div', undefined, STRINGS.qrPending))
-
-  return el('div', 'rh-qr-wrap', undefined,
-    // ── 二维码 ────────────────────────────────────────────────────────────
-    el('div', 'rh-qr-copy rh-tokcol-qr', undefined, qr),
-
-    // ── 凭据信息（短码 + 链接 + 倒计时）──────────────────────────────────
-    el('div', 'rh-qr-copy rh-tokcol-info', undefined,
-      el('div', 'rh-kv', { style: { marginBottom: 8 } },
-        el('div', undefined,
-          el('div', 'rh-k', undefined, STRINGS.issuedRole),
-          el('div', 'rh-v', undefined,
-            ROLE_LABEL[((ticket ?? code)?.role as RoleName) ?? state.role] ?? ((ticket ?? code)?.role ?? state.role))),
-        el('div', undefined,
-          el('div', 'rh-k', undefined, STRINGS.issuedKind),
-          el('div', 'rh-v', { 'data-testid': 'issued-kind' },
-            ticket !== null ? STRINGS.issuedTicket : code !== null ? STRINGS.issuedCodeLabel : STRINGS.issuedNone))),
-
-      // 短码：就绪时显示真实短码，否则显示占位 + 引导
-      el('div', 'rh-k', undefined, STRINGS.issuedCodeLabel),
-      code !== null
-        ? el('code', 'rh-codebox', { 'data-testid': 'issued-code' }, code.value)
-        : el('div', 'rh-codebox rh-codevalue-empty', { 'data-testid': 'issued-code-empty' },
-          el('span', undefined, STRINGS.codePending),
-          el('button', 'rh-link', {
-            type: 'button', 'data-testid': 'issue-code-inline',
-            disabled: state.busy !== null,
-            onClick: () => actions.onIssue('code'),
-          }, STRINGS.issueCode)),
-
-      // 链接：票据存在时显示可复制的完整链接
-      el('div', 'rh-k', { style: { marginTop: 12 } }, STRINGS.issuedLinkLabel),
-      link !== null
-        ? el('code', 'rh-codebox', { 'data-testid': 'issued-link' }, link)
-        : el('div', 'rh-codebox rh-codevalue-empty', { 'data-testid': 'issued-link-empty' },
-          el('span', undefined, STRINGS.linkPending),
-          el('button', 'rh-link', {
-            type: 'button', 'data-testid': 'issue-ticket-inline',
-            disabled: state.busy !== null,
-            onClick: () => actions.onIssue('ticket'),
-          }, STRINGS.issueTicket)),
-
-      // 倒计时
-      el('div', 'rh-k', { style: { marginTop: 12 } }, STRINGS.countdownLabel),
-      el('div', 'rh-countdown', { 'data-testid': 'issued-countdown-bar', role: 'presentation' },
-        React.createElement('i', { style: { width: `${Math.round(issuedRatio(state) * 100)}%` } })),
-      el('div', 'rh-row', { style: { marginTop: 8 } },
-        link !== null
-          ? el('button', 'rh-btn is-small', {
-            type: 'button', 'data-testid': 'copy-link',
-            onClick: () => actions.onCopy(link),
-          }, STRINGS.copyLink)
-          : null,
-        code !== null
-          ? el('button', 'rh-btn is-small', {
-            type: 'button', 'data-testid': 'copy-code',
-            onClick: () => actions.onCopy(code.value),
-          }, STRINGS.copyCode)
-          : null,
-        el('span', 'rh-k', { 'data-testid': 'issued-countdown' }, countdownText(state)))))
-}
 
 /** 倒计时用的「最近一次签发」（票据优先，其次短码）。 */
-function latestIssue(state: RemoteHubPageState): IssuedPairing | null {
-  if (state.issued !== null) return state.issued
-  return state.issuedCode ?? null
-}
-
 /** 签发倒计时进度（0–1，按签发类型的有效期归一）。 */
-function issuedRatio(state: RemoteHubPageState): number {
-  const latest = latestIssue(state)
-  if (latest === null) return 0
-  const ttl = ISSUE_TTL[latest.kind] ?? 15_000
-  const left = Math.max(0, latest.expiresAt - state.now)
-  return Math.min(1, left / ttl)
-}
-
 /** 倒计时文案（含角色）。 */
-function countdownText(state: RemoteHubPageState): string {
-  const latest = latestIssue(state)
-  if (latest === null) return ''
-  const left = remainingSeconds(latest.expiresAt, state.now)
-  const role = ROLE_LABEL[latest.role as RoleName] ?? latest.role
-  return left > 0 ? `剩余 ${left}s · 角色 ${role}` : '已过期，请重新生成'
-}
-
 /** 时间显示：相对最近。 */
 function formatTime(iso: string): string {
   const at = Date.parse(iso)
@@ -1836,21 +1550,7 @@ export interface RemoteHubPageDeps {
   }>
   /** 清除配对。 */
   revokeDevices: (input: { deviceId?: string; all?: boolean }) => Promise<{ revoked: string[] }>
-  issueTicket: (input: { origin: string; pairIssueToken: string; role: RoleName }) => Promise<{ ticket: string; expiresAt: number; role: string }>
-  issueCode: (input: { origin: string; pairIssueToken: string; role: RoleName }) => Promise<{ code: string; expiresAt: number; role: string }>
-  /**
-   * 同源签发（桌面端唯一可用路径）。
-   *
-   * 桌面页面 origin 是 `dsh-app://app`，无法跨协议 fetch 守卫；签发必须走
-   * `hub/admin.issue` 同源通道。缺省时回退到 `issueTicket` / `issueCode`。
-   */
-  adminIssue?: (input: { kind: 'ticket' | 'code'; role: RoleName }) => Promise<{
-    kind: 'ticket' | 'code'
-    value: string
-    expiresAt: number
-    role: string
-  }>
-  /** 出站连接状态读写（`carrier-mode.json`；磁盘为真源，CLI 配对也能被页面感知）。 */
+  /** 出站连接状态读写（`carrier-mode.json`；磁盘为真源，CLI 连接也能被页面感知）。 */
   carrier?: () => Promise<{ mode: Record<string, unknown>; at: number }>
   carrierWrite?: (mode: Record<string, unknown>) => Promise<number>
   listOutboundTargets?: () => Promise<readonly OutboundTarget[]>
@@ -1882,20 +1582,6 @@ export interface RemoteHubPageDeps {
     origin: string
     candidates: readonly string[]
     preferred: string
-  }>
-  connect: (input: { origin: string; secret: string }) => Promise<{
-    /** 旧版：长期 bearer（账号认证模式下不存在）。 */
-    token?: string
-    role: string
-    deviceId?: string
-    label?: string
-    /** 账号认证模式：邀请兑换换来的客户端租约（私钥已在浏览器里）。 */
-    clientId?: string
-    lease?: string
-    generation?: number
-    expiresAt?: number
-    /** 单控模式下被本次配对踢下线的设备（供 UI 提示）。 */
-    displacedDevices?: { deviceId: string; label: string }[]
   }>
   /** ③ 守卫运行指标（宿主旧版本 reject → 降级卡）。 */
   stats?: () => Promise<HubMetrics>
@@ -1932,28 +1618,17 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
     const [guardError, setGuardError] = React.useState<string | null>(null)
     const [devices, setDevices] = React.useState<readonly CloudDeviceRow[]>([])
     const [loading, setLoading] = React.useState(true)
-    const [role, setRole] = React.useState<RoleName>('control')
     const [deletePrompt, setDeletePrompt] = React.useState<{ message: string; run(): void } | null>(null)
-    const selectedRoleRef = React.useRef(role)
-    selectedRoleRef.current = role
-  /** 同时持有一张票据与一个短码（两者独立有效期，一起展示）。 */
-  const [ticket, setTicket] = React.useState<IssuedPairing | null>(null)
-  const [code, setCode] = React.useState<IssuedPairing | null>(null)
     const [originDraft, setOriginDraft] = React.useState<string>(
       () => (mode.mode === 'cloud' ? (mode.origin ?? '') : ''),
     )
-    const [secretDraft, setSecretDraft] = React.useState<string>('')
     const [accountDraft, setAccountDraft] = React.useState<{ username: string; password: string; code: string; role: RoleName }>(
       () => ({ username: 'admin', password: '', code: '', role: 'control' }),
     )
-    const [busy, setBusy] = React.useState<null | 'connect' | 'account' | 'issue' | 'revoke' | 'delete' | 'refresh' | 'detach'>(null)
+    const [busy, setBusy] = React.useState<null | 'connect' | 'account' | 'revoke' | 'delete' | 'refresh' | 'detach'>(null)
     const [error, setError] = React.useState<string | null>(null)
     const [now, setNow] = React.useState<number>(() => clock())
-    const [scannerOpen, setScannerOpen] = React.useState(false)
     // 四区扩展状态
-    const [autoReissue, setAutoReissue] = React.useState<boolean>(() => {
-      try { return storage?.getItem('remote-hub:auto-reissue') !== '0' } catch { return true }
-    })
     const [deviceFilter, setDeviceFilter] = React.useState<'all' | 'inbound'>('all')
     const [stats, setStats] = React.useState<HubMetrics | null>(null)
     const [statsError, setStatsError] = React.useState<string | null>(null)
@@ -2119,7 +1794,6 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
       deps.getConfig()
         .then(snapshot => {
           setConfig(snapshot); setConfigDraft(snapshot)
-          setRole(configuredDefaultRole(snapshot.defaultRole))
         })
         .catch(() => { setConfig(null); setConfigDraft(null) })
     }, [])
@@ -2182,11 +1856,6 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
       return () => { cancelled = true; clearTimeout(timer) }
     }, [guard !== null, refresh])
 
-    React.useEffect(() => {
-      if (ticket === null && code === null) return undefined
-      const timer = setInterval(() => { setNow(clock()) }, 1000)
-      return () => { clearInterval(timer) }
-    }, [ticket === null, code === null])
 
     // ③ 指标轮询（60s；守卫不可用时节流不重试）。
     React.useEffect(() => {
@@ -2195,89 +1864,15 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
       return () => { clearInterval(timer) }
     }, [deps.stats, guard === null, refreshStats])
 
-    /**
-     * 15 秒轮换：票据与短码**各自独立**到期后立即换新。
-     *
-     * 为什么是 15 秒：配对凭据只在极短窗口内有效，配对成功那一刻服务端就下发
-     * 长期设备令牌并持久化到设备表，设备此后凭令牌长期访问 —— 凭据过期不会
-     * 让已配对设备掉线，只是页面上展示的码会不断更新。
-     */
-    React.useEffect(() => {
-      if (!autoReissue || busy !== null) return
-      const ticketExpired = ticket !== null && remainingSeconds(ticket.expiresAt, now) <= 0
-      const codeExpired = code !== null && remainingSeconds(code.expiresAt, now) <= 0
-      if (!ticketExpired && !codeExpired) return
-      if (deps.adminIssue === undefined
-        && (deps.injected().pairIssueToken ?? '') === '') return
-      if (ticketExpired) void issueOne('ticket')
-      if (codeExpired) void issueOne('code')
-    }, [ticket, code, autoReissue, now, busy, guard])
 
-    /**
-     * 签发一枚凭据并写入对应状态槽（票据 → ticket，短码 → code）。
-     * @param kind - 凭据类型。
-     * @param roleOverride - 指定角色（缺省用页面当前选择）。
-     */
-    function issueOne(
-      kind: 'ticket' | 'code',
-      roleOverride?: RoleName,
-    ): Promise<void> {
-      const useRole = roleOverride ?? role
-      // 守卫直连回退路径需要 pin + 地址；同源通道不需要。
-      if (deps.adminIssue === undefined
-        && (deps.injected().pairIssueToken ?? '') === '') {
-        return Promise.reject(new Error('本机签发不可用：缺少签发凭据'))
-      }
-      const pairIssueToken = deps.injected().pairIssueToken
-      const origin = guard?.loopbackOrigin
-        ?? deps.injected().loopbackOrigin
-        ?? guard?.origin
-        ?? normalizeOrigin(deps.injected().guardOrigin ?? '')
-      const run = deps.adminIssue !== undefined
-        // 同源通道：桌面端 dsh-app 页面无法跨协议访问守卫。
-        ? deps.adminIssue({ kind, role: useRole }).then(result => ({
-          kind: result.kind, value: result.value, role: result.role, expiresAt: result.expiresAt,
-        }))
-        : kind === 'ticket'
-          ? deps.issueTicket({ origin: origin as string, pairIssueToken: pairIssueToken as string, role: useRole }).then(result => ({
-            kind: 'ticket' as const, value: result.ticket, role: result.role, expiresAt: result.expiresAt,
-          }))
-          : deps.issueCode({ origin: origin as string, pairIssueToken: pairIssueToken as string, role: useRole }).then(result => ({
-            kind: 'code' as const, value: result.code, role: result.role, expiresAt: result.expiresAt,
-          }))
-      return run
-        .then(result => {
-          if (selectedRoleRef.current !== useRole) return
-          if (result.kind === 'ticket') setTicket(result)
-          else setCode(result)
-          setNow(clock())
-          deps.log?.('info', result.kind === 'ticket' ? '二维码已更新' : '短码已更新',
-            `${Math.round((result.expiresAt - clock()) / 1000)}s 有效`, 'hub/admin.issue')
-        })
-        .catch((cause: unknown) => {
-          deps.log?.('warn', kind === 'ticket' ? '二维码刷新失败' : '短码刷新失败', describeGuardFailure(cause))
-        })
-    }
 
     const actions: RemoteHubPageActions = {
       onRefresh() { refresh() },
-      onRoleChange(next) { setRole(next) },
       onCopy(text) {
         const clipboard = (globalThis as {
           navigator?: { clipboard?: { writeText?: (value: string) => Promise<void> } }
         }).navigator?.clipboard
         void clipboard?.writeText?.(text)
-      },
-      onIssue(kind) {
-        setBusy('issue')
-        setError(null)
-        deps.log?.('info', kind === 'ticket' ? '开始签发二维码' : '开始签发短码', `角色 ${ROLE_LABEL[role]}`)
-        void issueOne(kind)
-          .catch((cause: unknown) => {
-            setError(`生成失败：${describeGuardFailure(cause)}`)
-            deps.log?.('error', '签发失败', describeGuardFailure(cause), 'hub/admin.issue')
-          })
-          .finally(() => { setBusy(null) })
       },
       onForgetDevice(deviceId) {
         const remove = deps.forgetDevice
@@ -2323,16 +1918,7 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
           .finally(() => { setBusy(null) })
       },
       onOriginChange(value) {
-        const draft = connectionAddressDraft(value)
-        setOriginDraft(draft.origin)
-        if (draft.secret !== undefined) setSecretDraft(draft.secret)
-        if (error !== null) setError(null)
-      },
-      onSecretChange(value) {
-        setSecretDraft(value)
-        // 粘贴二维码链接时自动填充地址。
-        const parsed = parsePairLink(value)
-        if (parsed !== null) setOriginDraft(parsed.origin)
+        setOriginDraft(value)
         if (error !== null) setError(null)
       },
       onDetach() {
@@ -2398,15 +1984,9 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
           setError(`重连失败，连接状态未更改：${cause instanceof Error ? cause.message : String(cause)}`)
         })
       },
-      onScan() { setScannerOpen(true) },
-      onAutoReissueChange(enabled) {
-        setAutoReissue(enabled)
-        try { storage?.setItem('remote-hub:auto-reissue', enabled ? '1' : '0') } catch { /* 无存储时跳过 */ }
-      },
       onFilterChange(filter) { setDeviceFilter(filter) },
       onConfigChange(key, value) {
         setConfigDraft(previous => ({ ...(previous ?? {}), [key]: value }))
-        if (key === 'defaultRole') setRole(configuredDefaultRole(value))
         setConfigSavedAt(null)
       },
       onConfigSave() {
@@ -2422,7 +2002,6 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
           .then(result => {
             setConfig(result)
             setConfigDraft(result)
-            setRole(configuredDefaultRole(result.defaultRole))
             setConfigSavedAt(clock())
             deps.log?.('info', '配置已保存', Object.keys(patch).join(', '), 'hub/admin.configPatch')
           })
@@ -2434,8 +2013,18 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
           .finally(() => { setConfigSaving(false) })
       },
       onConnect() {
-        const link = parsePairLink(secretDraft)
-        connectWith(normalizeOrigin(link?.origin ?? originDraft), link?.secret ?? secretDraft.trim())
+        // 「连接」= 用已保存的 keyring 绑定直连目标；没有已保存目标时等同「登录并信任」。
+        const target = normalizeOrigin(originDraft)
+        if (target === undefined) {
+          setError(STRINGS.originInvalid)
+          return
+        }
+        const saved = (outboundTargets ?? []).find(item => (normalizeOrigin(item.origin) ?? item.origin) === target)
+        if (saved?.id !== undefined && deps.activateOutboundTarget !== undefined) {
+          actions.onReconnect(saved)
+          return
+        }
+        actions.onAccountConnect()
       },
       onAccountChange(field, value) {
         setAccountDraft(current => ({
@@ -2496,151 +2085,6 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
       },
     }
 
-    /**
-     * 进入页面自动签发**二维码 + 短码**（两者独立 15 秒轮换）。
-     *
-     * 用户不该需要手动点击才能看到可扫的码；三种凭据同时就绪，任选其一交给
-     * 对方即可。之后由「过期自动重签」各自续期。失败静默（运行日志记录原因）。
-     */
-    const autoIssuedRef = React.useRef<RoleName | null>(null)
-    React.useEffect(() => {
-      if (autoIssuedRef.current === role) return
-      if (guard === null) return
-      // 同源管理通道或注入 pin 任一可用即可签发。
-      if (deps.adminIssue === undefined && (deps.injected().pairIssueToken ?? '') === '') return
-      autoIssuedRef.current = role
-      setTicket(null); setCode(null)
-      void issueOne('ticket')
-      void issueOne('code')
-    }, [guard, actions])
-
-    /**
-     * 用给定 origin/secret 建立连接（`onConnect` 与扫码共用）。
-     * @param target - 已规范化的地址；undefined 表示非法。
-     * @param secret - 短码或票据。
-     */
-    function connectWith(target: string | undefined, secret: string): void {
-      if (target === undefined) {
-        setError('目标地址格式不正确。')
-        return
-      }
-      if (classifyPairSecret(secret) === null) {
-        setError('配对凭据格式不正确。')
-        return
-      }
-      setBusy('connect')
-      setError(null)
-      void deps.connect({ origin: target, secret })
-        .then(async result => {
-          const label = result.label ?? result.deviceId
-          // 账号认证模式：邀请兑换只换来租约，出站档案记 account 目标（无 bearer）。
-          if (result.lease !== undefined && result.clientId !== undefined) {
-            if (deps.saveOutboundTarget === undefined || deps.carrierWrite === undefined) {
-              setError('宿主不支持安全保存连接状态；邀请已兑换，请在目标端撤销孤立客户端。')
-              return
-            }
-            const saved = await deps.saveOutboundTarget({
-              origin: target,
-              account: true,
-              accountId: result.clientId,
-              ...(label === undefined ? {} : { deviceLabel: label }),
-              role: result.role,
-              lastConnectedAt: clock(),
-            })
-            const at = await deps.carrierWrite({
-              mode: 'cloud',
-              origin: target,
-              account: true,
-              targetId: saved.id,
-              ...(label === undefined ? {} : { deviceLabel: label }),
-            })
-            writeCarrierMode({
-              mode: 'cloud',
-              origin: target,
-              account: true,
-              targetId: saved.id,
-              ...(label === undefined ? {} : { deviceLabel: label }),
-            }, storage)
-            setOutboundTargets(previous => upsertOutboundTarget(previous, saved))
-            lastCarrierAtRef.current = at
-            const displaced = result.displacedDevices ?? []
-            if (displaced.length > 0) {
-              deps.log?.('info', '单控已切换控制端', displaced.map(device => device.label).join('、'))
-            }
-            reload()
-            return
-          }
-          const next: CarrierMode = {
-            mode: 'cloud',
-            origin: target,
-            ...(result.token === undefined ? {} : { token: result.token }),
-            ...(label === undefined ? {} : { deviceLabel: label }),
-          }
-          if (deps.saveOutboundTarget === undefined || deps.carrierWrite === undefined) {
-            setError('宿主不支持安全保存配对凭据；配对可能已兑换，请在目标端检查并撤销孤立设备。')
-            return
-          }
-          const paired = await persistNewPairing({
-            saveTarget: () => deps.saveOutboundTarget!({
-              origin: target,
-              token: result.token ?? '',
-              ...(next.deviceLabel === undefined ? {} : { deviceLabel: next.deviceLabel }),
-              ...(result.deviceId === undefined ? {} : { deviceId: result.deviceId }),
-              role: result.role,
-              pairedAt: clock(),
-              lastConnectedAt: clock(),
-            }),
-            writeCloudMode: saved => deps.carrierWrite!({
-              mode: 'cloud',
-              origin: saved.origin,
-              targetId: saved.id,
-              ...(saved.deviceLabel === undefined ? {} : { deviceLabel: saved.deviceLabel }),
-            }),
-            setCloudMode: saved => {
-              writeCarrierMode({ ...next, targetId: saved.id }, storage)
-              setOutboundTargets(previous => upsertOutboundTarget(previous, saved))
-            },
-          })
-          if (!paired.archiveSaved) {
-            setError('配对已在目标端兑换，但本机 profile 档案保存失败；未切换，请在目标端撤销孤立配对后重试。')
-            return
-          }
-          if (!paired.carrierSaved) {
-            setOutboundTargets(previous => upsertOutboundTarget(previous, paired.target!))
-            setError('配对已保存到本机档案，但 carrier 切换失败；可从已配对卡重试。')
-            return
-          }
-          lastCarrierAtRef.current = -1
-          const displaced = result.displacedDevices ?? []
-          if (displaced.length > 0) {
-            deps.log?.('info', '单控已切换控制端', displaced.map(device => device.label).join('、'))
-          }
-          reload()
-        })
-        .catch((cause: unknown) => {
-          setError(`连接失败：${cause instanceof Error ? cause.message : String(cause)}`)
-        })
-        .finally(() => { setBusy(null) })
-    }
-
-    /**
-     * 扫码命中：解析链接 → 回填表单 → 直接连接。
-     * @param text - 解码出的原始文本。
-     */
-    function applyScan(text: string): void {
-      setScannerOpen(false)
-      const link = parsePairLink(text)
-      const secret = link?.secret ?? text.trim()
-      const target = normalizeOrigin(link?.origin ?? originDraft)
-      if (link !== null) setOriginDraft(link.origin)
-      setSecretDraft(secret)
-      if (target === undefined || classifyPairSecret(secret) === null) {
-        setError('扫到的内容不是本插件的配对二维码（可改用短码手动输入）。')
-        return
-      }
-      connectWith(target, secret)
-    }
-
     const page = renderRemoteHubPage({
       mode,
       outboundTargets,
@@ -2648,15 +2092,7 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
       guardError,
       devices,
       loading,
-      ...(deps.injected().pairIssueToken !== undefined
-        ? { pairIssueToken: deps.injected().pairIssueToken }
-        : {}),
-      role,
-      issued: ticket,
-      issuedCode: code,
-      autoReissue,
       originDraft,
-      secretDraft,
       accountDraft,
       deviceFilter,
       stats,
@@ -2668,7 +2104,7 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
       busy,
       error,
       injection,
-      adminAvailable: deps.adminIssue !== undefined || deps.diagnostic !== undefined,
+      adminAvailable: deps.diagnostic !== undefined,
       listenAddress,
       lanCandidates,
       diagnostic: deps.diagnostic?.() ?? null,
@@ -2683,14 +2119,7 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
         onCancel: () => setDeletePrompt(null),
         onConfirm: () => { const run = deletePrompt.run; setDeletePrompt(null); run() },
       }))
-    return scannerOpen
-      ? React.createElement(React.Fragment, null,
-        page,
-        React.createElement(QrScanner, {
-          onResult: (text: string) => { applyScan(text) },
-          onClose: () => { setScannerOpen(false) },
-        }))
-      : page
+    return page
   }
 }
 

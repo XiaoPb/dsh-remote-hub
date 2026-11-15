@@ -11,8 +11,7 @@ function text(node) {
 }
 const state = {
   mode: { mode: 'local' }, outboundTargets: [{ id: 'a'.repeat(64), origin: 'http://example.test', role: 'full', pairedAt: 1700000000000, lastConnectedAt: 1700000001000 }],
-  guard: null, guardError: null, devices: [], loading: false, role: 'control', issued: null, issuedCode: null, autoReissue: false,
-  originDraft: '', secretDraft: '', deviceFilter: 'all', stats: null, statsError: null, config: null, configDraft: null, configSaving: false,
+  guard: null, guardError: null, devices: [], loading: false, role: 'control', originDraft: '', deviceFilter: 'all', stats: null, statsError: null, config: null, configDraft: null, configSaving: false,
   configSavedAt: null, busy: null, error: '连接失败：配对凭据已过期', now: Date.now(),
 }
 test('outbound card exposes recorded role and pairing time, and failures have readable text', () => {

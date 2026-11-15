@@ -27,7 +27,7 @@ import type { RemoteTransport, TransportOptions, AdminRequestDiagnostic, HubLogE
 import { createTransport, RemoteHubError, HUB_LOG_LIMIT } from './transport.js'
 import { createAccessStore } from './access.js'
 import { mountRemote } from './mount.js'
-import { createRemoteHubPageComponent, classifyPairSecret } from './panel/RemoteHubPage.js'
+import { createRemoteHubPageComponent } from './panel/RemoteHubPage.js'
 import type { CloudDeviceRow } from './panel/RemoteHubPage.js'
 import { RemoteHubNavIcon } from './panel/NavIcon.js'
 import { createAccountPageComponent } from './auth/mount.js'
@@ -239,21 +239,6 @@ const RemoteHubPage = createRemoteHubPageComponent({
   async revokeDevices(input) {
     return createAdminTransport().revokeDevices(input)
   },
-  async issueTicket() {
-    throw new Error('邀请已移除：请使用「用对端账号登录」')
-  },
-  async issueCode() {
-    throw new Error('邀请已移除：请使用「用对端账号登录」')
-  },
-  /**
-   * 同源签发（桌面端唯一可行路径）。
-   *
-   * 走 `hub/admin.issue`：owner 页面经 Electron `forwardWebRequest` 同源转发，
-   * 不需要 pin，也不受 `dsh-app://app` 跨协议限制。
-   */
-  async adminIssue() {
-    throw new Error('邀请已移除：请使用「对端账号登录」')
-  },
   /**
    * 本机连接信息（局域网 IPv4 + 端口）。
    *
@@ -286,9 +271,6 @@ const RemoteHubPage = createRemoteHubPageComponent({
   /** 出站状态变更后重新装配页面（整页重载，重置 RPC 通道）。 */
   reload() {
     globalThis.location?.reload()
-  },
-  async connect() {
-    throw new Error('邀请已移除：请在下方用对端账号登录')
   },
   // ③ 运行指标（守卫 /remote/stats；旧版本 404 → 页面降级卡）。
   async stats() {
