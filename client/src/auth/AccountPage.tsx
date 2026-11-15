@@ -43,6 +43,17 @@ export interface AccountPageState {
   policy: PasswordPolicy
   /** 对端账号（出站信任记录）——与本机账号是两套身份。 */
   peers: readonly PeerAccountRow[]
+  /**
+   * 待确认的提权：服务端拒绝把上限抬高（要求新鲜 2FA）时记录目标，
+   * 页面显示「验证以提权」表单，验证通过后自动重试。
+   */
+  escalation: {
+    clientId: string
+    role: RoleName
+    password: string
+    code: string
+    error: string | null
+  } | null
   /** 一次性引导结果（TOTP 密钥/链接/备用码）。 */
   enrollment: { otpauth: string; backupCodes: readonly string[] } | null
   /** 页面级提示（成功或失败）。 */
@@ -63,6 +74,12 @@ export interface AccountPageActions {
   onSetPasswordPolicy(policy: PasswordPolicy): void
   /** 移除一条对端账号的信任记录（不影响本机账号）。 */
   onForgetPeer(targetId: string): void
+  /** 提权前的重新验证：输入字段变更。 */
+  onEscalationChange(field: 'password' | 'code', value: string): void
+  /** 提交「验证并提权」。 */
+  onEscalationSubmit(): void
+  /** 放弃提权。 */
+  onEscalationCancel(): void
   onTrustClient(label: string, ceiling: RoleName): void
   onRevokeClient(clientId: string): void
   onSetRole(clientId: string, role: RoleName): void
@@ -403,6 +420,8 @@ export function renderAccountPage(
   // ready
   const clients = status?.clients ?? []
   const active = clients.filter(client => client.revokedAt === null)
+  // 兼容早期调用方（未提供该字段即视为无待确认提权）。
+  const escalation = state.escalation ?? null
   return React.createElement('div', { 'data-testid': 'account-page', 'data-phase': 'ready' },
     header,
     // 两套账号必须分开显示：本机账号决定「谁能登录这台机器」，
@@ -502,6 +521,62 @@ export function renderAccountPage(
           '还没有受信客户端。信任本浏览器后即可免重复 2FA 访问 Hub。')
         : React.createElement('div', { 'data-testid': 'clients-list', style: { marginTop: 8 } },
           clients.map(client => renderClientRow(client, state, actions)))),
+
+    escalation === null ? null : React.createElement('section', {
+      'data-testid': 'escalation',
+      style: {
+        marginTop: 18,
+        border: '1px solid var(--dsw-alias-state-warning-primary, #d29922)',
+        borderRadius: 10,
+        padding: '12px 14px',
+      },
+    },
+    React.createElement('strong', { style: { fontSize: 13, display: 'block' } }, '提升权限需要重新验证'),
+    React.createElement('p', { style: { fontSize: 12, color: 'var(--dsw-alias-text-tertiary, #8b949e)', margin: '4px 0 8px' } },
+      `把客户端上限提升到「${roleLabel(escalation.role)}」需要重新输入口令与 2FA 验证码；`
+      + '重新验证只刷新本次登录的 2FA 窗口，不会签发新会话。'),
+    React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+      React.createElement('input', {
+        type: 'password',
+        'data-testid': 'escalation-password',
+        placeholder: '当前口令',
+        value: escalation.password,
+        disabled: state.busy,
+        autoComplete: 'current-password',
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
+          actions.onEscalationChange('password', event.currentTarget.value),
+        style: { ...buttonStyle, flex: '1 1 180px', padding: '8px 10px' },
+      }),
+      React.createElement('input', {
+        type: 'text',
+        inputMode: 'numeric',
+        'data-testid': 'escalation-code',
+        placeholder: '6 位验证码',
+        value: escalation.code,
+        disabled: state.busy,
+        autoComplete: 'one-time-code',
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
+          actions.onEscalationChange('code', event.currentTarget.value),
+        style: { ...buttonStyle, width: 150, padding: '8px 10px' },
+      })),
+    escalation.error === null
+      ? null
+      : React.createElement('p', { 'data-testid': 'escalation-error', style: { fontSize: 12, margin: '6px 0 0', color: 'var(--dsw-alias-state-error-primary, #f85149)' } },
+        escalation.error),
+    React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 10 } },
+      React.createElement('button', {
+        type: 'button',
+        'data-testid': 'escalation-submit',
+        disabled: state.busy || escalation.password === '' || escalation.code === '',
+        onClick: () => actions.onEscalationSubmit(),
+        style: buttonStyle,
+      }, '验证并提升'),
+      React.createElement('button', {
+        type: 'button',
+        'data-testid': 'escalation-cancel',
+        onClick: () => actions.onEscalationCancel(),
+        style: buttonStyle,
+      }, '取消'))),
 
     React.createElement('section', { 'data-testid': 'peer-accounts', style: { marginTop: 18 } },
       React.createElement('strong', { style: { fontSize: 13, display: 'block' } }, `对端账号（${state.peers.length}）`),

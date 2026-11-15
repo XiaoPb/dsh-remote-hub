@@ -21,7 +21,7 @@ import {
   type AccountPageState,
   type PeerAccountRow,
 } from './AccountPage.js'
-import { createAuthApi, type AuthApi } from './api.js'
+import { createAuthApi, AuthApiError, type AuthApi } from './api.js'
 import { createKeyring, type ClientBinding, type ClientIdentity } from './keyring.js'
 
 /** 装配依赖（测试可注入）。 */
@@ -70,6 +70,7 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
       binding: null,
       policy: 'strong',
       peers: [],
+      escalation: null,
       enrollment: null,
       notice: null,
       busy: false,
@@ -234,10 +235,45 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
           .catch(error => patch({ busy: false, notice: messageOf(error) }))
       },
       onSetCeiling(clientId, role: RoleName) {
-        patch({ busy: true })
+        patch({ busy: true, notice: null })
         void api.clients({ action: 'setCeiling', clientId, role })
           .then(() => load())
-          .catch(error => patch({ busy: false, notice: messageOf(error) }))
+          .catch((error: unknown) => {
+            // 抬升上限需要新鲜 2FA：不直接报错，转入「验证以提权」流程。
+            if (error instanceof AuthApiError && error.code === 'auth-mfa-required') {
+              patch({
+                busy: false,
+                escalation: { clientId, role, password: '', code: '', error: null },
+              })
+              return
+            }
+            patch({ busy: false, notice: messageOf(error) })
+          })
+      },
+      onEscalationChange(field, value) {
+        setState(current => (current.escalation === null
+          ? current
+          : { ...current, escalation: { ...current.escalation, [field]: value, error: null } }))
+      },
+      onEscalationCancel() {
+        patch({ escalation: null })
+      },
+      onEscalationSubmit() {
+        const pending = state.escalation
+        if (pending === null) return
+        patch({ busy: true })
+        void api.reauth({ password: pending.password, code: pending.code })
+          .then(() => api.clients({ action: 'setCeiling', clientId: pending.clientId, role: pending.role }))
+          .then(() => {
+            patch({ escalation: null, busy: false, notice: '已完成 2FA 验证并提升客户端上限。' })
+            return load()
+          })
+          .catch((error: unknown) => {
+            const message = messageOf(error)
+            setState(current => (current.escalation === null
+              ? { ...current, busy: false, notice: message }
+              : { ...current, busy: false, escalation: { ...current.escalation, error: message } }))
+          })
       },
       onLogout() {
         patch({ busy: true })

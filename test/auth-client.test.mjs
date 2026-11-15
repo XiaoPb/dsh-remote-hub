@@ -84,6 +84,9 @@ function noopActions() {
     onSubmitMfa() {},
     onChangePassword() {},
     onForgetPeer() {},
+    onEscalationChange() {},
+    onEscalationSubmit() {},
+    onEscalationCancel() {},
     onSetPasswordPolicy() {},
     onTrustClient() {},
     onRevokeClient() {},
@@ -235,6 +238,7 @@ test('account page asks for bootstrap when no account exists', async () => {
       phase: 'bootstrap',
       policy: 'strong',
       peers: [],
+      escalation: null,
       status: { ready: true, bootstrapped: false, mfaEnabled: true, session: null, username: null },
       binding: null,
       enrollment: null,
@@ -258,6 +262,7 @@ test('account page gates on MFA and never renders a session while pending', asyn
       phase: 'mfa',
       policy: 'strong',
       peers: [],
+      escalation: null,
       status: { ready: true, bootstrapped: true, mfaEnabled: true, session: null, username: 'owner' },
       binding: null,
       enrollment: null,
@@ -293,6 +298,7 @@ test('ready page lists trusted clients with role controls and offers trust', asy
       phase: 'ready',
       policy: 'strong',
       peers: [],
+      escalation: null,
       status: {
         ready: true,
         bootstrapped: true,
@@ -327,6 +333,7 @@ test('first sign-in with the default account is gated on a password change', asy
       phase: 'change-password',
       policy: 'strong',
       peers: [],
+      escalation: null,
       status: {
         ready: true,
         bootstrapped: true,
@@ -362,6 +369,7 @@ test('a revoked client is rendered disabled', async () => {  const markup = awai
       phase: 'ready',
       policy: 'strong',
       peers: [],
+      escalation: null,
       status: {
         ready: true,
         bootstrapped: true,
@@ -445,6 +453,55 @@ test('settings exposes the password policy switch and a live rule checklist', as
   ))
   assert.match(basicMarkup, /data-testid="policy-basic"[^>]*data-selected="true"/u)
   assert.equal((basicMarkup.match(/data-rule="/gu) ?? []).length, 1)
+})
+
+test('raising a ceiling without fresh 2FA opens the escalation prompt', async () => {
+  const base = {
+    phase: 'ready',
+    status: {
+      ready: true,
+      bootstrapped: true,
+      mfaEnabled: true,
+      username: 'admin',
+      passwordPolicy: 'strong',
+      session: {
+        accountId: 'admin', username: 'admin', role: 'admin',
+        createdAt: new Date().toISOString(), expiresAt: Date.now() + 1000, lastMfaAt: Date.now(),
+      },
+      clients: [{
+        clientId: 'c1', label: 'browser', fingerprint: 'ab'.repeat(8), clientType: 'browser',
+        roleCeiling: 'control', activeRole: 'control', leaseGeneration: 1,
+        revokedAt: null, createdAt: new Date().toISOString(), lastSeenAt: null,
+      }],
+    },
+    binding: null,
+    enrollment: null,
+    notice: null,
+    busy: false,
+    mfaToken: null,
+    policy: 'strong',
+    peers: [],
+    escalation: { clientId: 'c1', role: 'full', password: '', code: '', error: null },
+  }
+
+  const markup = await renderMarkup(accountPage.renderAccountPage(base, noopActions(), accountPage.initialDraft(), () => {}))
+  assert.match(markup, /data-testid="escalation"/u)
+  assert.match(markup, /提升权限需要重新验证/u)
+  assert.match(markup, /data-testid="escalation-password"/u)
+  assert.match(markup, /data-testid="escalation-code"/u)
+  assert.match(markup, /data-testid="escalation-submit"[^>]*disabled/u, '空输入时不可提交')
+
+  const withError = await renderMarkup(accountPage.renderAccountPage({
+    ...base,
+    escalation: { ...base.escalation, password: 'x', code: '123456', error: '验证失败' },
+  }, noopActions(), accountPage.initialDraft(), () => {}))
+  assert.match(withError, /data-testid="escalation-error"/u)
+  assert.doesNotMatch(withError, /data-testid="escalation-submit"[^>]*disabled/u, '填好后可提交')
+
+  const idle = await renderMarkup(accountPage.renderAccountPage(
+    { ...base, escalation: null }, noopActions(), accountPage.initialDraft(), () => {},
+  ))
+  assert.doesNotMatch(idle, /data-testid="escalation"/u)
 })
 
 test('settings separates the local account from peer accounts', async () => {

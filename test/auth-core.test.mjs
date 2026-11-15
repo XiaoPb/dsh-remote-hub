@@ -61,6 +61,7 @@ async function bootstrappedService(tag) {
     secret,
     sessionCookie: mfa.cookie,
     advance: () => { clock += 1_000 },
+    advanceMs: (ms) => { clock += ms },
     now: () => clock,
   }
 }
@@ -572,4 +573,50 @@ test('the initial password file is declared and never logged', () => {
   assert.match(store, /mode: 0o600/u)
   // 明确不把口令本身写进日志字符串：日志只带文件路径。
   assert.doesNotMatch(plugin, /logger\?\.warn\?\.\(`[^`]*\$\{password\}/u)
+})
+
+test('raising a client ceiling requires a fresh MFA; lowering does not', { skip: !dynamic }, async () => {
+  const env = await bootstrappedService('ceiling-mfa')
+  try {
+    const key = clientKeyPair()
+    const enrolled = await env.service.enroll(env.sessionCookie, {
+      label: 'browser', clientType: 'browser', publicKey: key.jwk, roleCeiling: 'read-only',
+    })
+    // 刚验证过 2FA：可以直接提。
+    const raised = await env.service.setRoleCeiling(env.sessionCookie, enrolled.client.clientId, 'control')
+    assert.equal(raised.roleCeiling, 'control')
+
+    // 超过 2FA 信任窗后：提升被拒，且给出可识别的错误码。
+    env.advanceMs(11 * 60 * 1000)
+    await assert.rejects(
+      () => env.service.setRoleCeiling(env.sessionCookie, enrolled.client.clientId, 'full'),
+      (error) => error.code === 'auth-mfa-required',
+    )
+
+    // 降级不需要重新验证（不应把管理员锁死）。
+    const lowered = await env.service.setRoleCeiling(env.sessionCookie, enrolled.client.clientId, 'read-only')
+    assert.equal(lowered.roleCeiling, 'read-only')
+
+    // 重新验证后（只刷新窗口，不换会话）可以再次提升。
+    const sessionBefore = (await env.service.status(env.sessionCookie)).session
+    await env.service.reauth(env.sessionCookie, {
+      password: 'Correct-Horse-9-Battery!',
+      code: auth.totpCodeAt(env.secret, env.now()),
+    })
+    const sessionAfter = (await env.service.status(env.sessionCookie)).session
+    assert.equal(sessionAfter.accountId, sessionBefore.accountId)
+    const raisedAgain = await env.service.setRoleCeiling(env.sessionCookie, enrolled.client.clientId, 'full')
+    assert.equal(raisedAgain.roleCeiling, 'full')
+
+    // 口令错也必须拒绝，不能只凭验证码提权。
+    env.advanceMs(11 * 60 * 1000)
+    await assert.rejects(
+      () => env.service.reauth(env.sessionCookie, {
+        password: 'wrong', code: auth.totpCodeAt(env.secret, env.now()),
+      }),
+      (error) => error.code === 'auth-invalid-credentials',
+    )
+  } finally {
+    rmSync(env.dir, { recursive: true, force: true })
+  }
 })
