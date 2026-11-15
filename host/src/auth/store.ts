@@ -109,6 +109,11 @@ export interface MfaChallengeRecord {
 export interface AuthStoreData {
   version: typeof AUTH_STORE_VERSION
   account: AccountRecord | null
+  /**
+   * 全部账号（v2）。`account` 是它的「管理员视图」：读取返回管理员、
+   * 赋值会替换/追加。非枚举——JSON 回退只写 `account`（单账号）。
+   */
+  accounts?: AccountRecord[]
   clients: ClientRecord[]
   sessions: SessionRecord[]
   challenges: MfaChallengeRecord[]
@@ -131,6 +136,68 @@ export function emptyAuthStore(): AuthStoreData {
     challenges: [],
     nonces: {},
   }
+}
+
+/** 全部账号（兼容只有 `account` 的 v1 存储）。 */
+export function accountsOf(data: AuthStoreData): AccountRecord[] {
+  if (data.accounts !== undefined) return data.accounts
+  return data.account === null ? [] : [data.account]
+}
+
+/**
+ * 把 `account` 变成 `accounts` 的「管理员视图」。
+ *
+ * 服务层原有代码大量读写 `data.account`；用访问器包一层后，它们自动落到
+ * `accounts` 数组上：读 = 管理员，写 = 替换/追加。数组本身非枚举，
+ * 因此 JSON 回退仍然只序列化 `account`（单账号语义）。
+ * @param data - 存储数据（原地修改）。
+ */
+export function installAccountViews(data: AuthStoreData): void {
+  const initial = data.account
+  if (data.accounts === undefined) {
+    Object.defineProperty(data, 'accounts', {
+      value: initial === null ? [] : [initial],
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    })
+  }
+  if (Object.getOwnPropertyDescriptor(data, 'account')?.get !== undefined) return
+  Object.defineProperty(data, 'account', {
+    configurable: true,
+    enumerable: true,
+    get() {
+      const list = data.accounts ?? []
+      return list.find(account => account.isAdmin !== false) ?? list[0] ?? null
+    },
+    set(next: AccountRecord | null) {
+      const list = data.accounts ?? (data.accounts = [])
+      if (next === null) {
+        data.accounts = list.filter(account => account.isAdmin === false)
+        return
+      }
+      const index = list.findIndex(account => account.isAdmin !== false || account.username === next.username)
+      if (index >= 0) list[index] = { ...list[index], ...next }
+      else list.push(next)
+    },
+  })
+}
+
+/** 按 username 精确查找（区分大小写）。 */
+export function findAccountByName(data: AuthStoreData, username: string): AccountRecord | null {
+  return accountsOf(data).find(account => account.username === username) ?? null
+}
+
+/** 按 accountId 查找。 */
+export function findAccountById(data: AuthStoreData, accountId: string | undefined): AccountRecord | null {
+  if (accountId === undefined) return null
+  return accountsOf(data).find(account => (account.accountId ?? 'acc_admin') === accountId) ?? null
+}
+
+/** 管理员账号（单账号迁移期与全局配置用）。 */
+export function adminAccount(data: AuthStoreData): AccountRecord | null {
+  const list = accountsOf(data)
+  return list.find(account => account.isAdmin !== false) ?? list[0] ?? null
 }
 
 /**
@@ -301,6 +368,9 @@ async function createJsonAuthStore(path: string = defaultAuthStorePath()): Promi
       }
     }
   }
+
+  // JSON 回退只持久化管理员账号（单账号语义）；`accounts` 数组仅存在于内存。
+  installAccountViews(data)
 
   let chain: Promise<void> = Promise.resolve()
   let dirty = false

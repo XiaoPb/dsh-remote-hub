@@ -158,9 +158,11 @@ export interface AuthClaims {
 
 /** 浏览器会话视图（认证管理面）。 */
 export interface AuthSessionView {
+  /** 稳定账号 id（`acc_xxx`）；单账号迁移期为 `acc_admin`。 */
   accountId: string
   username: string
-  role: 'admin'
+  /** 会话角色：管理员 `admin`；子账号按其账号上限（如 `control`）。 */
+  role: 'admin' | 'read-only' | 'control' | 'full'
   createdAt: string
   expiresAt: number
   /** 最近一次完成 2FA 的时间（用于「信任新客户端」的时效判定）。 */

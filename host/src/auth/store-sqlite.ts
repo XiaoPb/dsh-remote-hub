@@ -19,6 +19,7 @@ import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 
+import { accountsOf, installAccountViews } from './store.js'
 import type {
   AuthStore,
   AuthStoreData,
@@ -192,6 +193,7 @@ async function withDb<T>(file: string, fn: (db: DatabaseSync) => T | Promise<T>)
 export function loadStoreData(db: DatabaseSync): AuthStoreData {
   const accounts = db.prepare('SELECT * FROM accounts ORDER BY is_admin DESC, created_at').all() as Array<Record<string, unknown>>
   const admin = accounts.find(row => Number(row.is_admin) === 1) ?? accounts[0]
+  const allAccounts = accounts.map(rowToAccount)
   const clients = db.prepare('SELECT * FROM clients ORDER BY created_at').all() as Array<Record<string, unknown>>
   const sessions = db.prepare('SELECT * FROM sessions').all() as Array<Record<string, unknown>>
   const challenges = db.prepare('SELECT * FROM mfa_challenges').all() as Array<Record<string, unknown>>
@@ -201,6 +203,7 @@ export function loadStoreData(db: DatabaseSync): AuthStoreData {
   return {
     version: 1,
     account: admin === undefined ? null : rowToAccount(admin),
+    accounts: allAccounts,
     clients: clients.map(rowToClient),
     sessions: sessions.map(rowToSession),
     challenges: challenges.map(rowToChallenge),
@@ -220,7 +223,7 @@ export function saveStoreData(db: DatabaseSync, data: AuthStoreData): void {
     db.exec('DELETE FROM accounts')
     db.exec('DELETE FROM settings')
 
-    if (data.account !== null) upsertAccount(db, data.account)
+    for (const account of accountsOf(data)) upsertAccount(db, account)
     for (const client of data.clients) upsertClient(db, client)
     for (const session of data.sessions) upsertSession(db, session)
     for (const challenge of data.challenges) upsertChallenge(db, challenge)
@@ -376,6 +379,7 @@ export async function createSqliteAuthStore(logicalPath: string): Promise<AuthSt
   await mkdir(dirname(file), { recursive: true, mode: 0o700 }).catch(() => { /* 已存在 */ })
   await importLegacyJson(file, logicalPath)
   const data = await withDb(file, db => loadStoreData(db))
+  installAccountViews(data)
   await chmod(file, 0o600).catch(() => { /* Windows 语义有限 */ })
   let chain: Promise<void> = Promise.resolve()
   let dirty = false
@@ -474,7 +478,7 @@ function upsertAccount(db: DatabaseSync, account: AccountRecord): void {
     account.totp?.verified === true ? 1 : 0,
     account.totp?.createdAt ?? null,
     account.backupCodes === undefined ? null : JSON.stringify(account.backupCodes),
-    account.roleCeiling ?? 'full',
+    account.roleCeiling ?? (account.isAdmin === false ? 'control' : 'full'),
     account.isAdmin === false ? 0 : 1,
     account.disabledAt ?? null,
     account.mustChangePassword === true ? 1 : 0,

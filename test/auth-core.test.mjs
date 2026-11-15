@@ -56,6 +56,7 @@ async function bootstrappedService(tag) {
   })
   return {
     service,
+    store,
     dir,
     boot,
     secret,
@@ -738,6 +739,48 @@ test('header sessions can be issued with a shorter TTL', { skip: !dynamic }, asy
     // 超过短 TTL 后会话失效（不必等到 7 天）。
     env.advanceMs(120_000)
     assert.equal((await env.service.status(issued.cookie)).session, null)
+  } finally {
+    rmSync(env.dir, { recursive: true, force: true })
+  }
+})
+
+test('usernames are case-sensitive and sessions bind to their own account', { skip: !dynamic }, async () => {
+  const env = await bootstrappedService('multi-account')
+  const subSecret = 'JBSWY3DPEHPK3PXP'
+  try {
+    const subHash = await auth.hashPassword('Second-Horse-9-Battery!')
+    await env.store.mutate((data) => {
+      data.accounts = [...(data.accounts ?? []), {
+        accountId: 'acc_sub',
+        isAdmin: false,
+        roleCeiling: 'control',
+        username: 'secondary',
+        passwordHash: subHash,
+        totp: { secret: subSecret, verified: true, createdAt: env.now() },
+        backupCodes: [],
+        createdAt: env.now(),
+        updatedAt: env.now(),
+        lastLoginAt: null,
+      }]
+    })
+
+    // 精确大小写登录成功，会话归属到子账号。
+    const login = await env.service.login({ username: 'secondary', password: 'Second-Horse-9-Battery!' })
+    assert.equal(login.ok, true)
+    assert.equal(login.response.mfaRequired, true)
+    const issued = await env.service.verifyMfa({
+      mfaToken: login.response.mfaToken,
+      code: auth.totpCodeAt(subSecret, env.now()),
+    })
+    assert.equal('error' in issued, false)
+    assert.equal(issued.session.accountId, 'acc_sub')
+    assert.equal(issued.session.username, 'secondary')
+    assert.equal(issued.session.role, 'control')
+
+    // 大小写不同 = 另一个用户名：按「不存在」处理，不泄露账号是否已存在。
+    const wrongCase = await env.service.login({ username: 'Secondary', password: 'Second-Horse-9-Battery!' })
+    assert.equal(wrongCase.ok, false)
+    assert.equal(wrongCase.code, 'auth-invalid-credentials')
   } finally {
     rmSync(env.dir, { recursive: true, force: true })
   }

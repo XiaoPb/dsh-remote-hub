@@ -235,9 +235,31 @@ function parseSessionToken(token: string | undefined): { sid: string; secret: st
   return { sid, secret }
 }
 
-/** 从存储取账号（唯一账号模型）。 */
+/** 全部账号（兼容只有 `account` 的 v1 存储）。 */
+function accountsOf(store: AuthStore) {
+  return store.data.accounts ?? (store.data.account === null ? [] : [store.data.account])
+}
+
+/** 管理员账号（单账号迁移期与全局配置用）。 */
 function accountOf(store: AuthStore) {
-  return store.data.account
+  const list = accountsOf(store)
+  return list.find(account => account.isAdmin !== false) ?? list[0] ?? null
+}
+
+/** 按 username 精确查找（区分大小写）。 */
+function findAccountByName(store: AuthStore, username: string) {
+  return accountsOf(store).find(account => account.username === username) ?? null
+}
+
+/** 按 accountId 查找。 */
+function findAccountById(store: AuthStore, accountId: string | undefined) {
+  if (accountId === undefined) return null
+  return accountsOf(store).find(account => (account.accountId ?? 'acc_admin') === accountId) ?? null
+}
+
+/** 会话所属账号。 */
+function accountForSession(store: AuthStore, record: SessionRecord) {
+  return findAccountById(store, record.accountId) ?? accountOf(store)
 }
 
 /**
@@ -280,11 +302,12 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
   const TOUCH_THROTTLE_MS = 60_000
 
   function sessionView(record: SessionRecord): AuthSessionView {
-    const account = accountOf(store)
+    const account = accountForSession(store, record)
     return {
-      accountId: account?.username ?? '',
+      accountId: account?.accountId ?? 'acc_admin',
       username: account?.username ?? '',
-      role: 'admin',
+      // 会话角色：管理员恒为 admin；子账号按其账号上限显示（实际权限仍逐请求判）。
+      role: account?.isAdmin === false ? 'control' : 'admin',
       createdAt: new Date(record.createdAt).toISOString(),
       expiresAt: record.expiresAt,
       lastMfaAt: record.lastMfaAt,
@@ -332,12 +355,14 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
   async function createSession(
     record: { lastMfaAt: number | null },
     ttlMs: number = SESSION_TTL_MS,
+    accountId: string = 'acc_admin',
   ): Promise<IssuedSession> {
     const at = now()
     const sid = newSessionSid()
     const secret = randomToken()
     const session: SessionRecord = {
       sid,
+      accountId,
       secretHash: sha256Hex(secret),
       createdAt: at,
       expiresAt: at + ttlMs,
@@ -629,7 +654,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
    */
   async function requireReadySession(token: string | undefined): Promise<{ record: SessionRecord; view: AuthSessionView }> {
     const session = await requireSession(token)
-    if (accountOf(store)?.mustChangePassword === true) {
+    if (accountForSession(store, session.record)?.mustChangePassword === true) {
       throw Object.assign(new Error('change the initial password first'), {
         code: AUTH_ERROR_CODES.passwordChangeRequired,
       })
@@ -657,8 +682,8 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
     async status(sessionToken) {
       pruneNonces()
-      const account = accountOf(store)
       const session = await readSessionInternal(sessionToken)
+      const account = session === null ? accountOf(store) : accountForSession(store, session.record)
       const base: AuthStatusResponse = {
         ready: true,
         bootstrapped: account !== null,
@@ -685,7 +710,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     },
 
     async bootstrap(input) {
-      if (accountOf(store) !== null) {
+      if (accountsOf(store).length > 0) {
         throw Object.assign(new Error('bootstrap already completed'), { code: AUTH_ERROR_CODES.bootstrapClosed })
       }
       const username = String(input.username ?? '').trim()
@@ -701,6 +726,9 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       const backupCodes = generateBackupCodes(10)
       await store.mutate((data) => {
         data.account = {
+          accountId: 'acc_admin',
+          isAdmin: true,
+          roleCeiling: 'full',
           username,
           passwordHash,
           totp: { secret, verified: false, createdAt: at },
@@ -721,7 +749,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     },
 
     async seedDefaultAccount(input) {
-      if (accountOf(store) !== null) return false
+      if (accountsOf(store).length > 0) return false
       const username = String(input.username ?? '').trim()
       const password = String(input.password ?? '')
       if (username === '' || password === '') return false
@@ -729,6 +757,9 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       const passwordHash = await hashPassword(password)
       await store.mutate((data) => {
         data.account = {
+          accountId: 'acc_admin',
+          isAdmin: true,
+          roleCeiling: 'full',
           username,
           passwordHash,
           createdAt: at,
@@ -744,7 +775,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     async passwordChangeRequired(sessionToken) {
       const session = await readSessionInternal(sessionToken)
       if (session === null) return false
-      return accountOf(store)?.mustChangePassword === true
+      return accountForSession(store, session.record)?.mustChangePassword === true
     },
 
     initialPasswordPending() {
@@ -769,7 +800,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
     async changePassword(sessionToken, input) {
       const session = await requireSession(sessionToken)
-      const account = accountOf(store)
+      const account = accountForSession(store, session.record)
       if (account === null) {
         throw Object.assign(new Error('no account'), { code: AUTH_ERROR_CODES.bootstrapRequired })
       }
@@ -811,8 +842,9 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     },
 
     async login(input) {
-      const account = accountOf(store)
       const username = String(input.username ?? '')
+      // 账号不存在与口令错误返回同一个错误码（不泄露账号是否存在）。
+      const account = findAccountByName(store, username)
       const source = String(input.source ?? 'local')
       const rate = checkLoginRate(username, source)
       if (!rate.ok) {
@@ -823,9 +855,13 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
         }
       }
       // 账号不存在与口令错误返回同一个错误码（不泄露账号是否存在）。
-      if (account === null || account.username !== username) {
+      if (account === null) {
         recordLoginFailure(username, source)
         return { ok: false, code: AUTH_ERROR_CODES.invalidCredentials, reason: 'invalid username or password' }
+      }
+      if ((account.disabledAt ?? null) !== null) {
+        recordLoginFailure(username, source)
+        return { ok: false, code: AUTH_ERROR_CODES.forbidden, reason: 'account disabled' }
       }
       const valid = await verifyPassword(String(input.password ?? ''), account.passwordHash)
       if (!valid) {
@@ -836,12 +872,14 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       const at = now()
       clearLoginFailures(username, source)
       await store.mutate((data) => {
-        if (data.account !== null) data.account.lastLoginAt = at
+        const list = data.accounts ?? (data.account === null ? [] : [data.account])
+        const row = list.find(item => (item.accountId ?? 'acc_admin') === (account.accountId ?? 'acc_admin'))
+        if (row !== undefined) row.lastLoginAt = at
       }, { deferred: true })
 
       const totpVerified = account.totp?.verified === true && requireMfa
       if (!totpVerified) {
-        const issued = await createSession({ lastMfaAt: null }, input.sessionTtlMs)
+        const issued = await createSession({ lastMfaAt: null }, input.sessionTtlMs, account.accountId ?? 'acc_admin')
         return {
           ok: true,
           response: { ok: true, mfaRequired: false, session: issued.session },
@@ -855,6 +893,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       await store.mutate((data) => {
         data.challenges.push({
           tokenHash: sha256Hex(mfaToken),
+          accountId: account.accountId ?? 'acc_admin',
           createdAt: at,
           expiresAt,
           consumedAt: null,
@@ -878,7 +917,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
         return { error: AUTH_ERROR_CODES.rateLimited, reason: 'too many code attempts; sign in again' }
       }
 
-      const account = accountOf(store)
+      const account = findAccountById(store, challenge.accountId) ?? accountOf(store)
       if (account?.totp?.verified !== true) {
         return { error: AUTH_ERROR_CODES.mfaInvalid, reason: 'MFA is not enabled' }
       }
@@ -907,9 +946,11 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
       challenge.consumedAt = at
       await store.mutate((data) => {
-        if (data.account !== null) data.account.lastLoginAt = at
+        const list = data.accounts ?? (data.account === null ? [] : [data.account])
+        const row = list.find(item => (item.accountId ?? 'acc_admin') === (account.accountId ?? 'acc_admin'))
+        if (row !== undefined) row.lastLoginAt = at
       })
-      const issued = await createSession({ lastMfaAt: at }, input.sessionTtlMs)
+      const issued = await createSession({ lastMfaAt: at }, input.sessionTtlMs, account.accountId ?? 'acc_admin')
       return issued
     },
 
@@ -926,7 +967,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
     async enroll(sessionToken, input) {
       const session = await requireReadySession(sessionToken)
-      const account = accountOf(store)
+      const account = accountForSession(store, session.record)
       if (account?.totp?.verified !== true) {
         throw Object.assign(new Error('MFA must be enabled before trusting a client'), {
           code: AUTH_ERROR_CODES.forbidden,
@@ -1028,7 +1069,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
      */
     async reauth(sessionToken, input) {
       const session = await requireReadySession(sessionToken)
-      const account = accountOf(store)
+      const account = accountForSession(store, session.record)
       if (account === null) {
         throw Object.assign(new Error('account missing'), { code: AUTH_ERROR_CODES.forbidden })
       }
@@ -1113,7 +1154,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
         }, { deferred: true }).catch(() => {})
       }
       const claims: AuthClaims = {
-        accountId: accountOf(store)?.username ?? '',
+        accountId: findAccountById(store, client.accountId)?.username ?? accountOf(store)?.username ?? '',
         clientId: client.clientId,
         keyId: client.keyId,
         clientType: client.clientType,
@@ -1137,7 +1178,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
     async startTotpSetup(sessionToken) {
       const session = await requireReadySession(sessionToken)
-      const account = accountOf(store)
+      const account = accountForSession(store, session.record)
       if (account === null) {
         throw Object.assign(new Error('no account'), { code: AUTH_ERROR_CODES.bootstrapRequired })
       }
@@ -1161,7 +1202,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
     async confirmTotp(sessionToken, code) {
       const session = await requireReadySession(sessionToken)
-      const account = accountOf(store)
+      const account = accountForSession(store, session.record)
       if (account?.totp === undefined) {
         throw Object.assign(new Error('no pending TOTP setup'), { code: AUTH_ERROR_CODES.badRequest })
       }
@@ -1181,7 +1222,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
     async disableTotp(sessionToken, password, code) {
       const session = await requireReadySession(sessionToken)
-      const account = accountOf(store)
+      const account = accountForSession(store, session.record)
       if (account === null) {
         throw Object.assign(new Error('no account'), { code: AUTH_ERROR_CODES.bootstrapRequired })
       }
