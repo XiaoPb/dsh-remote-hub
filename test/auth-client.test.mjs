@@ -646,3 +646,32 @@ test('settings offers TOTP enrollment until it is enabled', async () => {
   assert.match(enabled, /data-testid="totp-disable"/u)
   assert.doesNotMatch(enabled, /data-testid="totp-start"/u)
 })
+
+test('renewing a lease persists the rotated one into the keyring', async () => {
+  const lazyModule = await loadBuiltClientModule('auth/lazy.js')
+  const ring = keyring.createKeyring()
+  await ring.loadOrCreate()
+  const origin = 'http://peer.test:8443'
+  await ring.saveBinding({
+    clientId: 'c-rot', keyId: 'k-rot', lease: 'c-rot.1.old', generation: 1,
+    expiresAt: Date.now() + 60_000,
+  }, origin)
+
+  const calls = []
+  const fetchImpl = async (url, init) => {
+    calls.push({ url: String(url), authorization: init?.headers?.authorization })
+    return new Response(JSON.stringify({
+      ok: true, lease: 'c-rot.2.new', generation: 2, expiresAt: Date.now() + 7 * 24 * 3600 * 1000,
+    }), { status: 200, headers: { 'content-type': 'application/json' } })
+  }
+
+  const signer = lazyModule.createLazySigner(origin, { keyring: ring, fetchImpl })
+  const renewed = await signer.renew()
+  assert.equal(renewed.generation, 2)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].authorization, 'Bearer c-rot.1.old', '轮换请求本身也要用当前租约签名')
+
+  const stored = await ring.loadBinding(origin)
+  assert.equal(stored.lease, 'c-rot.2.new')
+  assert.equal(stored.generation, 2)
+})

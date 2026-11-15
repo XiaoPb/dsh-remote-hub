@@ -80,7 +80,21 @@ export function createLazySigner(origin: string, deps: LazySignerDeps = {}): Aut
       return ready === null ? EMPTY_LEASE : ready.snapshot()
     },
     async renew() {
-      return (await ensure()).renew()
+      const signer = await ensure()
+      // 轮换后必须把新租约写回 IndexedDB：否则下一次加载会拿旧代次去签名，
+      // 服务端会把它当成重放并撤销客户端。
+      const binding = await keyring.loadBinding(origin)
+      const next = await signer.renew()
+      if (binding !== null) {
+        await keyring.saveBinding({
+          clientId: binding.clientId,
+          keyId: binding.keyId,
+          lease: next.lease,
+          generation: next.generation,
+          expiresAt: next.expiresAt,
+        }, origin)
+      }
+      return next
     },
     needsRenewal() {
       return ready === null ? false : ready.needsRenewal()
