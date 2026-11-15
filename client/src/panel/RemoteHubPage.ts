@@ -2176,7 +2176,11 @@ export interface RemoteHubPageDeps {
     code: string
     role: RoleName
   }) => Promise<{ clientId: string; deviceLabel?: string; role?: string }>
-  saveOutboundTarget?: (target: Omit<OutboundTarget, 'id'> & { token: string }) => Promise<OutboundTarget>
+  saveOutboundTarget?: (target: Omit<OutboundTarget, 'id'> & {
+    token?: string
+    account?: boolean
+    accountId?: string
+  }) => Promise<OutboundTarget>
   activateOutboundTarget?: (targetId: string) => Promise<number>
   forgetDevice?: (deviceId: string) => Promise<boolean>
   forgetOutboundTarget?: (targetId: string) => Promise<boolean>
@@ -2189,10 +2193,16 @@ export interface RemoteHubPageDeps {
     preferred: string
   }>
   connect: (input: { origin: string; secret: string }) => Promise<{
-    token: string
+    /** 旧版：长期 bearer（账号认证模式下不存在）。 */
+    token?: string
     role: string
     deviceId?: string
     label?: string
+    /** 账号认证模式：邀请兑换换来的客户端租约（私钥已在浏览器里）。 */
+    clientId?: string
+    lease?: string
+    generation?: number
+    expiresAt?: number
     /** 单控模式下被本次配对踢下线的设备（供 UI 提示）。 */
     displacedDevices?: { deviceId: string; label: string }[]
   }>
@@ -2832,13 +2842,49 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
       setError(null)
       void deps.connect({ origin: target, secret })
         .then(async result => {
+          const label = result.label ?? result.deviceId
+          // 账号认证模式：邀请兑换只换来租约，出站档案记 account 目标（无 bearer）。
+          if (result.lease !== undefined && result.clientId !== undefined) {
+            if (deps.saveOutboundTarget === undefined || deps.carrierWrite === undefined) {
+              setError('宿主不支持安全保存连接状态；邀请已兑换，请在目标端撤销孤立客户端。')
+              return
+            }
+            const saved = await deps.saveOutboundTarget({
+              origin: target,
+              account: true,
+              accountId: result.clientId,
+              ...(label === undefined ? {} : { deviceLabel: label }),
+              role: result.role,
+              lastConnectedAt: clock(),
+            })
+            const at = await deps.carrierWrite({
+              mode: 'cloud',
+              origin: target,
+              account: true,
+              targetId: saved.id,
+              ...(label === undefined ? {} : { deviceLabel: label }),
+            })
+            writeCarrierMode({
+              mode: 'cloud',
+              origin: target,
+              account: true,
+              targetId: saved.id,
+              ...(label === undefined ? {} : { deviceLabel: label }),
+            }, storage)
+            setOutboundTargets(previous => upsertOutboundTarget(previous, saved))
+            lastCarrierAtRef.current = at
+            const displaced = result.displacedDevices ?? []
+            if (displaced.length > 0) {
+              deps.log?.('info', '单控已切换控制端', displaced.map(device => device.label).join('、'))
+            }
+            reload()
+            return
+          }
           const next: CarrierMode = {
             mode: 'cloud',
             origin: target,
-            token: result.token,
-            ...(result.label ?? result.deviceId !== undefined
-              ? { deviceLabel: result.label ?? result.deviceId }
-              : {}),
+            ...(result.token === undefined ? {} : { token: result.token }),
+            ...(label === undefined ? {} : { deviceLabel: label }),
           }
           if (deps.saveOutboundTarget === undefined || deps.carrierWrite === undefined) {
             setError('宿主不支持安全保存配对凭据；配对可能已兑换，请在目标端检查并撤销孤立设备。')
@@ -2847,7 +2893,7 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
           const paired = await persistNewPairing({
             saveTarget: () => deps.saveOutboundTarget!({
               origin: target,
-              token: result.token,
+              token: result.token ?? '',
               ...(next.deviceLabel === undefined ? {} : { deviceLabel: next.deviceLabel }),
               ...(result.deviceId === undefined ? {} : { deviceId: result.deviceId }),
               role: result.role,

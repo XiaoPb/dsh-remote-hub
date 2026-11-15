@@ -27,9 +27,14 @@ import { isRoleName } from '@core/roles.js'
 
 import { hashToken } from './token.js'
 
-/** 兑换结果。失败只给码，**不含**票据/短码或具体失败原因。 */
+/**
+ * 兑换结果。失败只给码，**不含**票据/短码或具体失败原因。
+ *
+ * 账号认证模式下兑换**不再签发长期令牌**：只校验邀请并交出角色上限，
+ * 由调用方把它换成「客户端公钥登记 + 租约」（此时 `issued` 为 null）。
+ */
 export type RedeemResult =
-  | { ok: true; issued: IssuedDeviceToken }
+  | { ok: true; role: RoleName; issued: IssuedDeviceToken | null }
   | { ok: false; code: typeof ERROR_CODES.pairInvalid | typeof ERROR_CODES.pairExpired | typeof ERROR_CODES.rateLimited }
 
 /** 一次签发的公开视图（给本机屏幕显示，绝不写到日志里）。 */
@@ -71,10 +76,10 @@ export interface PairingService {
   issueTicket(role?: RoleName): IssuedPairing
   /** 签发 8 位短码。作废之前的短码。 */
   issueCode(role?: RoleName): IssuedPairing
-  /** 兑换 QR 票据（redeem 即 burn）。 */
-  redeemTicket(ticket: string, clientLabel: string): Promise<RedeemResult>
+  /** 兑换 QR 票据（redeem 即 burn）。`issueToken: false` = 只校验，不签发设备令牌。 */
+  redeemTicket(ticket: string, clientLabel: string, options?: { issueToken?: boolean }): Promise<RedeemResult>
   /** 兑换短码（成功或预算耗尽都 burn）。 */
-  redeemCode(code: string, clientLabel: string): Promise<RedeemResult>
+  redeemCode(code: string, clientLabel: string, options?: { issueToken?: boolean }): Promise<RedeemResult>
   /**
    * 当前是否还有未过期、未 burn 的签发。
    *
@@ -149,6 +154,7 @@ export function createPairingService(deps: PairingServiceDeps): PairingService {
     candidate: string,
     clientLabel: string,
     shapeOk: (value: unknown) => boolean,
+    options: { issueToken?: boolean } = {},
   ): Promise<RedeemResult> => {
     const issuance = path === 'qr' ? ticket : code
     if (issuance === null) return { ok: false, code: ERROR_CODES.pairInvalid }
@@ -177,6 +183,19 @@ export function createPairingService(deps: PairingServiceDeps): PairingService {
 
     // 成功立即 burn（单次使用）：两次 redeem 第二次必得 pair-invalid。
     issuance.burned = true
+    if (options.issueToken === false) {
+      // 账号认证模式：邀请只证明「本机管理员授权了这个角色上限」，
+      // 真正的凭据是调用方随后登记的客户端公钥 + 租约。
+      deps.onAudit?.({
+        deviceId: '',
+        label: clientLabel,
+        role: issuance.role,
+        path,
+        at: new Date(now()).toISOString(),
+        sourceAuthority: null,
+      })
+      return { ok: true, role: issuance.role, issued: null }
+    }
     const { device, token } = await deps.tokens.issue({
       label: typeof clientLabel === 'string' && clientLabel.trim() !== '' ? clientLabel.trim() : 'remote device',
       role: issuance.role,
@@ -195,7 +214,7 @@ export function createPairingService(deps: PairingServiceDeps): PairingService {
       at: new Date(now()).toISOString(),
       sourceAuthority: null,
     })
-    return { ok: true, issued }
+    return { ok: true, role: issuance.role, issued }
   }
 
   return {

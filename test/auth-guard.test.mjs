@@ -86,6 +86,7 @@ describe('守卫：账号认证模式', () => {
   let enrolled
   let key
   let store
+  let pairing
   let totpSecret
   let clockNow = () => Date.now()
 
@@ -122,7 +123,7 @@ describe('守卫：账号认证模式', () => {
 
     const devices = await mod.createDeviceStore(config.deviceTablePath)
     const tokens = mod.createTokenService({ devices })
-    const pairing = mod.createPairingService({
+    pairing = mod.createPairingService({
       config: {
         pairQrTtlMs: config.pairQrTtlMs,
         pairCodeTtlMs: config.pairCodeTtlMs,
@@ -360,6 +361,31 @@ describe('守卫：账号认证模式', () => {
     assert.equal(response.status, 401)
   })
 
+  it('redeeming an invitation enrolls a client key and returns a lease', async () => {
+    const invite = pairing.issueCode('control')
+    const key = keyPair()
+    const response = await fetch(`${base}/remote/pair`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-hub-protocol': '1' },
+      body: JSON.stringify({ code: invite.secret, clientLabel: 'controller', publicKey: key.jwk }),
+    })
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.equal('token' in body, false, '账号模式不再签发长期令牌')
+    assert.equal(typeof body.lease, 'string')
+    assert.equal(body.role, 'control')
+    const client = service.listTrustedClients().find(row => row.clientId === body.clientId)
+    assert.equal(client?.roleCeiling, 'control')
+    assert.equal(client?.label, 'controller')
+
+    // 邀请一次性：同一短码再兑换必须被拒。
+    const again = await fetch(`${base}/remote/pair`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-hub-protocol': '1' },
+      body: JSON.stringify({ code: invite.secret, clientLabel: 'controller', publicKey: key.jwk }),
+    })
+    assert.equal(again.status, 403)
+  })
   it('account mode lists auth clients and enforces single control', async () => {
     // 1) 设备表来自 auth clients，而不是空的 legacy 设备表。
     const list = await fetch(`${base}/remote/devices`, {

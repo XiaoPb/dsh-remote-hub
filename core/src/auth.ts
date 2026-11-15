@@ -340,6 +340,17 @@ export interface HubAuthPort {
    */
   listTrustedClients(): readonly TrustedClientView[]
   /**
+   * 邀请兑换：登记客户端公钥（authorization 来自本机签发的短时邀请）。
+   *
+   * 账号认证模式下守卫的 `/remote/pair` 用它替代「签发长期设备令牌」。
+   */
+  enrollFromInvite(input: {
+    label: string
+    clientType: ClientType
+    publicKey: ClientPublicKeyJwk
+    roleCeiling: RoleName
+  }): Promise<EnrollClientResponse>
+  /**
    * 单控：把 `keepClientId` 之外的客户端标记为「被挤下线」并返回它们的 id。
    *
    * 只动标记，不断连接——断连由调用方走 `onSessionDisplaced`/`dropDevice`，

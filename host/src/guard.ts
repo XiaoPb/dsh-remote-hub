@@ -479,24 +479,25 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
    * 60 秒去抖：同一客户端的连续请求不重复写盘/断连。
    */
   const lastAuthSessionStart = new Map<string, number>()
-  const enforceSingleController = async (clientId: string): Promise<void> => {
-    if (!config.singleController || deps.auth === undefined) return
+  const enforceSingleController = async (clientId: string): Promise<readonly string[]> => {
+    if (!config.singleController || deps.auth === undefined) return []
     const at = Date.now()
     const previous = lastAuthSessionStart.get(clientId) ?? 0
     lastAuthSessionStart.set(clientId, at)
-    if (at - previous < 60_000) return
+    if (at - previous < 60_000) return []
     let displaced: readonly string[]
     try {
       displaced = await deps.auth.displaceOthers(clientId)
     } catch (error) {
       audit('single-controller-failed', { reason: error instanceof Error ? error.message : String(error) })
-      return
+      return []
     }
-    if (displaced.length === 0) return
+    if (displaced.length === 0) return []
     audit('single-controller-displaced', { keep: clientId, count: displaced.length })
     for (const id of displaced) {
       try { deps.onSessionDisplaced?.(id) } catch { /* 忽略 */ }
     }
+    return displaced
   }
 
   /** 守卫层统一拒绝（仍是官方 server-response 形状，便于客户端只解析一种信封）。 */
@@ -642,11 +643,10 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
           reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'provide exactly one of ticket or code'))
           return
         }
-        // 账号认证模式下守卫只收「租约 + 客户端签名」：旧的「兑换长期令牌」流程
-        // 会发一个紧接着就会被拒绝的 bearer，因此在这里显式拒绝并给出原因，
-        // 而不是让控制端拿到一个用不了的令牌。
-        if (deps.auth !== undefined) {
-          audit('pair-rejected', { reason: 'account-auth-enabled' })
+        // 账号认证模式：兑换不再签发长期令牌，而是把邀请换成「客户端公钥登记」。
+        // 因此必须带上控制端的公钥；没有公钥的旧客户端会得到明确错误。
+        const publicKey = parsed.publicKey
+        if (deps.auth !== undefined && !isPlainObject(publicKey)) {
           deps.metrics?.countPairRejected()
           reject(
             res,
@@ -654,15 +654,15 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
             failure(
               ERROR_CODES.authAccountRequired,
               403,
-              'account authentication is enabled on this host: sign in from the target Settings → 登录与账号, '
-              + 'or enroll a client key instead of redeeming a legacy device token',
+              'account authentication is enabled: redeem an invitation with your client public key '
+              + '(or sign in from the target Settings → 登录与账号)',
             ),
           )
           return
         }
         const result = ticket !== undefined
-          ? await deps.pairing.redeemTicket(ticket, clientLabel)
-          : await deps.pairing.redeemCode(code as string, clientLabel)
+          ? await deps.pairing.redeemTicket(ticket, clientLabel, { issueToken: deps.auth === undefined })
+          : await deps.pairing.redeemCode(code as string, clientLabel, { issueToken: deps.auth === undefined })
         if (!result.ok) {
           // 错误体只有码，**不含**票据/短码，也不区分「不存在/过期/预算耗尽」之外的细节。
           const status = result.code === ERROR_CODES.rateLimited ? 429 : 403
@@ -671,14 +671,57 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
           return
         }
         deps.metrics?.countPairRedeemed()
-        audit('pair-redeemed', { deviceId: result.issued.deviceId, role: result.issued.role, path: ticket !== undefined ? 'qr' : 'code' })
+        const pathKind = ticket !== undefined ? 'qr' : 'code'
+        // 账号认证模式：把角色上限换成客户端公钥登记（不签发设备令牌）。
+        if (deps.auth !== undefined) {
+          let enrolled: Awaited<ReturnType<typeof deps.auth.enrollFromInvite>>
+          try {
+            enrolled = await deps.auth.enrollFromInvite({
+              label: clientLabel,
+              clientType: 'browser',
+              publicKey: publicKey as never,
+              roleCeiling: result.role,
+            })
+          } catch (error) {
+            deps.metrics?.countPairRejected()
+            audit('pair-enroll-rejected', { reason: error instanceof Error ? error.message : String(error) })
+            reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'client public key rejected'))
+            return
+          }
+          deps.metrics?.countPairRedeemed()
+          audit('pair-enrolled', { clientId: enrolled.client.clientId, role: result.role, path: pathKind })
+          let displacedForNotice: { deviceId: string; label: string }[] = []
+          if (config.singleController) {
+            const displaced = await enforceSingleController(enrolled.client.clientId)
+            const byId = new Map(deps.auth.listTrustedClients().map(row => [row.clientId, row.label]))
+            displacedForNotice = displaced.map(deviceId => ({ deviceId, label: byId.get(deviceId) ?? deviceId }))
+          }
+          sendJson(res, 200, {
+            deviceId: enrolled.client.clientId,
+            clientId: enrolled.client.clientId,
+            keyId: enrolled.client.keyId,
+            role: result.role,
+            lease: enrolled.lease.lease,
+            generation: enrolled.lease.generation,
+            expiresAt: enrolled.lease.expiresAt,
+            ...(displacedForNotice.length > 0 ? { displacedDevices: displacedForNotice } : {}),
+          }, protocolHeader)
+          return
+        }
+        audit('pair-redeemed', { deviceId: result.issued?.deviceId ?? '', role: result.role, path: pathKind })
         // 单控策略：新设备接管时把**其它设备踢下线**（断开连接），但保留它们的配对。
         // 令牌不失效 → 被挤设备仍是「已配对」，可再次连接（2026-11-12 修订）。
+        const legacy = result.issued
+        if (legacy === null) {
+          // 账号模式已在上面返回；这里只可能是内部不一致。
+          reject(res, rpcId, failure(ERROR_CODES.internal, 500, 'pairing issued no credential'))
+          return
+        }
         let displacedForNotice: { deviceId: string; label: string }[] = []
         if (config.singleController) {
-          const displaced = await displaceOthers(deps, result.issued.deviceId)
+          const displaced = await displaceOthers(deps, legacy.deviceId)
           if (displaced.length > 0) {
-            audit('single-controller-displaced', { keep: result.issued.deviceId, displaced })
+            audit('single-controller-displaced', { keep: legacy.deviceId, displaced })
             // 记下名字供 UI 弹窗；同时立即断开它们的连接（Peer 与在途流）。
             const byId = new Map(deps.devices.list().map(device => [device.deviceId, device.label]))
             displacedForNotice = displaced.map(deviceId => ({
@@ -691,7 +734,7 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
           }
         }
         sendJson(res, 200, {
-          ...result.issued,
+          ...legacy,
           ...(displacedForNotice.length > 0 ? { displacedDevices: displacedForNotice } : {}),
         }, protocolHeader)
         return

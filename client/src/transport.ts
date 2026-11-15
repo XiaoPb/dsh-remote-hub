@@ -28,7 +28,8 @@ import {
   STREAM_BUDGET,
   hubEndpoint,
 } from '@core/protocol.js'
-import type { IssuedDeviceToken } from '@core/device.js'
+import type { IssuedClientLease, IssuedDeviceToken } from '@core/device.js'
+import type { ClientPublicKeyJwk } from '@core/auth.js'
 import type { RoleName } from '@core/roles.js'
 
 import type { AuthSigner } from './auth/session.js'
@@ -225,7 +226,13 @@ export interface RemoteTransport {
   /** 开始轮询循环；返回停止函数。 */
   subscribe(onEvent: (frame: unknown) => void): () => void
   /** 兑换票据/短码。 */
-  redeem(input: { ticket?: string; code?: string; clientLabel: string }): Promise<IssuedDeviceToken>
+  redeem(input: {
+    ticket?: string
+    code?: string
+    clientLabel: string
+    /** 账号认证模式：兑换即登记这把公钥（守卫返回租约而不是令牌）。 */
+    publicKey?: ClientPublicKeyJwk
+  }): Promise<IssuedDeviceToken | IssuedClientLease>
   /** 签发 QR 票据（本机）。 */
   issueTicket(role: RoleName): Promise<{ ticket: string; expiresAt: number; role: RoleName }>
   /** 签发短码（本机）。 */
@@ -805,8 +812,9 @@ export function createTransport(options: TransportOptions): RemoteTransport {
             : ERROR_CODES.pairInvalid)
         throw new RemoteHubError(code, 'pairing credential rejected', status)
       }
-      const issued = parsed as unknown as IssuedDeviceToken
-      token = issued.token
+      const issued = parsed as unknown as IssuedDeviceToken | IssuedClientLease
+      // 账号模式没有长期令牌：租约为空即可（请求靠租约 + 签名）。
+      token = 'token' in issued ? issued.token : ''
       unauthorizedCalled = false
       options.onAccessSnapshot?.({ role: issued.role })
       return issued

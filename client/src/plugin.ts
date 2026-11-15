@@ -297,10 +297,33 @@ const RemoteHubPage = createRemoteHubPageComponent({
     const transport = createTransport({ origin })
     const kind = classifyPairSecret(secret)
     if (kind === null) throw new Error('pair-invalid：无法识别的配对凭据')
+    // 账号认证模式：邀请兑换 = 登记这把公钥，因此先准备身份（幂等）。
+    const keyring = createKeyring()
+    const { identity } = await keyring.loadOrCreate()
     const issued = await transport.redeem({
       ...(kind === 'ticket' ? { ticket: secret } : { code: secret }),
       clientLabel: 'DSH 主控端',
+      publicKey: identity.publicKey,
     })
+    if ('lease' in issued) {
+      await keyring.saveBinding({
+        clientId: issued.clientId,
+        keyId: issued.keyId,
+        lease: issued.lease,
+        generation: issued.generation,
+        expiresAt: issued.expiresAt,
+      }, origin)
+      return {
+        clientId: issued.clientId,
+        role: issued.role,
+        deviceId: issued.clientId,
+        label: issued.clientId,
+        lease: issued.lease,
+        generation: issued.generation,
+        expiresAt: issued.expiresAt,
+        ...(issued.displacedDevices === undefined ? {} : { displacedDevices: issued.displacedDevices }),
+      }
+    }
     return {
       token: issued.token,
       role: issued.role,

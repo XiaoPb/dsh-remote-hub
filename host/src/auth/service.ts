@@ -119,6 +119,18 @@ export interface AuthService extends HubAuthPort {
   /** 守卫用：不需要会话即可列出全部客户端（账号模式下的「设备表」）。 */
   listTrustedClients(): readonly TrustedClientView[]
   /**
+   * 用**邀请**登记一个可信客户端（不需要浏览器会话）。
+   *
+   * 授权来自本机管理员签发的短时一次性邀请（角色上限随邀请携带），
+   * 因此这里不要求会话与 2FA，但仍然只接受 ECDSA P-256 公钥。
+   */
+  enrollFromInvite(input: {
+    label: string
+    clientType: ClientType
+    publicKey: ClientPublicKeyJwk
+    roleCeiling: RoleName
+  }): Promise<EnrollClientResponse>
+  /**
    * 单控：把 `keepClientId` 之外的客户端标记为被挤下线，返回**本次新挤掉**的 id。
    *
    * 只改标记，不断连接；断连由 Hub 的 `onSessionDisplaced` 负责。
@@ -892,6 +904,11 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
     listTrustedClients() {
       return store.data.clients.map(clientView)
+    },
+
+    async enrollFromInvite(input) {
+      // 邀请本身已由配对服务校验并 burn；这里只做公钥登记。
+      return registerClient(input)
     },
 
     async displaceOthers(keepClientId) {
