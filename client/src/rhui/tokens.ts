@@ -408,6 +408,41 @@ ${DARK_TOKENS}
 .rh-stack { display: flex; flex-direction: column; gap: var(--rh-gap); }
 .rh-divider { height: 1px; background: var(--rh-border); border: 0; margin: 16px 0; }
 .rh-kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(160px, 100%), 1fr)); gap: 8px 16px; }
+/*
+ * 出站卡片的四项事实：**自适配列数**，每项永远单行。
+ *
+ * 列数只允许 4 / 2 / 1（绝不出现 3 列这种半残的排法）：容器放得下 4 列就四个排一行；
+ * 否则 2×2；再窄就一列一个。每格最小宽度用 --rh-fact-min（默认 150px，够放
+ * 「最近连接 + 2026/11/15 19:14:23」这一项），值一律 nowrap，不折行也不截断。
+ */
+.rh-dev .rh-kv {
+  --rh-fact-min: 150px;
+  --rh-fact-gap: 20px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px var(--rh-fact-gap);
+  margin: 2px 0;
+}
+/* 4 列放不下 → 2 列（2×2）。门槛 = 4 × 最小格宽 + 3 × 间距。 */
+@container (max-width: 659px) {
+  .rh-dev .rh-kv { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+/* 2 列也放不下 → 1 列（4 行）。 */
+@container (max-width: 359px) {
+  .rh-dev .rh-kv { grid-template-columns: minmax(0, 1fr); }
+}
+/* 容器查询需要卡片本身是容器。 */
+.rh-dev { container-type: inline-size; }
+.rh-fact-item { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rh-fact-item .rh-fact-key { font-size: var(--rh-fs-label); color: var(--rh-text-3); }
+.rh-fact-item .rh-fact-value {
+  font-size: var(--rh-fs-body); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: clip;
+}
+/* 键 / 值横排的那一版（设备页「当前指向」等单值行）。 */
+.rh-fact { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.rh-fact-key { font-size: var(--rh-fs-label); color: var(--rh-text-3); white-space: nowrap; }
+.rh-fact-value { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
 .rh-k { font-size: var(--rh-fs-label); color: var(--rh-text-3); }
 .rh-v { font-size: var(--rh-fs-body); color: var(--rh-text); font-weight: 600; overflow-wrap: anywhere; margin-top: 2px; }
 .rh-mono { font-family: var(--rh-mono); font-size: var(--rh-fs-mono); overflow-wrap: anywhere; }
@@ -445,30 +480,41 @@ ${DARK_TOKENS}
   margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--rh-border);
 }
 
-/* 设备卡 */
-.rh-devgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--rh-gap); }
+/* 设备卡
+ * 列数由可用宽度决定：每张卡至少要放下「图标 + 一行地址 + 状态 pill + 右侧内边距」
+ * （约 360px），放不下就退到单列。用 auto-fit 而不是 auto-fill：单列时卡片铺满，
+ * 不会在图省下一列的位置留空。 */
+.rh-devgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
+  gap: var(--rh-gap);
+}
 .rh-dev {
   display: flex; flex-direction: column; gap: 8px; min-width: 0; box-sizing: border-box;
   background: var(--rh-surface); border: 1px solid var(--rh-border);
   border-radius: var(--rh-radius); padding: 14px 16px; box-shadow: var(--rh-shadow);
 }
-.rh-dev-top { display: flex; align-items: flex-start; gap: 10px; }
+.rh-dev-top { display: flex; align-items: flex-start; gap: 10px; flex-wrap: wrap; }
 .rh-dev-ico {
   width: 36px; height: 36px; border-radius: 10px; background: var(--rh-bg); flex: none;
   display: flex; align-items: center; justify-content: center; font-size: 17px;
 }
-.rh-dev-meta { flex: 1; min-width: 0; }
+/* 标题/地址优先占用整行剩余宽度；状态 pill 在换行时落到下一行，而不是挤压正文。 */
+.rh-dev-meta { flex: 1 1 200px; min-width: 0; }
 /* 标题与地址都必须能断行：窄列下 URL 不许按字符竖排。 */
 .rh-dev-nm {
   font-size: var(--rh-fs-h3); font-weight: 700;
   overflow-wrap: anywhere; word-break: break-word; line-height: 1.35;
 }
+/* 副标题是「设备名 · 指纹」这类补充信息，单行省略即可，绝不折行。 */
 .rh-dev-sub {
   font-size: var(--rh-fs-mono); color: var(--rh-text-3);
-  overflow-wrap: anywhere; word-break: break-all; margin-top: 2px;
+  overflow-wrap: normal; word-break: normal;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin-top: 2px;
 }
 /* 右上角状态 pill 不参与压缩，也不允许把标题挤成一条竖线。 */
-.rh-dev-top > .rh-pill { flex: none; align-self: flex-start; margin-top: 2px; }
+.rh-dev-top > .rh-pill { flex: none; align-self: flex-start; margin-top: 2px; margin-left: auto; }
 .rh-dev-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; flex-wrap: wrap; }
 .rh-dev.is-revoked .rh-dev-meta { opacity: .6; }
 .rh-dev.is-offline .rh-dev-ico { filter: grayscale(1); }

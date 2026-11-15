@@ -16,10 +16,12 @@ const state = {
 }
 test('outbound card exposes recorded role and pairing time, and failures have readable text', () => {
   const result = text(renderRemoteHubPage(state, {}))
-  assert.ok(result.includes('授权角色：'))
+  // 事实行现在是「键 / 值」两组节点（不再用「键：」内联），文本里以空格分隔。
+  assert.ok(result.includes('授权角色'))
   assert.ok(result.includes('完全控制'))
-  assert.ok(result.includes('信任时间：'))
-  assert.ok(result.includes('最近连接：'))
+  assert.ok(result.includes('信任时间'))
+  assert.ok(result.includes('最近连接'))
+  assert.ok(result.includes('客户端标识'))
   assert.ok(result.includes('连接失败：配对凭据已过期'))
 })
 test('legacy unknown pairing metadata is explicitly unknown', () => {

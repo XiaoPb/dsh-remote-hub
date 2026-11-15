@@ -155,7 +155,8 @@ export function outboundTargetTitle(target: OutboundTarget): string {
  * 卡片副标题：同源目标的区分信息（设备名 / 指纹）。
  *
  * 标题行固定显示 `origin`（一行放得下），区分信息放副标题，避免长标签把卡片标题撑成
- * 多行（窄列下会被逐字折行）。只有一个目标且没有设备名时不显示多余文字。
+ * 多行（窄列下会被逐字折行）。同源重复时只多给 6 位指纹（不再重复一遍地址），
+ * 这样副标题在 360px 宽的卡片里也能保持一行。
  * @param target - 对端目标。
  * @param targets - 全部已保存目标（用于判断同源重复）。
  * @returns 副标题文本（可能为空串）。
@@ -168,7 +169,7 @@ export function outboundTargetMeta(target: OutboundTarget, targets: readonly Out
     || target.deviceLabel === '' || target.deviceLabel === origin
     ? ''
     : target.deviceLabel
-  if (peers.length >= 2) return `${device === '' ? '' : `${device} · `}${fingerprint}`
+  if (peers.length >= 2) return device === '' ? `#${fingerprint}` : `${device} · #${fingerprint}`
   return device
 }
 
@@ -1214,11 +1215,15 @@ function renderDeviceCard(
 /** Display only recorded trust facts; legacy missing metadata remains unknown. */
 function renderOutboundFacts(target?: OutboundTarget): React.ReactNode {
   const time = (value?: number): string => value === undefined ? '未知（旧记录未保存）' : new Date(value).toLocaleString()
+  // 每项是一组「键 / 值」：窄列里换行时整齐地堆成两行，而不是把一句话从中间折断。
+  const fact = (key: string, value: string): React.ReactNode => el('div', 'rh-fact-item', undefined,
+    el('span', 'rh-fact-key', undefined, key),
+    el('span', 'rh-fact-value', undefined, value))
   return el('div', 'rh-kv', { 'data-testid': 'outbound-facts' },
-    React.createElement('div', null, '授权角色：', target?.role ? (ROLE_LABEL[target.role as RoleName] ?? target.role) : '未知（需重新信任确认）'),
-    React.createElement('div', null, '信任时间：', time(target?.pairedAt)),
-    React.createElement('div', null, '最近连接：', time(target?.lastConnectedAt)),
-    React.createElement('div', null, '客户端标识：', target?.deviceId ?? target?.id?.slice(0, 12) ?? '未知'))
+    fact('授权角色', target?.role ? (ROLE_LABEL[target.role as RoleName] ?? target.role) : '未知（需重新信任确认）'),
+    fact('信任时间', time(target?.pairedAt)),
+    fact('最近连接', time(target?.lastConnectedAt)),
+    fact('客户端标识', target?.deviceId ?? target?.id?.slice(0, 12) ?? '未知'))
 }
 
 /** 出站分组内容卡（本机指向；不伪造设备列表）。 */
