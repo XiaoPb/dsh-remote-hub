@@ -12,6 +12,7 @@ import type {
   ClientType,
   EnrollClientResponse,
   LoginResponse,
+  PasswordPolicy,
   TrustedClientView,
 } from '@core/auth.js'
 import { AUTH_ROUTES } from '@core/auth.js'
@@ -48,6 +49,12 @@ export interface AuthApi {
   login(input: { username: string; password: string }): Promise<LoginResponse>
   mfa(input: { mfaToken: string; code: string }): Promise<{ session: unknown }>
   logout(): Promise<void>
+  /** 修改口令（首次登录强制；也需要当前口令）。 */
+  changePassword(input: { currentPassword: string; newPassword: string }): Promise<void>
+  /** 读取当前口令策略。 */
+  policy(): Promise<PasswordPolicy>
+  /** 切换口令策略（立即生效）。 */
+  setPolicy(policy: PasswordPolicy): Promise<PasswordPolicy>
   enroll(input: {
     label: string
     clientType: ClientType
@@ -124,6 +131,23 @@ export function createAuthApi(options: AuthApiOptions = {}): AuthApi {
     async logout() {
       const response = await post(AUTH_ROUTES.logout, {})
       if (!response.ok) throw await failure(response)
+    },
+    async changePassword(input) {
+      const response = await post(AUTH_ROUTES.password, input)
+      if (!response.ok) throw await failure(response)
+    },
+    async policy() {
+      const response = await fetchImpl(`${base}${AUTH_ROUTES.policy}`, {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: { accept: 'application/json' },
+      })
+      const body = await readJson<{ policy?: PasswordPolicy }>(response)
+      return body.policy === 'basic' ? 'basic' : 'strong'
+    },
+    async setPolicy(policy) {
+      const body = await readJson<{ policy?: PasswordPolicy }>(await post(AUTH_ROUTES.policy, { policy }))
+      return body.policy === 'basic' ? 'basic' : 'strong'
     },
     async enroll(input) {
       return readJson<EnrollClientResponse>(await post(AUTH_ROUTES.enroll, input))

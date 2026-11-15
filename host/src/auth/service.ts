@@ -33,12 +33,16 @@ import type {
 import {
   AUTH_ERROR_CODES,
   AUTH_HEADERS,
+  DEFAULT_PASSWORD_POLICY,
   LEASE_TTL_MS,
   MFA_TRUST_WINDOW_MS,
   PROOF_MAX_SKEW_MS,
   PROOF_NONCE_TTL_MS,
   SESSION_TTL_MS,
   buildProofPayload,
+  evaluatePassword,
+  isPasswordPolicy,
+  type PasswordPolicy,
 } from '@core/auth.js'
 import { ROLE_FULL, isRoleName, roleAtMost, type RoleName } from '@core/roles.js'
 
@@ -91,6 +95,26 @@ export interface AuthService extends HubAuthPort {
   readSession(sessionToken?: string): Promise<{ record: SessionRecord; view: AuthSessionView } | null>
   /** 注册可信客户端（需要已认证会话 + 最近 2FA）。 */
   enroll(sessionToken: string | undefined, input: EnrollClientRequest): Promise<EnrollClientResponse>
+  /**
+   * 修改口令。
+   *
+   * 默认账号首次登录时 `status.passwordChangeRequired === true`，改密成功后清除
+   * （**只强制一次**）；之后仍可凭当前口令再次修改。
+   */
+  changePassword(
+    sessionToken: string | undefined,
+    input: { currentPassword: string; newPassword: string },
+  ): Promise<{ ok: true }>
+  /** 是否仍需强制改密（无会话时为 false）。 */
+  passwordChangeRequired(sessionToken?: string): Promise<boolean>
+  /** 当前生效的口令策略。 */
+  passwordPolicy(): PasswordPolicy
+  /** 切换口令策略（仅管理员会话；立即生效，无需重启）。 */
+  setPasswordPolicy(sessionToken: string | undefined, policy: PasswordPolicy): Promise<PasswordPolicy>
+  /** 首次启动：无账号时用默认口令创建一个「必须先改密」的账号。 */
+  seedDefaultAccount(input: { username: string; password: string }): Promise<boolean>
+  /** 账号是否仍在等待初始改密（无账号 / 已完成 → false）。 */
+  initialPasswordPending(): boolean
   listClients(sessionToken: string | undefined): Promise<TrustedClientView[]>
   revokeClient(sessionToken: string | undefined, clientId: string): Promise<void>
   setActiveRole(sessionToken: string | undefined, clientId: string, role: RoleName): Promise<TrustedClientView>
@@ -135,6 +159,14 @@ export interface AuthServiceDeps {
   maxLoginAttempts?: number
   /** 登录失败窗口。 */
   loginWindowMs?: number
+  /**
+   * 强制改密成功时调用一次。
+   *
+   * 插件用它删除初始口令文件（明文只活到这一刻）。
+   */
+  onForcedPasswordChanged?: () => void | Promise<void>
+  /** 默认口令策略（存储里没有设置时使用；默认 strong）。 */
+  defaultPasswordPolicy?: PasswordPolicy
 }
 
 const DEFAULT_MAX_LOGIN_ATTEMPTS = 5
@@ -190,6 +222,24 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
   const requireMfa = deps.requireMfa ?? true
   const maxLoginAttempts = deps.maxLoginAttempts ?? DEFAULT_MAX_LOGIN_ATTEMPTS
   const loginWindowMs = deps.loginWindowMs ?? DEFAULT_LOGIN_WINDOW_MS
+  const onForcedPasswordChanged = deps.onForcedPasswordChanged
+  const fallbackPolicy: PasswordPolicy = deps.defaultPasswordPolicy ?? DEFAULT_PASSWORD_POLICY
+
+  /** 当前生效的口令策略：存储里的设置优先，否则用配置默认值。 */
+  function currentPolicy(): PasswordPolicy {
+    const stored = store.data.settings?.passwordPolicy
+    return isPasswordPolicy(stored) ? stored : fallbackPolicy
+  }
+
+  /** 校验口令并抛出带失败清单的错误（UI 直接展示）。 */
+  function assertPasswordAcceptable(password: string, username: string): void {
+    const verdict = evaluatePassword(password, currentPolicy(), username)
+    if (verdict.ok) return
+    throw Object.assign(new Error(`password does not meet the ${currentPolicy()} policy`), {
+      code: AUTH_ERROR_CODES.passwordWeak,
+      failures: verdict.failures,
+    })
+  }
 
   const revokedListeners = new Set<(clientId: string) => void>()
   const roleListeners = new Set<(clientId: string, role: RoleName) => void>()
@@ -443,6 +493,22 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     return session
   }
 
+  /**
+   * 会话 + 「已完成强制改密」双重前置。
+   *
+   * 默认账号在改密之前**不能**绑定 2FA、信任客户端或轮换租约——因此也拿不到
+   * 访问 Hub 的凭据。改密成功后标记永久清除（只强制一次）。
+   */
+  async function requireReadySession(token: string | undefined): Promise<{ record: SessionRecord; view: AuthSessionView }> {
+    const session = await requireSession(token)
+    if (accountOf(store)?.mustChangePassword === true) {
+      throw Object.assign(new Error('change the initial password first'), {
+        code: AUTH_ERROR_CODES.passwordChangeRequired,
+      })
+    }
+    return session
+  }
+
   const service: AuthService = {
     serviceName: 'remoteHubAuth',
 
@@ -456,9 +522,15 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
         mfaEnabled: requireMfa,
         session: session?.view ?? null,
         username: account?.username ?? null,
+        // 策略是部署事实，不敏感：登录页/引导页据此显示规则清单。
+        passwordPolicy: currentPolicy(),
       }
       if (session !== null) {
         base.clients = store.data.clients.map(clientView)
+      }
+      // 强制改密标记只对**已登录**会话有意义（匿名请求不需要知道）。
+      if (session !== null) {
+        base.passwordChangeRequired = account?.mustChangePassword === true
       }
       return base
     },
@@ -472,9 +544,8 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
         throw Object.assign(new Error('invalid username'), { code: AUTH_ERROR_CODES.badRequest })
       }
       const password = String(input.password ?? '')
-      if (password.length < 8) {
-        throw Object.assign(new Error('password must be at least 8 characters'), { code: AUTH_ERROR_CODES.badRequest })
-      }
+      // 与设置页同一套规则（默认强密码）。
+      assertPasswordAcceptable(password, username)
       const at = now()
       const passwordHash = await hashPassword(password)
       const secret = generateTotpSecret()
@@ -498,6 +569,96 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
         otpauth: otpauthUri({ issuer, account: username, secret }),
         backupCodes,
       }
+    },
+
+    async seedDefaultAccount(input) {
+      if (accountOf(store) !== null) return false
+      const username = String(input.username ?? '').trim()
+      const password = String(input.password ?? '')
+      if (username === '' || password === '') return false
+      const at = now()
+      const passwordHash = await hashPassword(password)
+      await store.mutate((data) => {
+        data.account = {
+          username,
+          passwordHash,
+          createdAt: at,
+          updatedAt: at,
+          lastLoginAt: null,
+          // 首次登录必须先改密（只强制一次）；改完之前也拿不到 2FA/客户端/租约。
+          mustChangePassword: true,
+        }
+      })
+      return true
+    },
+
+    async passwordChangeRequired(sessionToken) {
+      const session = await readSessionInternal(sessionToken)
+      if (session === null) return false
+      return accountOf(store)?.mustChangePassword === true
+    },
+
+    initialPasswordPending() {
+      return accountOf(store)?.mustChangePassword === true
+    },
+
+    passwordPolicy() {
+      return currentPolicy()
+    },
+
+    async setPasswordPolicy(sessionToken, policy) {
+      // 策略属于安全配置：要求已通过强制改密的管理员会话。
+      await requireReadySession(sessionToken)
+      if (!isPasswordPolicy(policy)) {
+        throw Object.assign(new Error('unknown password policy'), { code: AUTH_ERROR_CODES.badRequest })
+      }
+      await store.mutate((data) => {
+        data.settings = { ...(data.settings ?? {}), passwordPolicy: policy }
+      })
+      return policy
+    },
+
+    async changePassword(sessionToken, input) {
+      const session = await requireSession(sessionToken)
+      const account = accountOf(store)
+      if (account === null) {
+        throw Object.assign(new Error('no account'), { code: AUTH_ERROR_CODES.bootstrapRequired })
+      }
+      const current = String(input.currentPassword ?? '')
+      if (!await verifyPassword(current, account.passwordHash)) {
+        throw Object.assign(new Error('current password is incorrect'), {
+          code: AUTH_ERROR_CODES.currentPasswordInvalid,
+        })
+      }
+      const next = String(input.newPassword ?? '')
+      if (next === current) {
+        throw Object.assign(new Error('new password must differ from the current one'), {
+          code: AUTH_ERROR_CODES.passwordUnchanged,
+        })
+      }
+      // 阻止把初始口令原样改回同一串；策略校验在下面（含用户名检查）。
+      assertPasswordAcceptable(next, account.username)
+      const at = now()
+      const passwordHash = await hashPassword(next)
+      const wasForced = account.mustChangePassword === true
+      await store.mutate((data) => {
+        if (data.account === null) return
+        data.account.passwordHash = passwordHash
+        data.account.updatedAt = at
+        // 强制改密**只触发一次**：清除后不再要求（后续仍可主动改）。
+        delete data.account.mustChangePassword
+        const row = data.sessions.find(item => item.sid === session.record.sid)
+        if (row !== undefined) row.lastMfaAt = row.lastMfaAt ?? null
+      })
+      if (wasForced) {
+        // 初始口令已完成使命：让插件删掉明文文件。
+        try {
+          await onForcedPasswordChanged?.()
+        } catch {
+          // 删除失败不能把改密回滚（账号已更新）；插件下次启动会清理残留。
+        }
+      }
+      return { ok: true }
     },
 
     async login(input) {
@@ -613,7 +774,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     readSession: readSessionInternal,
 
     async enroll(sessionToken, input) {
-      const session = await requireSession(sessionToken)
+      const session = await requireReadySession(sessionToken)
       const account = accountOf(store)
       if (account?.totp?.verified !== true) {
         throw Object.assign(new Error('MFA must be enabled before trusting a client'), {
@@ -677,17 +838,17 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     },
 
     async listClients(sessionToken) {
-      await requireSession(sessionToken)
+      await requireReadySession(sessionToken)
       return store.data.clients.map(clientView)
     },
 
     async revokeClient(sessionToken, clientId) {
-      await requireSession(sessionToken)
+      await requireReadySession(sessionToken)
       await revokeByClientId(clientId)
     },
 
     async setActiveRole(sessionToken, clientId, role) {
-      await requireSession(sessionToken)
+      await requireReadySession(sessionToken)
       const client = store.data.clients.find(row => row.clientId === clientId)
       if (client === undefined) {
         throw Object.assign(new Error('unknown client'), { code: AUTH_ERROR_CODES.clientInvalid })
@@ -704,7 +865,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     },
 
     async setRoleCeiling(sessionToken, clientId, role) {
-      await requireSession(sessionToken)
+      await requireReadySession(sessionToken)
       const client = store.data.clients.find(row => row.clientId === clientId)
       if (client === undefined) {
         throw Object.assign(new Error('unknown client'), { code: AUTH_ERROR_CODES.clientInvalid })
@@ -791,7 +952,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     },
 
     async startTotpSetup(sessionToken) {
-      const session = await requireSession(sessionToken)
+      const session = await requireReadySession(sessionToken)
       const account = accountOf(store)
       if (account === null) {
         throw Object.assign(new Error('no account'), { code: AUTH_ERROR_CODES.bootstrapRequired })
@@ -815,7 +976,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     },
 
     async confirmTotp(sessionToken, code) {
-      const session = await requireSession(sessionToken)
+      const session = await requireReadySession(sessionToken)
       const account = accountOf(store)
       if (account?.totp === undefined) {
         throw Object.assign(new Error('no pending TOTP setup'), { code: AUTH_ERROR_CODES.badRequest })
@@ -835,7 +996,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     },
 
     async disableTotp(sessionToken, password, code) {
-      const session = await requireSession(sessionToken)
+      const session = await requireReadySession(sessionToken)
       const account = accountOf(store)
       if (account === null) {
         throw Object.assign(new Error('no account'), { code: AUTH_ERROR_CODES.bootstrapRequired })

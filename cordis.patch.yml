@@ -21,13 +21,22 @@
 - insert:
     - id: remote-hub
       name: '@xiaopb/dsh-remote-hub'
-      # `accountAuth.enabled: true` 时 Hub **只**接受「租约 + 客户端签名」。
-      # 默认 false = 兼容既有设备令牌；完成可信客户端登记后再切换，
-      # 切换后旧令牌立即失效（不会静默升级成受信客户端）。
+      # `accountAuth.enabled: true`（默认）时 Hub **只**接受「租约 + 客户端签名」。
+      # 首次启动会自动创建默认账号 admin / admin12345（可用下一行的
+      # `defaultAccount` 覆盖）；**首次登录必须改密**，否则拿不到 2FA 绑定、
+      # 客户端信任与 Hub 租约。
       config:
         accountAuth:
-          enabled: false
+          enabled: true
 
 - insert:
     - id: remote-hub-auth
       name: '@xiaopb/dsh-remote-hub/auth'
+      # 默认账号 admin 只在「尚无账号」时创建一次。
+      # password 留空 = 安装时随机生成，明文写入
+      # `~/.dsh/remote-hub/initial-password`（0600），强制改密成功后删除。
+      # 想让多台机器用同一个初始口令时才填固定值（同样会强制首次改密）。
+      config:
+        defaultAccount:
+          username: admin
+          password: ''

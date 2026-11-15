@@ -11,13 +11,18 @@
  */
 import React from 'react'
 
-import type { AuthStatusResponse, TrustedClientView } from '@core/auth.js'
+import type { AuthStatusResponse, PasswordPolicy, TrustedClientView } from '@core/auth.js'
+import {
+  PASSWORD_POLICIES,
+  evaluatePassword,
+  passwordRules,
+} from '@core/auth.js'
 import { ROLE_LABELS, ROLE_NAMES, type RoleName } from '@core/roles.js'
 
 import type { ClientBinding } from './keyring.js'
 
 /** 页面阶段。 */
-export type AccountPhase = 'loading' | 'bootstrap' | 'login' | 'mfa' | 'ready' | 'error'
+export type AccountPhase = 'loading' | 'bootstrap' | 'login' | 'mfa' | 'change-password' | 'ready' | 'error'
 
 /** 页面状态。 */
 export interface AccountPageState {
@@ -25,6 +30,8 @@ export interface AccountPageState {
   status: AuthStatusResponse | null
   /** 本浏览器的客户端绑定（null = 尚未信任本浏览器）。 */
   binding: ClientBinding | null
+  /** 当前口令策略（设置页可切换，默认强密码）。 */
+  policy: PasswordPolicy
   /** 一次性引导结果（TOTP 密钥/链接/备用码）。 */
   enrollment: { otpauth: string; backupCodes: readonly string[] } | null
   /** 页面级提示（成功或失败）。 */
@@ -39,6 +46,10 @@ export interface AccountPageActions {
   onSubmitBootstrap(username: string, password: string): void
   onSubmitLogin(username: string, password: string): void
   onSubmitMfa(code: string): void
+  /** 提交改密（首次强制与主动修改共用）。 */
+  onChangePassword(currentPassword: string, newPassword: string): void
+  /** 切换口令策略。 */
+  onSetPasswordPolicy(policy: PasswordPolicy): void
   onTrustClient(label: string, ceiling: RoleName): void
   onRevokeClient(clientId: string): void
   onSetRole(clientId: string, role: RoleName): void
@@ -54,11 +65,21 @@ export interface AccountFormDraft {
   code: string
   label: string
   ceiling: RoleName
+  currentPassword: string
+  newPassword: string
 }
 
 /** 初始草稿。 */
 export function initialDraft(): AccountFormDraft {
-  return { username: '', password: '', code: '', label: '本浏览器', ceiling: 'control' }
+  return {
+    username: '',
+    password: '',
+    code: '',
+    label: '本浏览器',
+    ceiling: 'control',
+    currentPassword: '',
+    newPassword: '',
+  }
 }
 
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: 12, color: 'var(--dsw-alias-text-tertiary, #8b949e)', margin: '10px 0 4px' }
@@ -90,6 +111,65 @@ const primaryStyle: React.CSSProperties = {
 /** 角色显示名。 */
 function roleLabel(role: RoleName): string {
   return ROLE_LABELS[role]?.zh ?? role
+}
+
+/** 口令表单字段（强制改密与主动修改共用）。 */
+function passwordFields(
+  draft: AccountFormDraft,
+  setDraft: (next: AccountFormDraft) => void,
+): React.ReactNode {
+  return React.createElement(React.Fragment, null,
+    React.createElement('label', { style: labelStyle }, '当前口令'),
+    React.createElement('input', {
+      'data-testid': 'current-password',
+      type: 'password',
+      style: fieldStyle,
+      value: draft.currentPassword,
+      autoComplete: 'current-password',
+      onChange: (event: React.ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, currentPassword: event.currentTarget.value }),
+    }),
+    React.createElement('label', { style: labelStyle }, '新口令（至少 8 位，且不同于当前口令）'),
+    React.createElement('input', {
+      'data-testid': 'new-password',
+      type: 'password',
+      style: fieldStyle,
+      value: draft.newPassword,
+      autoComplete: 'new-password',
+      onChange: (event: React.ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, newPassword: event.currentTarget.value }),
+    }))
+}
+
+/**
+ * 口令规则清单（标准输入提示）：逐条显示是否满足，并标注当前策略。
+ *
+ * 判定与 Host 完全同源（`@core/auth` 的 `evaluatePassword`），不会出现
+ * 「前端说可以、后端拒绝」。
+ */
+function passwordChecklist(
+  draft: AccountFormDraft,
+  policy: PasswordPolicy,
+  username: string,
+): React.ReactNode {
+  const verdict = evaluatePassword(draft.newPassword, policy, username)
+  const failed = new Set(verdict.failures)
+  return React.createElement('ul', {
+    'data-testid': 'password-rules',
+    'data-policy': policy,
+    'aria-live': 'polite',
+    style: { listStyle: 'none', padding: 0, margin: '8px 0 0', fontSize: 12, lineHeight: 1.7 },
+  }, passwordRules(policy).map(rule => {
+    const ok = !failed.has(rule.id)
+    return React.createElement('li', {
+      key: rule.id,
+      'data-rule': rule.id,
+      'data-ok': ok ? 'true' : 'false',
+      style: {
+        color: ok
+          ? 'var(--dsw-alias-state-success-primary, #3fb950)'
+          : 'var(--dsw-alias-text-tertiary, #8b949e)',
+      },
+    }, `${ok ? '✓' : '○'} ${rule.zh}`)
+  }))
 }
 
 /** 一行客户端卡片。 */
@@ -200,7 +280,7 @@ export function renderAccountPage(
         autoComplete: 'username',
         onChange: event => setDraft({ ...draft, username: event.currentTarget.value }),
       }),
-      React.createElement('label', { style: labelStyle }, '口令（至少 8 位）'),
+      React.createElement('label', { style: labelStyle }, '口令'),
       React.createElement('input', {
         'data-testid': 'bootstrap-password',
         type: 'password',
@@ -209,10 +289,16 @@ export function renderAccountPage(
         autoComplete: 'new-password',
         onChange: event => setDraft({ ...draft, password: event.currentTarget.value }),
       }),
+      passwordChecklist(
+        { ...draft, newPassword: draft.password },
+        state.policy,
+        draft.username.trim(),
+      ),
       React.createElement('button', {
         type: 'button',
         'data-testid': 'bootstrap-submit',
-        disabled: state.busy || draft.username.trim() === '' || draft.password.length < 8,
+        disabled: state.busy || draft.username.trim() === ''
+          || !evaluatePassword(draft.password, state.policy, draft.username.trim()).ok,
         onClick: () => actions.onSubmitBootstrap(draft.username.trim(), draft.password),
         style: { ...primaryStyle, marginTop: 14 },
       }, state.busy ? '创建中…' : '创建管理员'))
@@ -278,6 +364,29 @@ export function renderAccountPage(
       }, state.notice))
   }
 
+  if (state.phase === 'change-password') {
+    const verdict = evaluatePassword(draft.newPassword, state.policy, status?.username ?? '')
+    const valid = draft.currentPassword !== ''
+      && verdict.ok
+      && draft.newPassword !== draft.currentPassword
+    return React.createElement('div', { 'data-testid': 'account-page', 'data-phase': 'change-password' },
+      header,
+      React.createElement('p', { 'data-testid': 'change-password-required', style: { fontSize: 12.5 } },
+        '这是首次登录，必须先修改初始口令才能继续（只需一次）。改完才能绑定 2FA、信任浏览器与访问 Hub。'),
+      passwordFields(draft, setDraft),
+      React.createElement('button', {
+        type: 'button',
+        'data-testid': 'change-password-submit',
+        disabled: state.busy || !valid,
+        onClick: () => actions.onChangePassword(draft.currentPassword, draft.newPassword),
+        style: { ...primaryStyle, marginTop: 14 },
+      }, state.busy ? '提交中…' : '保存新口令'),
+      passwordChecklist(draft, state.policy, status?.username ?? ''),
+      state.notice === null ? null : React.createElement('p', {
+        role: 'alert', style: { color: 'var(--dsw-alias-state-error-primary, #f85149)', fontSize: 12.5 },
+      }, state.notice))
+  }
+
   // ready
   const clients = status?.clients ?? []
   const active = clients.filter(client => client.revokedAt === null)
@@ -329,6 +438,42 @@ export function renderAccountPage(
         style: { ...primaryStyle, marginTop: 12 },
       }, state.busy ? '登记中…' : '信任本浏览器'))
       : null,
+
+    React.createElement('section', {
+      'data-testid': 'password-policy-section',
+      style: { marginBottom: 16, padding: 10, border: '1px solid var(--dsw-alias-border-l2, #30363d)', borderRadius: 10 },
+    },
+    React.createElement('strong', { style: { fontSize: 13 } }, '口令策略'),
+    React.createElement('p', { style: { fontSize: 12.5, color: 'var(--dsw-alias-text-tertiary, #8b949e)', margin: '4px 0 8px' } },
+      '默认仅允许强密码。切换后立即生效：之后设置/修改口令都按新规则校验（已有口令不受影响）。'),
+    React.createElement('div', { style: { display: 'flex', gap: 8, flexWrap: 'wrap' } },
+      PASSWORD_POLICIES.map(policy => React.createElement('button', {
+        key: policy,
+        type: 'button',
+        'data-testid': `policy-${policy}`,
+        'data-selected': state.policy === policy ? 'true' : 'false',
+        'aria-pressed': state.policy === policy ? 'true' : 'false',
+        disabled: state.busy,
+        onClick: () => actions.onSetPasswordPolicy(policy),
+        style: state.policy === policy ? primaryStyle : buttonStyle,
+      }, policy === 'strong' ? '仅允许强密码（推荐）' : '允许基础口令')))),
+
+    React.createElement('section', {
+      'data-testid': 'change-password-section',
+      style: { marginBottom: 16, padding: 10, border: '1px solid var(--dsw-alias-border-l2, #30363d)', borderRadius: 10 },
+    },
+    React.createElement('strong', { style: { fontSize: 13 } }, '修改口令'),
+    passwordFields(draft, setDraft),
+    React.createElement('button', {
+      type: 'button',
+      'data-testid': 'change-password-apply',
+      disabled: state.busy || draft.currentPassword === ''
+        || draft.newPassword === draft.currentPassword
+        || !evaluatePassword(draft.newPassword, state.policy, status?.username ?? '').ok,
+      onClick: () => actions.onChangePassword(draft.currentPassword, draft.newPassword),
+      style: { ...buttonStyle, marginTop: 10 },
+    }, '保存新口令'),
+    passwordChecklist(draft, state.policy, status?.username ?? '')),
 
     React.createElement('section', null,
       React.createElement('strong', { style: { fontSize: 13 } }, `已信任的客户端（${active.length}）`),

@@ -82,6 +82,8 @@ function noopActions() {
     onSubmitBootstrap() {},
     onSubmitLogin() {},
     onSubmitMfa() {},
+    onChangePassword() {},
+    onSetPasswordPolicy() {},
     onTrustClient() {},
     onRevokeClient() {},
     onSetRole() {},
@@ -230,6 +232,7 @@ test('account page asks for bootstrap when no account exists', async () => {
   const markup = await renderMarkup(accountPage.renderAccountPage(
     {
       phase: 'bootstrap',
+      policy: 'strong',
       status: { ready: true, bootstrapped: false, mfaEnabled: true, session: null, username: null },
       binding: null,
       enrollment: null,
@@ -251,6 +254,7 @@ test('account page gates on MFA and never renders a session while pending', asyn
   const markup = await renderMarkup(accountPage.renderAccountPage(
     {
       phase: 'mfa',
+      policy: 'strong',
       status: { ready: true, bootstrapped: true, mfaEnabled: true, session: null, username: 'owner' },
       binding: null,
       enrollment: null,
@@ -284,6 +288,7 @@ test('ready page lists trusted clients with role controls and offers trust', asy
   const markup = await renderMarkup(accountPage.renderAccountPage(
     {
       phase: 'ready',
+      policy: 'strong',
       status: {
         ready: true,
         bootstrapped: true,
@@ -312,10 +317,45 @@ test('ready page lists trusted clients with role controls and offers trust', asy
   assert.match(markup, /0123456789abcdef/u, 'fingerprint is shown for human recognition')
 })
 
-test('a revoked client is rendered disabled', async () => {
+test('first sign-in with the default account is gated on a password change', async () => {
   const markup = await renderMarkup(accountPage.renderAccountPage(
     {
+      phase: 'change-password',
+      policy: 'strong',
+      status: {
+        ready: true,
+        bootstrapped: true,
+        mfaEnabled: true,
+        username: 'admin',
+        passwordChangeRequired: true,
+        session: {
+          accountId: 'admin', username: 'admin', role: 'admin',
+          createdAt: new Date().toISOString(), expiresAt: Date.now() + 1000, lastMfaAt: null,
+        },
+      },
+      binding: null,
+      enrollment: null,
+      notice: null,
+      busy: false,
+      mfaToken: null,
+    },
+    noopActions(),
+    accountPage.initialDraft(),
+    () => {},
+  ))
+  assert.match(markup, /data-testid="current-password"/u)
+  assert.match(markup, /data-testid="new-password"/u)
+  assert.match(markup, /data-testid="change-password-submit"/u)
+  // 改密之前不出现信任/客户端管理入口。
+  assert.doesNotMatch(markup, /data-testid="trust-submit"/u)
+  assert.doesNotMatch(markup, /data-testid="clients-list"/u)
+  assert.match(markup, /只需一次/u)
+})
+
+test('a revoked client is rendered disabled', async () => {  const markup = await renderMarkup(accountPage.renderAccountPage(
+    {
       phase: 'ready',
+      policy: 'strong',
       status: {
         ready: true,
         bootstrapped: true,
@@ -345,3 +385,58 @@ test('a revoked client is rendered disabled', async () => {
   assert.match(markup, /已撤销/u)
   assert.match(markup, /data-revoked="true"/u)
 })
+
+test('settings exposes the password policy switch and a live rule checklist', async () => {
+  const readyState = (policy) => ({
+    phase: 'ready',
+    status: {
+      ready: true,
+      bootstrapped: true,
+      mfaEnabled: true,
+      username: 'admin',
+      passwordPolicy: policy,
+      session: {
+        accountId: 'admin', username: 'admin', role: 'admin',
+        createdAt: new Date().toISOString(), expiresAt: Date.now() + 1000, lastMfaAt: Date.now(),
+      },
+      clients: [],
+    },
+    binding: null,
+    enrollment: null,
+    notice: null,
+    busy: false,
+    mfaToken: null,
+    policy,
+  })
+
+  const strongDraft = { ...accountPage.initialDraft(), currentPassword: 'Old-Pass-123!', newPassword: 'weakpass' }
+  const strongMarkup = await renderMarkup(accountPage.renderAccountPage(
+    readyState('strong'),
+    noopActions(),
+    strongDraft,
+    () => {},
+  ))
+  assert.match(strongMarkup, /data-testid="password-policy-section"/u)
+  assert.match(strongMarkup, /data-testid="policy-strong"[^>]*data-selected="true"/u)
+  assert.match(strongMarkup, /data-testid="password-rules"/u)
+  assert.match(strongMarkup, /data-policy="strong"/u)
+  // 强策略下 6 条规则，弱口令全部未满足。
+  assert.equal((strongMarkup.match(/data-rule="/gu) ?? []).length, 6)
+  assert.match(strongMarkup, /data-rule="too-short" data-ok="false"/u)
+  // 未达标时提交按钮禁用。
+  assert.match(strongMarkup, /data-testid="change-password-apply" disabled/u)
+
+  const strongDraftOk = { ...strongDraft, newPassword: 'Correct-Horse-9-Battery!' }
+  const okMarkup = await renderMarkup(accountPage.renderAccountPage(
+    readyState('strong'), noopActions(), strongDraftOk, () => {},
+  ))
+  assert.match(okMarkup, /data-rule="no-upper" data-ok="true"/u)
+  assert.doesNotMatch(okMarkup, /data-testid="change-password-apply" disabled/u)
+
+  const basicMarkup = await renderMarkup(accountPage.renderAccountPage(
+    readyState('basic'), noopActions(), strongDraft, () => {},
+  ))
+  assert.match(basicMarkup, /data-testid="policy-basic"[^>]*data-selected="true"/u)
+  assert.equal((basicMarkup.match(/data-rule="/gu) ?? []).length, 1)
+})
+

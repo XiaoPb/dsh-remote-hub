@@ -31,6 +31,10 @@ export const AUTH_ROUTES = {
   clients: '/remote-auth/clients',
   /** 用客户端私钥证明换取 / 轮换 7 天租约。 */
   lease: '/remote-auth/lease',
+  /** 修改口令（首次登录强制；也需要当前口令）。 */
+  password: '/remote-auth/password',
+  /** 口令策略读取 / 切换（仅管理员）。 */
+  policy: '/remote-auth/policy',
 } as const
 
 export type AuthRoutePath = (typeof AUTH_ROUTES)[keyof typeof AUTH_ROUTES]
@@ -79,6 +83,14 @@ export const AUTH_ERROR_CODES = {
   proofInvalid: 'auth-proof-invalid',
   /** 请求角色超出该客户端的上限。 */
   roleExceeded: 'auth-role-exceeded',
+  /** 必须先修改初始口令（默认账号首次登录）。 */
+  passwordChangeRequired: 'auth-password-change-required',
+  /** 修改口令时提供的当前口令不正确。 */
+  currentPasswordInvalid: 'auth-current-password-invalid',
+  /** 新口令不满足强度要求。 */
+  passwordWeak: 'auth-password-weak',
+  /** 新口令与当前口令相同。 */
+  passwordUnchanged: 'auth-password-unchanged',
   /** 认证服务不可用（Hub 侧 fail-closed）。 */
   unavailable: 'auth-unavailable',
   internal: 'auth-internal',
@@ -163,6 +175,16 @@ export interface AuthStatusResponse {
   username: string | null
   /** 该账号已信任的客户端（仅已登录时返回）。 */
   clients?: readonly TrustedClientView[]
+  /**
+   * 是否必须先修改口令才能继续。
+   *
+   * 由「默认账号自动创建」触发；改密成功后永久清除（**只强制一次**）。
+   * 为 true 时除 `status` / `login` / `logout` / `password` 外的认证端点都返回
+   * `auth-password-change-required`，因此拿不到租约、也进不了 Hub。
+   */
+  passwordChangeRequired?: boolean
+  /** 当前生效的口令策略（仅已登录时返回；切换在设置页）。 */
+  passwordPolicy?: PasswordPolicy
 }
 
 /** 登录请求体。 */
@@ -313,3 +335,132 @@ export interface HubAuthPort {
   /** 有序关闭（Hub 卸载时调用）。 */
   dispose(): Promise<void>
 }
+
+/** 默认账号：首次启动自动创建，仅用于让本地页面完成首次登录。 */
+export const DEFAULT_ACCOUNT = {
+  username: 'admin',
+  /**
+   * 初始口令。
+   *
+   * 空串 = **安装时随机生成**并写入 `INITIAL_PASSWORD_FILE`（明文、0600），
+   * 改密成功后该文件被删除（一次性）。只有显式配置非空值时才使用固定口令。
+   */
+  password: '',
+} as const
+
+/**
+ * 初始口令文件（相对 `~/.dsh/remote-hub/`）。
+ *
+ * 内容就是那一行口令，方便 `cat` / 复制；目录 0700、文件 0600。
+ * **只在账号库为空时创建**；强制改密成功后删除，避免明文长期驻留。
+ */
+export const INITIAL_PASSWORD_FILE = 'initial-password'
+
+/**
+ * 口令策略。
+ *
+ * - `strong`（默认）：至少 12 位，且包含小写、大写、数字、符号；不得包含用户名。
+ * - `basic`：至少 8 位（仅此要求）。
+ *
+ * 两侧共用 `evaluatePassword`，因此设置页展示的规则与 Host 的拒绝理由永远一致。
+ */
+export type PasswordPolicy = 'strong' | 'basic'
+
+/** 可选策略列表（UI 顺序）。 */
+export const PASSWORD_POLICIES: readonly PasswordPolicy[] = ['strong', 'basic']
+
+/** 运行期校验。 */
+export function isPasswordPolicy(value: unknown): value is PasswordPolicy {
+  return value === 'strong' || value === 'basic'
+}
+
+/** 两条策略的最小长度（UI 提示与 Host 判定共用）。 */
+export const PASSWORD_MIN_LENGTH: Readonly<Record<PasswordPolicy, number>> = {
+  strong: 12,
+  basic: 8,
+}
+
+/** 单条规则的失败原因。 */
+export type PasswordFailure =
+  | 'too-short'
+  | 'no-lower'
+  | 'no-upper'
+  | 'no-digit'
+  | 'no-symbol'
+  | 'contains-username'
+  | 'only-whitespace'
+
+/** 一条可展示的规则。 */
+export interface PasswordRule {
+  id: PasswordFailure
+  /** 中文提示（设置页/登录页直接显示）。 */
+  zh: string
+  en: string
+}
+
+/** 强密码规则（顺序即 UI 顺序）。 */
+export const STRONG_PASSWORD_RULES: readonly PasswordRule[] = [
+  { id: 'too-short', zh: `至少 ${PASSWORD_MIN_LENGTH.strong} 位`, en: `At least ${PASSWORD_MIN_LENGTH.strong} characters` },
+  { id: 'no-lower', zh: '包含小写字母', en: 'Contains a lowercase letter' },
+  { id: 'no-upper', zh: '包含大写字母', en: 'Contains an uppercase letter' },
+  { id: 'no-digit', zh: '包含数字', en: 'Contains a digit' },
+  { id: 'no-symbol', zh: '包含符号（如 !@#$%^&*）', en: 'Contains a symbol (e.g. !@#$%^&*)' },
+  { id: 'contains-username', zh: '不包含用户名', en: 'Does not contain the username' },
+]
+
+/** 基础策略规则。 */
+export const BASIC_PASSWORD_RULES: readonly PasswordRule[] = [
+  { id: 'too-short', zh: `至少 ${PASSWORD_MIN_LENGTH.basic} 位`, en: `At least ${PASSWORD_MIN_LENGTH.basic} characters` },
+]
+
+/** 取某策略下的规则表。 */
+export function passwordRules(policy: PasswordPolicy): readonly PasswordRule[] {
+  return policy === 'strong' ? STRONG_PASSWORD_RULES : BASIC_PASSWORD_RULES
+}
+
+/**
+ * 评估口令。
+ *
+ * 返回**全部**未满足项（不是只返回第一条），设置页据此逐条打勾。
+ * 纯函数、无副作用，Host 与浏览器共用同一份判定。
+ *
+ * @param password - 候选口令（不 trim：前导/尾随空格也算字符，但全空白直接拒绝）。
+ * @param policy - 策略。
+ * @param username - 账号名（`strong` 下禁止包含）。
+ * @returns `{ ok, failures }`。
+ */
+export function evaluatePassword(
+  password: string,
+  policy: PasswordPolicy,
+  username = '',
+): { ok: boolean; failures: PasswordFailure[] } {
+  const value = typeof password === 'string' ? password : ''
+  const failures: PasswordFailure[] = []
+  const minimum = PASSWORD_MIN_LENGTH[policy] ?? PASSWORD_MIN_LENGTH.strong
+
+  if (value.trim() === '') failures.push('only-whitespace')
+  if ([...value].length < minimum) failures.push('too-short')
+
+  if (policy === 'strong') {
+    if (!/[a-z]/u.test(value)) failures.push('no-lower')
+    if (!/[A-Z]/u.test(value)) failures.push('no-upper')
+    if (!/[0-9]/u.test(value)) failures.push('no-digit')
+    if (!/[^\p{L}\p{N}]/u.test(value)) failures.push('no-symbol')
+    const normalized = username.trim().toLowerCase()
+    if (normalized !== '' && value.toLowerCase().includes(normalized)) failures.push('contains-username')
+  }
+
+  return { ok: failures.length === 0, failures }
+}
+
+/** 默认口令策略。 */
+export const DEFAULT_PASSWORD_POLICY: PasswordPolicy = 'strong'
+
+/**
+ * 默认账号的强制改密标记。
+ *
+ * 在改用**更强口令**之前，认证面只允许 `status` / `login` / `logout` / `password`，
+ * 其余（绑定 2FA、信任客户端、轮换租约）一律 403 `auth-password-change-required`：
+ * 没有改密就拿不到租约，也就进不了 Hub。
+ */
+export const FORCED_PASSWORD_CHANGE = true

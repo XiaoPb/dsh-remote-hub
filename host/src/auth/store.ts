@@ -37,6 +37,12 @@ export interface AccountRecord {
   createdAt: number
   updatedAt: number
   lastLoginAt: number | null
+  /**
+   * 首次登录必须改密（默认账号自动创建时置 true）。
+   *
+   * 改密成功后清除；缺省（旧存储）视为 false。
+   */
+  mustChangePassword?: boolean
 }
 
 /** 可信客户端记录。 */
@@ -92,6 +98,11 @@ export interface AuthStoreData {
   challenges: MfaChallengeRecord[]
   /** nonce → 过期时间（epoch ms）。 */
   nonces: Record<string, number>
+  /** 运行期设置（设置页可改，无需重启）。 */
+  settings?: {
+    /** 口令策略；缺省时用插件配置的默认值。 */
+    passwordPolicy?: 'strong' | 'basic'
+  }
 }
 
 /** 空存储。 */
@@ -209,6 +220,9 @@ export async function createAuthStore(path: string = defaultAuthStorePath()): Pr
       nonces: typeof root.nonces === 'object' && root.nonces !== null
         ? root.nonces as Record<string, number>
         : {},
+      ...(typeof root.settings === 'object' && root.settings !== null
+        ? { settings: root.settings as AuthStoreData['settings'] }
+        : {}),
     }
     if (data.account !== null) {
       const account = data.account as unknown as Record<string, unknown>
@@ -286,6 +300,25 @@ export async function createAuthStore(path: string = defaultAuthStorePath()): Pr
 /** 生成一个 keyId（公钥版本的稳定标识）。 */
 export function newKeyId(publicKey: ClientPublicKeyJwk): string {
   return `key_${sha256Hex(JSON.stringify(publicKey)).slice(0, 24)}`
+}
+
+/**
+ * 原子写一个 0600 私有文件（初始口令等一次性明文）。
+ *
+ * 与存储本体同一套手法：临时文件 + rename + chmod，目录 0700。
+ * @param path - 目标路径。
+ * @param body - 文件内容。
+ */
+export async function writePrivateFile(path: string, body: string): Promise<void> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+  const tmp = `${path}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
+  await writeFile(tmp, body, { mode: 0o600 })
+  await rename(tmp, path)
+  try {
+    await chmod(path, 0o600)
+  } catch {
+    // Windows 上 chmod 语义有限：尽力而为。
+  }
 }
 
 /** 生成一个 clientId。 */

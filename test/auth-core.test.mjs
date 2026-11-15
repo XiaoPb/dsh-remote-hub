@@ -41,13 +41,13 @@ async function bootstrappedService(tag) {
   // 用真实时间起点，让签名时间戳与服务的 now() 一致（否则会被 skew 判据拒绝）。
   let clock = Date.now()
   const service = auth.createAuthService({ store, now: () => clock })
-  const boot = await service.bootstrap({ username: 'owner', password: 'correct horse battery' })
+  const boot = await service.bootstrap({ username: 'owner', password: 'Correct-Horse-9-Battery!' })
   const setup = await service.startTotpSetup(boot.cookie)
   const secret = setup.secret
   const code = auth.totpCodeAt(secret, clock)
   await service.confirmTotp(boot.cookie, code)
   // 重新登录拿到 lastMfaAt 新鲜的会话。
-  const login = await service.login({ username: 'owner', password: 'correct horse battery' })
+  const login = await service.login({ username: 'owner', password: 'Correct-Horse-9-Battery!' })
   assert.equal(login.ok, true)
   assert.equal(login.response.mfaRequired, true, 'MFA must be required after confirmation')
   const mfa = await service.verifyMfa({
@@ -191,7 +191,7 @@ test('login rate limits and does not leak account existence', { skip: !dynamic }
 test('MFA challenge is single-use and burns after 5 wrong codes', { skip: !dynamic }, async () => {
   const { service, dir, secret, now } = await bootstrappedService('challenge')
   try {
-    const login = await service.login({ username: 'owner', password: 'correct horse battery' })
+    const login = await service.login({ username: 'owner', password: 'Correct-Horse-9-Battery!' })
     assert.equal(login.response.mfaRequired, true)
     const token = login.response.mfaToken
     for (let index = 0; index < 5; index++) {
@@ -375,4 +375,201 @@ test('role ceiling is enforced server-side', { skip: !dynamic }, async () => {
     await service.dispose()
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('default account seeding forces exactly one password change before trust', { skip: !dynamic }, async () => {
+  const { dir, path } = tempStore('seed')
+  const store = await auth.createAuthStore(path)
+  const service = auth.createAuthService({ store, now: () => Date.now() })
+  try {
+    const created = await service.seedDefaultAccount({ username: 'admin', password: 'admin12345' })
+    assert.equal(created, true)
+    // 已有账号时不再覆盖。
+    assert.equal(await service.seedDefaultAccount({ username: 'evil', password: 'whatever1' }), false)
+
+    const login = await service.login({ username: 'admin', password: 'admin12345' })
+    assert.equal(login.ok, true)
+    assert.equal(login.response.mfaRequired, false, 'TOTP is not bound yet')
+    const cookie = login.cookie
+
+    const status = await service.status(cookie)
+    assert.equal(status.bootstrapped, true)
+    assert.equal(status.passwordChangeRequired, true)
+
+    // 改密之前：绑定 2FA / 信任客户端都被拒 —— 因此也拿不到 Hub 租约。
+    await assert.rejects(
+      () => service.startTotpSetup(cookie),
+      error => error.code === 'auth-password-change-required',
+    )
+    await assert.rejects(
+      () => service.enroll(cookie, {
+        label: 'browser', clientType: 'browser', publicKey: clientKeyPair().jwk, roleCeiling: 'control',
+      }),
+      error => error.code === 'auth-password-change-required',
+    )
+    await assert.rejects(
+      () => service.listClients(cookie),
+      error => error.code === 'auth-password-change-required',
+    )
+
+    // 改密校验：当前口令错 / 新口令太短 / 与旧口令相同，都拒绝。
+    await assert.rejects(
+      () => service.changePassword(cookie, { currentPassword: 'nope', newPassword: 'An0ther-Strong-Pass!' }),
+      error => error.code === 'auth-current-password-invalid',
+    )
+    await assert.rejects(
+      () => service.changePassword(cookie, { currentPassword: 'admin12345', newPassword: 'short' }),
+      error => error.code === 'auth-password-weak',
+    )
+    await assert.rejects(
+      () => service.changePassword(cookie, { currentPassword: 'admin12345', newPassword: 'admin12345' }),
+      error => error.code === 'auth-password-unchanged',
+    )
+
+    await service.changePassword(cookie, { currentPassword: 'admin12345', newPassword: 'An0ther-Strong-Pass!' })
+    assert.equal((await service.status(cookie)).passwordChangeRequired, false)
+    assert.equal(await service.passwordChangeRequired(cookie), false)
+
+    // 强制只发生一次：之后可以正常绑定 2FA，且不会再要求改密。
+    const setup = await service.startTotpSetup(cookie)
+    assert.match(setup.secret, /^[A-Z2-7]{16,}$/u)
+    await service.confirmTotp(cookie, auth.totpCodeAt(setup.secret, Date.now()))
+    assert.equal((await service.status(cookie)).passwordChangeRequired, false)
+
+    // 旧口令失效，新口令可登录。
+    const oldLogin = await service.login({ username: 'admin', password: 'admin12345' })
+    assert.equal(oldLogin.ok, false)
+    assert.equal(oldLogin.code, 'auth-invalid-credentials')
+    const newLogin = await service.login({ username: 'admin', password: 'An0ther-Strong-Pass!' })
+    assert.equal(newLogin.ok, true)
+    assert.equal(newLogin.response.mfaRequired, true)
+  } finally {
+    await service.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('password policy: strong by default, weak rejected, switchable in settings', { skip: !dynamic }, async () => {
+  // 纯函数判定（Host 与设置页共用）。
+  assert.equal(auth.evaluatePassword('Short1!', 'strong').ok, false)
+  assert.equal(auth.evaluatePassword('Correct-Horse-9!', 'strong').ok, true)
+  assert.equal(auth.evaluatePassword('Correct-Horse-9!', 'strong', 'horse').ok, false)
+  assert.deepEqual(
+    auth.evaluatePassword('short', 'strong').failures.sort(),
+    ['no-digit', 'no-symbol', 'no-upper', 'too-short'].sort(),
+  )
+  assert.equal(auth.evaluatePassword('abcdefgh', 'basic').ok, true)
+  assert.equal(auth.evaluatePassword('abcdefgh', 'strong').ok, false)
+  assert.equal(auth.passwordRules('strong').length, 6)
+  assert.equal(auth.passwordRules('basic').length, 1)
+
+  const { dir, path } = tempStore('policy')
+  const store = await auth.createAuthStore(path)
+  const service = auth.createAuthService({ store, now: () => Date.now() })
+  try {
+    assert.equal(service.passwordPolicy(), 'strong', 'default policy must be strong')
+    await service.seedDefaultAccount({ username: 'admin', password: 'K7Qm-2xVt9-pLr4!sW' })
+    const login = await service.login({ username: 'admin', password: 'K7Qm-2xVt9-pLr4!sW' })
+    assert.equal(login.ok, true)
+    const cookie = login.cookie
+    assert.equal((await service.status(cookie)).passwordPolicy, 'strong')
+
+    // 弱口令不能被使用（返回未满足项清单）。
+    const weak = await service
+      .changePassword(cookie, { currentPassword: 'K7Qm-2xVt9-pLr4!sW', newPassword: 'weakpass' })
+      .catch(error => error)
+    assert.equal(weak.code, 'auth-password-weak')
+    assert.ok(Array.isArray(weak.failures) && weak.failures.includes('too-short'))
+
+    // 强口令通过；改密同时清掉强制标记。
+    await service.changePassword(cookie, { currentPassword: 'K7Qm-2xVt9-pLr4!sW', newPassword: 'Strong-Pass-10!' })
+    assert.equal(service.initialPasswordPending(), false)
+
+    // 设置页切到 basic：立即生效（无需重启）。
+    assert.equal(await service.setPasswordPolicy(cookie, 'basic'), 'basic')
+    assert.equal(service.passwordPolicy(), 'basic')
+    assert.equal((await service.status(cookie)).passwordPolicy, 'basic')
+    await service.changePassword(cookie, { currentPassword: 'Strong-Pass-10!', newPassword: 'basicpass' })
+    assert.equal((await service.login({ username: 'admin', password: 'basicpass' })).ok, true)
+
+    // 切回 strong 后同一类口令再次被拒。
+    assert.equal(await service.setPasswordPolicy(cookie, 'strong'), 'strong')
+    const rejected = await service
+      .changePassword(cookie, { currentPassword: 'basicpass', newPassword: 'anotherweak' })
+      .catch(error => error)
+    assert.equal(rejected.code, 'auth-password-weak')
+
+    // 非法策略值被拒绝。
+    const bad = await service.setPasswordPolicy(cookie, 'whatever').catch(error => error)
+    assert.equal(bad.code, 'auth-bad-request')
+  } finally {
+    await service.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('generated initial passwords satisfy the configured policy', { skip: !dynamic }, () => {
+  const pluginSrc = read(join(PATHS.hostSrc, 'auth', 'plugin.ts'))
+  assert.match(pluginSrc, /export function generateInitialPassword/u)
+  assert.match(pluginSrc, /evaluatePassword\(candidate, policy\)\.ok/u)
+  // 策略默认 strong，且可从设置页切换。
+  assert.match(pluginSrc, /passwordPolicy: z\.union\(\[z\.const\('strong'\), z\.const\('basic'\)\]\)\.default\(DEFAULT_PASSWORD_POLICY\)/u)
+})
+
+test('account-auth defaults to enabled in the Host config schema', () => {
+  const config = read(join(PATHS.hostSrc, 'config.ts'))
+  assert.match(config, /accountAuth: z\.object\(\{[\s\S]*?enabled: z\.boolean\(\)\.default\(true\)/u)
+  const patch = read(join(PATHS.packageJson, '..', 'cordis.patch.yml'))
+  assert.match(patch, /accountAuth:\s*\n\s*enabled: true/u)
+  assert.match(patch, /id: remote-hub-auth/u)
+  assert.match(patch, /name: '@xiaopb\/dsh-remote-hub\/auth'/u)
+  // 初始口令不是写死的固定值：默认空串 = 安装时随机生成到本地文件。
+  assert.match(patch, /password: ''/u)
+  assert.doesNotMatch(patch, /password: admin12345/u)
+})
+
+test('initial password is one-time: pending after seeding, cleared after the forced change', { skip: !dynamic }, async () => {
+  const { dir, path } = tempStore('initial-password')
+  const store = await auth.createAuthStore(path)
+  const consumed = []
+  const service = auth.createAuthService({
+    store,
+    now: () => Date.now(),
+    onForcedPasswordChanged: () => { consumed.push(true) },
+  })
+  try {
+    assert.equal(service.initialPasswordPending(), false, 'no account yet')
+    const generated = 'K7Qm-2xVt9-pLr4!sW'
+    assert.equal(await service.seedDefaultAccount({ username: 'admin', password: generated }), true)
+    assert.equal(service.initialPasswordPending(), true)
+
+    const login = await service.login({ username: 'admin', password: generated })
+    assert.equal(login.ok, true)
+    assert.equal((await service.status(login.cookie)).passwordChangeRequired, true)
+
+    await service.changePassword(login.cookie, { currentPassword: generated, newPassword: 'My-0wn-Passphrase!' })
+    assert.equal(service.initialPasswordPending(), false)
+    assert.equal(consumed.length, 1, 'plugin must be told to delete the plaintext initial-password file')
+
+    // 之后的普通改密不再触发「初始口令消费」回调。
+    await service.changePassword(login.cookie, { currentPassword: 'My-0wn-Passphrase!', newPassword: 'Yet-An0ther-Pass!!' })
+    assert.equal(consumed.length, 1)
+  } finally {
+    await service.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('the initial password file is declared and never logged', () => {
+  const core = read(join(PATHS.coreSrc, 'auth.ts'))
+  assert.match(core, /INITIAL_PASSWORD_FILE = 'initial-password'/u)
+  assert.match(core, /password: ''/u)
+  const plugin = read(join(PATHS.hostSrc, 'auth', 'plugin.ts'))
+  assert.match(plugin, /writePrivateFile\(initialPasswordPath, initialBody\)/u)
+  assert.match(plugin, /onForcedPasswordChanged: removeInitialPassword/u)
+  const store = read(join(PATHS.hostSrc, 'auth', 'store.ts'))
+  assert.match(store, /export async function writePrivateFile/u)
+  assert.match(store, /mode: 0o600/u)
+  // 明确不把口令本身写进日志字符串：日志只带文件路径。
+  assert.doesNotMatch(plugin, /logger\?\.warn\?\.\(`[^`]*\$\{password\}/u)
 })

@@ -99,10 +99,10 @@ describe('守卫：账号认证模式', () => {
     store = await auth.createAuthStore(join(dir, 'auth.json'))
     let clock = Date.now()
     service = auth.createAuthService({ store, now: () => clock })
-    const boot = await service.bootstrap({ username: 'owner', password: 'correct horse battery' })
+    const boot = await service.bootstrap({ username: 'owner', password: 'Correct-Horse-9-Battery!' })
     const setup = await service.startTotpSetup(boot.cookie)
     await service.confirmTotp(boot.cookie, auth.totpCodeAt(setup.secret, clock))
-    const login = await service.login({ username: 'owner', password: 'correct horse battery' })
+    const login = await service.login({ username: 'owner', password: 'Correct-Horse-9-Battery!' })
     const mfa = await service.verifyMfa({
       mfaToken: login.response.mfaToken,
       code: auth.totpCodeAt(setup.secret, clock),

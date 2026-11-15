@@ -130,10 +130,12 @@ function statusFor(code: string): number {
     case AUTH_ERROR_CODES.mfaRequired:
     case AUTH_ERROR_CODES.mfaInvalid:
     case AUTH_ERROR_CODES.mfaExpired:
+    case AUTH_ERROR_CODES.currentPasswordInvalid:
       return 401
     case AUTH_ERROR_CODES.forbidden:
     case AUTH_ERROR_CODES.bootstrapClosed:
     case AUTH_ERROR_CODES.roleExceeded:
+    case AUTH_ERROR_CODES.passwordChangeRequired:
       return 403
     case AUTH_ERROR_CODES.rateLimited:
       return 429
@@ -143,6 +145,8 @@ function statusFor(code: string): number {
       return 401
     case AUTH_ERROR_CODES.badRequest:
     case AUTH_ERROR_CODES.bootstrapRequired:
+    case AUTH_ERROR_CODES.passwordWeak:
+    case AUTH_ERROR_CODES.passwordUnchanged:
       return 400
     case AUTH_ERROR_CODES.unavailable:
       return 503
@@ -301,6 +305,58 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
         return
       }
 
+      // ── 改密（首次登录强制；之后仍可主动修改）──────────────────────────────
+      if (path === AUTH_ROUTES.password) {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'method not allowed' })
+          return
+        }
+        if (!sameOriginOk(req)) {
+          sendJson(res, 403, { ok: false, code: AUTH_ERROR_CODES.forbidden, message: 'cross-origin request refused' })
+          return
+        }
+        const body = await readJson(req)
+        if (body === undefined) {
+          sendJson(res, 400, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'invalid body' })
+          return
+        }
+        await service.changePassword(token, {
+          currentPassword: String(body.currentPassword ?? ''),
+          newPassword: String(body.newPassword ?? ''),
+        })
+        sendJson(res, 200, { ok: true })
+        return
+      }
+
+      // ── 口令策略（设置页开关；管理员会话）──────────────────────────────────
+      if (path === AUTH_ROUTES.policy) {
+        if (req.method !== 'GET' && req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'method not allowed' })
+          return
+        }
+        if (!sameOriginOk(req)) {
+          sendJson(res, 403, { ok: false, code: AUTH_ERROR_CODES.forbidden, message: 'cross-origin request refused' })
+          return
+        }
+        if (req.method === 'GET') {
+          // 读取也需要会话：策略是部署配置，不向匿名访客暴露。
+          if (await service.readSession(token) === null) {
+            sendJson(res, 401, { ok: false, code: AUTH_ERROR_CODES.unauthorized, message: 'session required' })
+            return
+          }
+          sendJson(res, 200, { ok: true, policy: service.passwordPolicy() })
+          return
+        }
+        const body = await readJson(req)
+        if (body === undefined) {
+          sendJson(res, 400, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'invalid body' })
+          return
+        }
+        const policy = await service.setPasswordPolicy(token, body.policy as never)
+        sendJson(res, 200, { ok: true, policy })
+        return
+      }
+
       // ── 客户端注册 / 管理（需要会话）──────────────────────────────────────
       if (path === AUTH_ROUTES.enroll) {
         if (req.method !== 'POST') {
@@ -435,7 +491,14 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
     } catch (error) {
       const code = codeOf(error)
       const message = error instanceof Error ? error.message : 'authentication failed'
-      sendJson(res, statusFor(code), { ok: false, code, message })
+      const failures = (error as { failures?: unknown })?.failures
+      sendJson(res, statusFor(code), {
+        ok: false,
+        code,
+        message,
+        // 口令策略失败时把未满足的规则逐条返回，供输入框下的提示打勾。
+        ...(Array.isArray(failures) ? { failures } : {}),
+      })
     }
   }
 }

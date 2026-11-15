@@ -40,6 +40,10 @@ function messageOf(error: unknown): string {
     if (value.code === 'auth-mfa-invalid') return '验证码不正确，请重试。'
     if (value.code === 'auth-mfa-expired') return '验证已过期，请重新登录。'
     if (value.code === 'auth-forbidden') return '该操作需要先完成双因素验证，或当前账号无权执行。'
+    if (value.code === 'auth-password-change-required') return '请先修改初始口令。'
+    if (value.code === 'auth-current-password-invalid') return '当前口令不正确。'
+    if (value.code === 'auth-password-weak') return '口令不满足当前策略，请按下方清单逐项补齐。'
+    if (value.code === 'auth-password-unchanged') return '新口令不能与当前口令相同。'
     if (typeof value.message === 'string') return value.message
   }
   return '请求失败，请重试。'
@@ -59,6 +63,7 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
       phase: 'loading',
       status: null,
       binding: null,
+      policy: 'strong',
       enrollment: null,
       notice: null,
       busy: false,
@@ -76,14 +81,17 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
         const status = await api.status()
         const binding = await keyring.loadBinding()
         const session = status.session
-        const phase = session !== null
-          ? 'ready'
-          : status.bootstrapped ? 'login' : 'bootstrap'
+        let phase: AccountPageState['phase']
+        if (session === null) phase = status.bootstrapped ? 'login' : 'bootstrap'
+        // 默认账号首次登录：先改密，改完之前不展示 2FA / 信任 / 客户端管理。
+        else if (status.passwordChangeRequired === true) phase = 'change-password'
+        else phase = 'ready'
         setState(current => ({
           ...current,
           phase,
           status,
           binding,
+          policy: status.passwordPolicy === 'basic' ? 'basic' : 'strong',
           notice: null,
           busy: false,
         }))
@@ -141,6 +149,29 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
         patch({ busy: true, notice: null })
         void api.mfa({ mfaToken: token, code })
           .then(() => load())
+          .catch(error => patch({ busy: false, notice: messageOf(error) }))
+      },
+      onChangePassword(currentPassword, newPassword) {
+        patch({ busy: true, notice: null })
+        void api.changePassword({ currentPassword, newPassword })
+          .then(() => {
+            setDraft(current => ({ ...current, currentPassword: '', newPassword: '' }))
+            patch({ busy: false, notice: '口令已更新。' })
+            return load()
+          })
+          .catch(error => patch({ busy: false, notice: messageOf(error) }))
+      },
+      onSetPasswordPolicy(policy) {
+        patch({ busy: true, notice: null })
+        void api.setPolicy(policy)
+          .then((applied) => {
+            patch({
+              busy: false,
+              policy: applied,
+              notice: applied === 'strong' ? '已切换为仅允许强密码。' : '已切换为允许基础口令。',
+            })
+            return load()
+          })
           .catch(error => patch({ busy: false, notice: messageOf(error) }))
       },
       onTrustClient(label, ceiling) {

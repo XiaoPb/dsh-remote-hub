@@ -86,6 +86,16 @@ export {
   AUTH_STORE_VERSION,
   buildProofPayload,
   isClientType,
+  DEFAULT_ACCOUNT,
+  INITIAL_PASSWORD_FILE,
+  DEFAULT_PASSWORD_POLICY,
+  PASSWORD_POLICIES,
+  PASSWORD_MIN_LENGTH,
+  STRONG_PASSWORD_RULES,
+  BASIC_PASSWORD_RULES,
+  evaluatePassword,
+  isPasswordPolicy,
+  passwordRules,
 } from '@core/auth.js'
 export type {
   AuthClaims,
@@ -103,5 +113,8 @@ export type {
   LoginRequest,
   LoginResponse,
   MfaRequest,
+  PasswordFailure,
+  PasswordPolicy,
+  PasswordRule,
   TrustedClientView,
 } from '@core/auth.js'

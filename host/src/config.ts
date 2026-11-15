@@ -270,10 +270,13 @@ export const Config: z<Config> = z.object({
   }),
   accountAuth: z.object({
     /**
-     * 默认关闭：升级到本版本的既有部署继续用设备令牌，直到显式启用。
-     * `cordis.patch.yml` 的新装默认把它打开（见该文件的行配置）。
+     * 默认开启：Hub 只接受「租约 + 客户端签名」。
+     *
+     * 首次启动会自动创建默认账号（见 `remote-hub-auth` 行的 `defaultAccount`），
+     * 首次登录必须改密；改密并绑定 2FA、信任本浏览器后才拿得到访问 Hub 的租约。
+     * 需要临时回到旧的设备令牌模型时显式设为 false。
      */
-    enabled: z.boolean().default(false),
+    enabled: z.boolean().default(true),
   }).default({}),
 })
 
@@ -301,7 +304,7 @@ export const DEFAULT_CONFIG: Config = {
   singleController: true,
   network: 'loopback',
   tunnel: { kind: 'none', restart: 'on-failure' },
-  accountAuth: { enabled: false },
+  accountAuth: { enabled: true },
 }
 
 /**

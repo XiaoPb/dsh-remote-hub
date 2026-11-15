@@ -30,7 +30,6 @@ import { createRemoteHubPageComponent, classifyPairSecret } from './panel/Remote
 import type { CloudDeviceRow } from './panel/RemoteHubPage.js'
 import { RemoteHubNavIcon } from './panel/NavIcon.js'
 import { createAccountPageComponent } from './auth/mount.js'
-import { AccountNavIcon } from './auth/NavIcon.js'
 import { mountLocalPluginsPanel } from './local-plugin-manager/panel.js'
 import { watchTakeover } from './local-plugin-manager/lifecycle.js'
 
@@ -411,17 +410,11 @@ export function applyRemoteHubClient(ctx: Context, options: ClientAssemblyOption
         ))
       })
 
-      // 账号与信任：独立一页（与运行面分开，避免把登录表单塞进配对表单）。
-      // 认证面缺席时页面自己显示错误态，不阻断 Hub 面板。
-      declare('sidebar.panellist', () => {
+      // 账号与信任：挂在**设置页**（`settings.section`），与运行面分开：
+      // 身份/口令/2FA/可信客户端属于配置，云端设备页只保留运行与连接。
+      declare('settings.section', () => {
         disposersNav.push(slots.register(
-          { name: 'sidebar.panellist', id: 'remote-hub-auth', order: 61, label: '登录与账号' },
-          AccountNavIcon,
-        ))
-      })
-      declare('main', () => {
-        disposersNav.push(slots.register(
-          { name: 'main', key: 'remote-hub-auth' },
+          { name: 'settings.section', id: 'remote-hub-account', order: 25, label: '登录与账号' },
           AccountPage,
         ))
       })
