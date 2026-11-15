@@ -83,6 +83,7 @@ function noopActions() {
     onSubmitLogin() {},
     onSubmitMfa() {},
     onChangePassword() {},
+    onForgetPeer() {},
     onSetPasswordPolicy() {},
     onTrustClient() {},
     onRevokeClient() {},
@@ -233,6 +234,7 @@ test('account page asks for bootstrap when no account exists', async () => {
     {
       phase: 'bootstrap',
       policy: 'strong',
+      peers: [],
       status: { ready: true, bootstrapped: false, mfaEnabled: true, session: null, username: null },
       binding: null,
       enrollment: null,
@@ -255,6 +257,7 @@ test('account page gates on MFA and never renders a session while pending', asyn
     {
       phase: 'mfa',
       policy: 'strong',
+      peers: [],
       status: { ready: true, bootstrapped: true, mfaEnabled: true, session: null, username: 'owner' },
       binding: null,
       enrollment: null,
@@ -289,6 +292,7 @@ test('ready page lists trusted clients with role controls and offers trust', asy
     {
       phase: 'ready',
       policy: 'strong',
+      peers: [],
       status: {
         ready: true,
         bootstrapped: true,
@@ -322,6 +326,7 @@ test('first sign-in with the default account is gated on a password change', asy
     {
       phase: 'change-password',
       policy: 'strong',
+      peers: [],
       status: {
         ready: true,
         bootstrapped: true,
@@ -356,6 +361,7 @@ test('a revoked client is rendered disabled', async () => {  const markup = awai
     {
       phase: 'ready',
       policy: 'strong',
+      peers: [],
       status: {
         ready: true,
         bootstrapped: true,
@@ -407,6 +413,7 @@ test('settings exposes the password policy switch and a live rule checklist', as
     busy: false,
     mfaToken: null,
     policy,
+    peers: [],
   })
 
   const strongDraft = { ...accountPage.initialDraft(), currentPassword: 'Old-Pass-123!', newPassword: 'weakpass' }
@@ -439,4 +446,53 @@ test('settings exposes the password policy switch and a live rule checklist', as
   assert.match(basicMarkup, /data-testid="policy-basic"[^>]*data-selected="true"/u)
   assert.equal((basicMarkup.match(/data-rule="/gu) ?? []).length, 1)
 })
+
+test('settings separates the local account from peer accounts', async () => {
+  const base = {
+    phase: 'ready',
+    status: {
+      ready: true,
+      bootstrapped: true,
+      mfaEnabled: true,
+      username: 'admin',
+      passwordPolicy: 'strong',
+      session: {
+        accountId: 'admin', username: 'admin', role: 'admin',
+        createdAt: new Date().toISOString(), expiresAt: Date.now() + 1000, lastMfaAt: Date.now(),
+      },
+      clients: [],
+    },
+    binding: null,
+    enrollment: null,
+    notice: null,
+    busy: false,
+    mfaToken: null,
+    policy: 'strong',
+    peers: [],
+  }
+
+  const empty = await renderMarkup(accountPage.renderAccountPage(base, noopActions(), accountPage.initialDraft(), () => {}))
+  assert.match(empty, /data-testid="local-account"/u)
+  assert.match(empty, /本机账号/u)
+  assert.match(empty, /data-testid="peer-accounts"/u)
+  assert.match(empty, /对端账号/u)
+  assert.match(empty, /data-testid="peers-empty"/u)
+
+  const withPeer = await renderMarkup(accountPage.renderAccountPage({
+    ...base,
+    peers: [{
+      id: 'a'.repeat(64),
+      origin: 'http://192.168.1.20:8443',
+      label: '家里的机器',
+      role: 'control',
+      lastConnectedAt: Date.now(),
+    }],
+  }, noopActions(), accountPage.initialDraft(), () => {}))
+  assert.match(withPeer, /data-testid="peer-account"/u)
+  assert.match(withPeer, /http:\/\/192\.168\.1\.20:8443/u)
+  assert.match(withPeer, /家里的机器/u)
+  assert.match(withPeer, /data-testid="forget-peer"/u)
+  assert.doesNotMatch(withPeer, /data-testid="peers-empty"/u)
+})
+
 

@@ -24,6 +24,15 @@ import type { ClientBinding } from './keyring.js'
 /** 页面阶段。 */
 export type AccountPhase = 'loading' | 'bootstrap' | 'login' | 'mfa' | 'change-password' | 'ready' | 'error'
 
+/** 一个「对端账号」记录（本机作为控制端信任过的其它设备）。 */
+export interface PeerAccountRow {
+  id: string
+  origin: string
+  label?: string
+  role?: string
+  lastConnectedAt?: number
+}
+
 /** 页面状态。 */
 export interface AccountPageState {
   phase: AccountPhase
@@ -32,6 +41,8 @@ export interface AccountPageState {
   binding: ClientBinding | null
   /** 当前口令策略（设置页可切换，默认强密码）。 */
   policy: PasswordPolicy
+  /** 对端账号（出站信任记录）——与本机账号是两套身份。 */
+  peers: readonly PeerAccountRow[]
   /** 一次性引导结果（TOTP 密钥/链接/备用码）。 */
   enrollment: { otpauth: string; backupCodes: readonly string[] } | null
   /** 页面级提示（成功或失败）。 */
@@ -50,6 +61,8 @@ export interface AccountPageActions {
   onChangePassword(currentPassword: string, newPassword: string): void
   /** 切换口令策略。 */
   onSetPasswordPolicy(policy: PasswordPolicy): void
+  /** 移除一条对端账号的信任记录（不影响本机账号）。 */
+  onForgetPeer(targetId: string): void
   onTrustClient(label: string, ceiling: RoleName): void
   onRevokeClient(clientId: string): void
   onSetRole(clientId: string, role: RoleName): void
@@ -392,7 +405,12 @@ export function renderAccountPage(
   const active = clients.filter(client => client.revokedAt === null)
   return React.createElement('div', { 'data-testid': 'account-page', 'data-phase': 'ready' },
     header,
-    React.createElement('section', { style: { marginBottom: 16 } },
+    // 两套账号必须分开显示：本机账号决定「谁能登录这台机器」，
+    // 对端账号是本机作为控制端在别的机器上建立的信任。
+    React.createElement('section', { 'data-testid': 'local-account', style: { marginBottom: 16 } },
+      React.createElement('strong', { style: { fontSize: 13, display: 'block', marginBottom: 6 } }, '本机账号（这台 DSH）'),
+      React.createElement('p', { style: { fontSize: 12, color: 'var(--dsw-alias-text-tertiary, #8b949e)', margin: '0 0 8px' } },
+        '用于登录这台机器的 DSH Web 与设置页；双因素与口令策略都作用于它。'),
       React.createElement('div', { style: { display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' } },
         React.createElement('span', { 'data-testid': 'account-user', style: { fontSize: 13 } },
           `当前账号：${session?.username ?? status?.username ?? '—'}`),
@@ -475,12 +493,51 @@ export function renderAccountPage(
     }, '保存新口令'),
     passwordChecklist(draft, state.policy, status?.username ?? '')),
 
-    React.createElement('section', null,
-      React.createElement('strong', { style: { fontSize: 13 } }, `已信任的客户端（${active.length}）`),
+    React.createElement('section', { style: { marginTop: 18 } },
+      React.createElement('strong', { style: { fontSize: 13 } }, `本机已信任的客户端（${active.length}）`),
+      React.createElement('p', { style: { fontSize: 12, color: 'var(--dsw-alias-text-tertiary, #8b949e)', margin: '4px 0 8px' } },
+        '这些客户端被允许用本机账号访问 Hub；与下面的对端账号是两套身份。'),
       clients.length === 0
         ? React.createElement('p', { 'data-testid': 'clients-empty', style: { fontSize: 12.5, color: 'var(--dsw-alias-text-tertiary, #8b949e)' } },
           '还没有受信客户端。信任本浏览器后即可免重复 2FA 访问 Hub。')
         : React.createElement('div', { 'data-testid': 'clients-list', style: { marginTop: 8 } },
           clients.map(client => renderClientRow(client, state, actions)))),
+
+    React.createElement('section', { 'data-testid': 'peer-accounts', style: { marginTop: 18 } },
+      React.createElement('strong', { style: { fontSize: 13, display: 'block' } }, `对端账号（${state.peers.length}）`),
+      React.createElement('p', { style: { fontSize: 12, color: 'var(--dsw-alias-text-tertiary, #8b949e)', margin: '4px 0 8px' } },
+        '本机作为控制端，在其它设备上建立过的信任。用的是**对端**的账号；与本机账号互不影响。'),
+      state.peers.length === 0
+        ? React.createElement('p', { 'data-testid': 'peers-empty', style: { fontSize: 12.5, color: 'var(--dsw-alias-text-tertiary, #8b949e)' } },
+          '还没有对端账号。在「云端设备 → 连接其他设备」里用对端账号登录并信任本机会出现在这里。')
+        : React.createElement('div', { style: { marginTop: 8 } },
+          state.peers.map(peer => React.createElement('div', {
+            key: peer.id,
+            'data-testid': 'peer-account',
+            'data-origin': peer.origin,
+            style: {
+              border: '1px solid var(--dsw-alias-border-l2, #30363d)',
+              borderRadius: 10,
+              padding: '10px 12px',
+              marginBottom: 8,
+            },
+          },
+          React.createElement('div', { style: { display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' } },
+            React.createElement('strong', { style: { fontSize: 13 } }, peer.label ?? peer.origin),
+            React.createElement('code', { style: { fontSize: 11, color: 'var(--dsw-alias-text-tertiary, #8b949e)' } }, peer.origin),
+            peer.role === undefined
+              ? null
+              : React.createElement('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-text-tertiary, #8b949e)' } },
+                `角色 ${peer.role}`)),
+          React.createElement('div', { style: { display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' } },
+            React.createElement('span', { style: { fontSize: 11.5, color: 'var(--dsw-alias-text-tertiary, #8b949e)' } },
+              peer.lastConnectedAt === undefined ? '从未连接' : `最近连接 ${new Date(peer.lastConnectedAt).toLocaleString()}`),
+            React.createElement('button', {
+              type: 'button',
+              'data-testid': 'forget-peer',
+              disabled: state.busy,
+              onClick: () => actions.onForgetPeer(peer.id),
+              style: { ...buttonStyle, color: 'var(--dsw-alias-state-error-primary, #f85149)' },
+            }, '移除信任')))))),
     state.notice === null ? null : React.createElement('p', { 'data-testid': 'account-notice', style: { fontSize: 12.5 } }, state.notice))
 }

@@ -146,8 +146,22 @@ function hubGlobal(): HubGlobal {
  * 的 transport —— 后者的 origin 在页面加载时就固定了，而连接动作恰恰是要换
  * origin。
  */
-/** 「登录与账号」页：账号引导 / 口令 + MFA / 可信客户端管理。 */
-const AccountPage = createAccountPageComponent()
+/** 「登录与账号」页：本机账号 + 对端账号（出站信任记录）。 */
+const AccountPage = createAccountPageComponent({
+  async loadPeers() {
+    const targets = await createAdminTransport().listOutboundTargets()
+    return targets.map(target => ({
+      id: target.id,
+      origin: target.origin,
+      ...(target.deviceLabel === undefined ? {} : { label: target.deviceLabel }),
+      ...(target.role === undefined ? {} : { role: target.role }),
+      ...(target.lastConnectedAt === undefined ? {} : { lastConnectedAt: target.lastConnectedAt }),
+    }))
+  },
+  async forgetPeer(targetId) {
+    return createAdminTransport().forgetOutboundTarget(targetId)
+  },
+})
 
 const RemoteHubPage = createRemoteHubPageComponent({
   injected: () => hubGlobal(),

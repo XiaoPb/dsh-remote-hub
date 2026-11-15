@@ -19,6 +19,7 @@ import {
   type AccountPageActions,
   type AccountFormDraft,
   type AccountPageState,
+  type PeerAccountRow,
 } from './AccountPage.js'
 import { createAuthApi, type AuthApi } from './api.js'
 import { createKeyring, type ClientBinding, type ClientIdentity } from './keyring.js'
@@ -29,6 +30,10 @@ export interface AccountPageDeps {
   keyring?: ReturnType<typeof createKeyring>
   /** 认证启用前的探测结果（Host 未提供认证面时页面保持不可用）。 */
   probeStatus?: () => Promise<AuthStatusResponse | null>
+  /** 对端账号（出站信任记录）：由宿主档案读出。 */
+  loadPeers?: () => Promise<readonly PeerAccountRow[]>
+  /** 移除一条对端信任记录。 */
+  forgetPeer?: (targetId: string) => Promise<unknown>
 }
 
 /** 错误文案（不回显凭据/挑战）。 */
@@ -64,6 +69,7 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
       status: null,
       binding: null,
       policy: 'strong',
+      peers: [],
       enrollment: null,
       notice: null,
       busy: false,
@@ -80,6 +86,10 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
       try {
         const status = await api.status()
         const binding = await keyring.loadBinding()
+        // 对端账号独立于本机认证：档案读失败不影响本机账号操作。
+        const peers = deps.loadPeers === undefined
+          ? []
+          : await deps.loadPeers().catch(() => [] as readonly PeerAccountRow[])
         const session = status.session
         let phase: AccountPageState['phase']
         if (session === null) phase = status.bootstrapped ? 'login' : 'bootstrap'
@@ -91,6 +101,7 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
           phase,
           status,
           binding,
+          peers,
           policy: status.passwordPolicy === 'basic' ? 'basic' : 'strong',
           notice: null,
           busy: false,
@@ -170,6 +181,16 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
               policy: applied,
               notice: applied === 'strong' ? '已切换为仅允许强密码。' : '已切换为允许基础口令。',
             })
+            return load()
+          })
+          .catch(error => patch({ busy: false, notice: messageOf(error) }))
+      },
+      onForgetPeer(targetId) {
+        if (deps.forgetPeer === undefined) return
+        patch({ busy: true, notice: null })
+        void deps.forgetPeer(targetId)
+          .then(() => {
+            patch({ busy: false, notice: '已移除该对端账号的信任记录。' })
             return load()
           })
           .catch(error => patch({ busy: false, notice: messageOf(error) }))
