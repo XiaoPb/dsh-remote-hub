@@ -610,7 +610,9 @@ export function renderAccountPage(
     React.createElement('section', { style: { marginTop: 18 } },
       React.createElement('strong', { style: { fontSize: 13 } }, `本机已信任的客户端（${active.length}）`),
       React.createElement('p', { style: { fontSize: 12, color: 'var(--dsw-alias-text-tertiary, #8b949e)', margin: '4px 0 8px' } },
-        '这些客户端被允许用本机账号访问 Hub；与下面的对端账号是两套身份。'),
+        '这些客户端被允许用本机账号访问 Hub；与下面的对端账号是两套身份。',
+        React.createElement('br'),
+        '提高上限不会改变浏览器当前角色：受信浏览器需重新信任（或在控制端重新登录）后才会以新权限运行。'),
       clients.length === 0
         ? React.createElement('p', { 'data-testid': 'clients-empty', style: { fontSize: 12.5, color: 'var(--dsw-alias-text-tertiary, #8b949e)' } },
           '还没有受信客户端。信任本浏览器后即可免重复 2FA 访问 Hub。')
