@@ -39,7 +39,6 @@ import { createGuardMux } from './guard-mux.js'
 import { applyLocalPluginManager } from './local-plugin-manager/index.js'
 import { createSensitiveApprovalGate } from './sensitive-approval.js'
 import { createMetricsCollector } from './metrics.js'
-import { createPairingService } from './pairing.js'
 import { createVisibleResourceTracker, registerDevicePolicy } from './policy.js'
 import { createRuntimeConfigStore } from './runtime-config.js'
 import { registerRemoteServices } from './services/index.js'
@@ -655,24 +654,6 @@ function assembleRemoteHub(
       // 2. tokens（吊销/角色变更通知 → dispatcher 丢弃 Peer）
       const tokens = createTokenService({ devices })
 
-      // 3. pairing（两条路径共享签发出口；成功兑换写一行审计）
-      const pairing = createPairingService({
-        config: {
-          pairQrTtlMs: config.pairQrTtlMs,
-          pairCodeTtlMs: config.pairCodeTtlMs,
-          maxPairAttempts: config.maxPairAttempts,
-          defaultRole: config.defaultRole,
-        },
-        tokens,
-        onAudit: row => {
-          audit('pair-redeemed', {
-            deviceId: row.deviceId,
-            role: row.role,
-            path: row.path,
-            at: row.at,
-          })
-        },
-      })
 
       // 4. policy —— **必须早于第一个 createPeer**（D-13）
       at('policy:before')
@@ -792,7 +773,6 @@ function assembleRemoteHub(
         devices,
         tokens,
         policy,
-        pairing,
         // 吊销：令牌即时失效 + 既有连接（HTTP Peer / WS / 长轮询流）一并丢弃。
         onRevoked: deviceId => { dropDevice(deviceId, 'revoked') },
         metrics,
@@ -819,7 +799,6 @@ function assembleRemoteHub(
       guard = await startGuard({
         config,
         tokens,
-        pairing,
         dispatcher,
         devices,
         metrics,

@@ -86,7 +86,6 @@ describe('守卫：账号认证模式', () => {
   let enrolled
   let key
   let store
-  let pairing
   let totpSecret
   let clockNow = () => Date.now()
 
@@ -123,19 +122,9 @@ describe('守卫：账号认证模式', () => {
 
     const devices = await mod.createDeviceStore(config.deviceTablePath)
     const tokens = mod.createTokenService({ devices })
-    pairing = mod.createPairingService({
-      config: {
-        pairQrTtlMs: config.pairQrTtlMs,
-        pairCodeTtlMs: config.pairCodeTtlMs,
-        maxPairAttempts: config.maxPairAttempts,
-        defaultRole: config.defaultRole,
-      },
-      tokens,
-    })
     guard = await mod.startGuard({
       config,
       tokens,
-      pairing,
       dispatcher: dispatcherStub,
       devices,
       pairIssueToken: 'test-issue-token',
@@ -325,17 +314,6 @@ describe('守卫：账号认证模式', () => {
     assert.equal((await clients.json()).ok, true)
   })
 
-  it('refuses legacy invitation redemption while account auth is enabled', async () => {
-    // 旧流程会签发一个紧接着就被守卫拒绝的 bearer —— 必须显式报错而不是发无效令牌。
-    const response = await fetch(`${base}/remote/pair`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-hub-protocol': '1' },
-      body: JSON.stringify({ code: 'ABCD1234', clientLabel: 'legacy' }),
-    })
-    assert.equal(response.status, 403)
-    const body = await response.json()
-    assert.equal(body.result.error.code, 'auth-account-required')
-  })
 
   it('rejects requests whose body does not match the signed digest', async () => {
     const signedBody = JSON.stringify({
@@ -375,31 +353,6 @@ describe('守卫：账号认证模式', () => {
     assert.equal(response.status, 401)
   })
 
-  it('redeeming an invitation enrolls a client key and returns a lease', async () => {
-    const invite = pairing.issueCode('control')
-    const key = keyPair()
-    const response = await fetch(`${base}/remote/pair`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-hub-protocol': '1' },
-      body: JSON.stringify({ code: invite.secret, clientLabel: 'controller', publicKey: key.jwk }),
-    })
-    assert.equal(response.status, 200)
-    const body = await response.json()
-    assert.equal('token' in body, false, '账号模式不再签发长期令牌')
-    assert.equal(typeof body.lease, 'string')
-    assert.equal(body.role, 'control')
-    const client = service.listTrustedClients().find(row => row.clientId === body.clientId)
-    assert.equal(client?.roleCeiling, 'control')
-    assert.equal(client?.label, 'controller')
-
-    // 邀请一次性：同一短码再兑换必须被拒。
-    const again = await fetch(`${base}/remote/pair`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-hub-protocol': '1' },
-      body: JSON.stringify({ code: invite.secret, clientLabel: 'controller', publicKey: key.jwk }),
-    })
-    assert.equal(again.status, 403)
-  })
   it('account mode lists auth clients and enforces single control', async () => {
     // 1) 设备表来自 auth clients，而不是空的 legacy 设备表。
     const list = await fetch(`${base}/remote/devices`, {

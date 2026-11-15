@@ -50,7 +50,6 @@ import { createGuardWsRoute } from './guard-ws.js'
 import type { Dispatcher } from './dispatch.js'
 import { checkLoopback, checkPrivatePeer, checkSource, isLoopbackHostname, type FenceRequest } from './fence.js'
 import type { HubMetrics, MetricsCollector } from './metrics.js'
-import type { PairingService } from './pairing.js'
 import type { TokenService } from './token.js'
 
 /** 注入到 index 页的全局名（host 的 `webserver/index-inject` 会写这一行）。 */
@@ -92,7 +91,6 @@ export interface GuardHandle {
 export interface GuardDeps {
   config: Config
   tokens: TokenService
-  pairing: PairingService
   dispatcher: Dispatcher
   /** 设备表（设备管理路由要列/吊销；不经过 Peer 与 decide()）。 */
   devices: DeviceStore
@@ -387,7 +385,6 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
   // 进程内随机，只注入本机 index 页。隧道拿不到它，所以即便隧道在本机终止、
   // socket 地址恒为回环、且伪造了 Host 头，也过不了签发端（§9.3 第 1 条的补强）。
   const pairIssueToken = deps.pairIssueToken ?? randomBytes(32).toString('base64url')
-  const limiter = new RedeemLimiter(LIMITS.pairRedeemPerMinute)
   /** 认证面（login/mfa/bootstrap）的来源限流：与配对预算分开计。 */
   const authLimiter = new RedeemLimiter(LIMITS.pairRedeemPerMinute)
   const rpcSlots = new DeviceSemaphore(LIMITS.maxInflightRequestsPerDevice)
@@ -465,8 +462,6 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
     GUARD_ROUTES.devicesRevoke,
     GUARD_ROUTES.stats,
     GUARD_ROUTES.config,
-    GUARD_ROUTES.pairTicket,
-    GUARD_ROUTES.pairCode,
   ])
 
   const audit = (event: string, fields: Record<string, unknown>): void => {
@@ -587,171 +582,6 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
         return
       }
 
-      // ── 签发端（双条件回环 + 进程内令牌）────────────────────────────────
-      if (path === GUARD_ROUTES.pairTicket || path === GUARD_ROUTES.pairCode) {
-        if (method !== 'POST' && method !== 'GET') {
-          reject(res, rpcId, failure(ERROR_CODES.notFound, 404, 'not found'))
-          return
-        }
-        const loop = checkLoopback(req)
-        if (!loop.ok) {
-          audit('pair-issue-rejected', { path, reason: loop.reason })
-          reject(res, rpcId, failure(ERROR_CODES.forbidden, 403, 'pairing issue is loopback-only'))
-          return
-        }
-        const presented = req.headers[PAIR_ISSUE_HEADER]
-        if (presented !== pairIssueToken) {
-          audit('pair-issue-rejected', { path, reason: 'missing pairIssueToken' })
-          reject(res, rpcId, failure(ERROR_CODES.forbidden, 403, 'pairing issue is loopback-only'))
-          return
-        }
-        const body = await readBody(req, 64 * 1024)
-        const parsed = body === null ? undefined : parseJson(body.toString('utf8'))
-        let role = config.defaultRole
-        if (isPlainObject(parsed) && parsed.role !== undefined) {
-          if (!isRoleName(parsed.role)) {
-            reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'invalid role'))
-            return
-          }
-          role = parsed.role
-        }
-        const issued = path === GUARD_ROUTES.pairTicket
-          ? deps.pairing.issueTicket(role)
-          : deps.pairing.issueCode(role)
-        deps.metrics?.countPairIssued()
-        // 票据/短码只在这次响应里出现一次；不写日志、不回显进错误体。
-        sendJson(res, 200, {
-          ...(path === GUARD_ROUTES.pairTicket ? { ticket: issued.secret } : { code: issued.secret }),
-          expiresAt: issued.expiresAt,
-          role: issued.role,
-        }, protocolHeader)
-        return
-      }
-
-      // ── 兑换端（**不**加回环门控：远程设备在隧道外）─────────────────────
-      if (path === GUARD_ROUTES.pair) {
-        if (method !== 'POST') {
-          reject(res, rpcId, failure(ERROR_CODES.notFound, 404, 'not found'))
-          return
-        }
-        const source = req.socket.remoteAddress ?? 'unknown'
-        if (!limiter.allow(source)) {
-          reject(res, rpcId, failure(ERROR_CODES.rateLimited, 429, 'too many pairing attempts'))
-          return
-        }
-        const body = await readBody(req, 64 * 1024)
-        if (body === null) {
-          reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'body too large'))
-          return
-        }
-        const parsed = parseJson(body.toString('utf8'))
-        if (!isPlainObject(parsed)) {
-          reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'invalid body'))
-          return
-        }
-        const clientLabel = typeof parsed.clientLabel === 'string' ? parsed.clientLabel.slice(0, 120) : 'remote device'
-        const ticket = typeof parsed.ticket === 'string' ? parsed.ticket : undefined
-        const code = typeof parsed.code === 'string' ? parsed.code : undefined
-        if ((ticket === undefined) === (code === undefined)) {
-          reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'provide exactly one of ticket or code'))
-          return
-        }
-        // 账号认证模式：兑换不再签发长期令牌，而是把邀请换成「客户端公钥登记」。
-        // 因此必须带上控制端的公钥；没有公钥的旧客户端会得到明确错误。
-        const publicKey = parsed.publicKey
-        if (deps.auth !== undefined && !isPlainObject(publicKey)) {
-          deps.metrics?.countPairRejected()
-          reject(
-            res,
-            rpcId,
-            failure(
-              ERROR_CODES.authAccountRequired,
-              403,
-              'account authentication is enabled: redeem an invitation with your client public key '
-              + '(or sign in from the target Settings → 登录与账号)',
-            ),
-          )
-          return
-        }
-        const result = ticket !== undefined
-          ? await deps.pairing.redeemTicket(ticket, clientLabel, { issueToken: deps.auth === undefined })
-          : await deps.pairing.redeemCode(code as string, clientLabel, { issueToken: deps.auth === undefined })
-        if (!result.ok) {
-          // 错误体只有码，**不含**票据/短码，也不区分「不存在/过期/预算耗尽」之外的细节。
-          const status = result.code === ERROR_CODES.rateLimited ? 429 : 403
-          deps.metrics?.countPairRejected()
-          reject(res, rpcId, failure(result.code, status, 'pairing credential rejected'))
-          return
-        }
-        deps.metrics?.countPairRedeemed()
-        const pathKind = ticket !== undefined ? 'qr' : 'code'
-        // 账号认证模式：把角色上限换成客户端公钥登记（不签发设备令牌）。
-        if (deps.auth !== undefined) {
-          let enrolled: Awaited<ReturnType<typeof deps.auth.enrollFromInvite>>
-          try {
-            enrolled = await deps.auth.enrollFromInvite({
-              label: clientLabel,
-              clientType: 'browser',
-              publicKey: publicKey as never,
-              roleCeiling: result.role,
-            })
-          } catch (error) {
-            deps.metrics?.countPairRejected()
-            audit('pair-enroll-rejected', { reason: error instanceof Error ? error.message : String(error) })
-            reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'client public key rejected'))
-            return
-          }
-          deps.metrics?.countPairRedeemed()
-          audit('pair-enrolled', { clientId: enrolled.client.clientId, role: result.role, path: pathKind })
-          let displacedForNotice: { deviceId: string; label: string }[] = []
-          if (config.singleController) {
-            const displaced = await enforceSingleController(enrolled.client.clientId)
-            const byId = new Map(deps.auth.listTrustedClients().map(row => [row.clientId, row.label]))
-            displacedForNotice = displaced.map(deviceId => ({ deviceId, label: byId.get(deviceId) ?? deviceId }))
-          }
-          sendJson(res, 200, {
-            deviceId: enrolled.client.clientId,
-            clientId: enrolled.client.clientId,
-            keyId: enrolled.client.keyId,
-            role: result.role,
-            lease: enrolled.lease.lease,
-            generation: enrolled.lease.generation,
-            expiresAt: enrolled.lease.expiresAt,
-            ...(displacedForNotice.length > 0 ? { displacedDevices: displacedForNotice } : {}),
-          }, protocolHeader)
-          return
-        }
-        audit('pair-redeemed', { deviceId: result.issued?.deviceId ?? '', role: result.role, path: pathKind })
-        // 单控策略：新设备接管时把**其它设备踢下线**（断开连接），但保留它们的配对。
-        // 令牌不失效 → 被挤设备仍是「已配对」，可再次连接（2026-11-12 修订）。
-        const legacy = result.issued
-        if (legacy === null) {
-          // 账号模式已在上面返回；这里只可能是内部不一致。
-          reject(res, rpcId, failure(ERROR_CODES.internal, 500, 'pairing issued no credential'))
-          return
-        }
-        let displacedForNotice: { deviceId: string; label: string }[] = []
-        if (config.singleController) {
-          const displaced = await displaceOthers(deps, legacy.deviceId)
-          if (displaced.length > 0) {
-            audit('single-controller-displaced', { keep: legacy.deviceId, displaced })
-            // 记下名字供 UI 弹窗；同时立即断开它们的连接（Peer 与在途流）。
-            const byId = new Map(deps.devices.list().map(device => [device.deviceId, device.label]))
-            displacedForNotice = displaced.map(deviceId => ({
-              deviceId,
-              label: byId.get(deviceId) ?? deviceId,
-            }))
-            for (const deviceId of displaced) {
-              try { deps.onSessionDisplaced?.(deviceId) } catch { /* 忽略 */ }
-            }
-          }
-        }
-        sendJson(res, 200, {
-          ...legacy,
-          ...(displacedForNotice.length > 0 ? { displacedDevices: displacedForNotice } : {}),
-        }, protocolHeader)
-        return
-      }
 
       // ── 设备管理（只作用于本机页面：回环 + 进程内令牌，双条件）──────────
       if (path === GUARD_ROUTES.devices || path === GUARD_ROUTES.devicesRevoke) {

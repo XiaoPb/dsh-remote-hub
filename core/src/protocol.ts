@@ -62,11 +62,9 @@ export const PAIR_ISSUE_HEADER = 'x-pair-issue-token'
 export const GUARD_ROUTES = {
   /** 无鉴权的最小事实：`{ ok, protocolVersion }`。不回显设备数，不暴露其它配置。 */
   health: '/remote/health',
-  /** 签发 QR 票据（32 字节随机，TTL 120s，单次）。**双条件回环门控**。 */
+  /** 已废弃的邀请路由：守卫已移除处理器，仅为旧客户端编译保留常量。 */
   pairTicket: '/remote/pair/ticket',
-  /** 签发 8 位 Crockford 短码（40 bit，TTL 600s，5 次预算即烧）。**双条件回环门控**。 */
   pairCode: '/remote/pair/code',
-  /** 兑换票据/短码。**故意不作回环门控**（远程设备在隧道外）。 */
   pair: '/remote/pair',
   /** 一元入口：Bearer 令牌 + 来源围栏 + 设备 → Peer → official `/api` 派发。 */
   rpc: '/remote/rpc',
@@ -274,7 +272,6 @@ export const ERROR_CODES = {
    * 邀请仍然可以签发，但兑换必须改为登记客户端公钥；在客户端侧完成该流程前，
    * 兑换端会明确返回这个码，而不是发一个用不了的令牌。
    */
-  authAccountRequired: 'auth-account-required',
 } as const
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES]

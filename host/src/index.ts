@@ -70,20 +70,9 @@ export {
 } from './runtime-config.js'
 export type { RuntimeConfigStore, ConfigSnapshot, ConfigWritableKey } from './runtime-config.js'
 
-// ── host：配对 ────────────────────────────────────────────────────────────────
-export {
-  createPairingService,
-  generatePairCode,
-  generatePairTicket,
-  isPairCodeShaped,
-  isPairTicketShaped,
-} from './pairing.js'
-export type { PairingService, PairingServiceDeps, IssuedPairing, RedeemResult } from './pairing.js'
-
 // ── host：来源围栏与守卫 ──────────────────────────────────────────────────────
 export {
   checkSource,
-  checkLoopback,
   isLoopbackHostname,
   canonicalAuthority,
 } from './fence.js'

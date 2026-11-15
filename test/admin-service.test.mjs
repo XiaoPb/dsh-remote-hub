@@ -89,6 +89,8 @@ describe('同源管理面服务契约', () => {
     )
     const adminMethods = Object.entries(mod.HUB_METHODS)
       .filter(([, value]) => typeof value === 'string' && value.startsWith('admin.'))
+      // 邀请签发随短码链路移除；常量保留只为旧客户端编译，方法已不存在。
+      .filter(([, value]) => value !== 'admin.issue')
       .map(([, value]) => value)
     assert.ok(adminMethods.length >= 6, '管理面端点数量异常')
     for (const method of adminMethods) {
