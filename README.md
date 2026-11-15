@@ -6,7 +6,7 @@
 [![Release](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml/badge.svg)](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml)
 [![npm](https://img.shields.io/npm/v/@xiaopb/dsh-remote-hub?label=npm)](https://www.npmjs.com/package/@xiaopb/dsh-remote-hub)
 
-**DSH 双角色远程接管插件（v0.3.6）**
+**DSH 双角色远程接管插件（v0.4.0）**
 
 文档：[部署与运维](docs/DEPLOY.md) ｜ [架构](docs/ARCHITECTURE.md) ｜ [设计契约](docs/DESIGN.md) ｜ [接口权限分布](docs/API-MATRIX.md) ｜ [文档索引](docs/INDEX.md) ｜ [更新日志](CHANGELOG.md) ｜ [English](README.en.md)
 
@@ -200,7 +200,7 @@ pnpm run build
 dsh plugin --profile web add link:$PWD
 ```
 
-主包为 `@xiaopb/dsh-remote-hub@0.3.6`（云端路径 UI 已内置，无需其它包）。要求 **Node.js ≥ 24.9.0**（认证存储用内置 `node:sqlite`；22.5+ 亦可运行，但在 22.x 上属实验特性，仅供自测）、**DSH ≥ 0.2.2-rc.1 < 0.3.0**（已发布：0.2.2-rc.1 / rc.2 / rc.3）。
+主包为 `@xiaopb/dsh-remote-hub@0.4.0`（云端路径 UI 已内置，无需其它包）。要求 **Node.js ≥ 24.9.0**（认证存储用内置 `node:sqlite`；22.5+ 亦可运行，但在 22.x 上属实验特性，仅供自测）、**DSH ≥ 0.2.2-rc.1 < 0.3.0**（已发布：0.2.2-rc.1 / rc.2 / rc.3）。
 
 ---
 
