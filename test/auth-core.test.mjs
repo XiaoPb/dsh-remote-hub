@@ -647,3 +647,20 @@ test('login throttling is per source, so one attacker cannot lock the account', 
     rmSync(env.dir, { recursive: true, force: true })
   }
 })
+
+test('idle sessions expire before their absolute TTL', { skip: !dynamic }, async () => {
+  const env = await bootstrappedService('session-idle')
+  try {
+    // 刚登录：会话可用。
+    const before = await env.service.status(env.sessionCookie)
+    assert.notEqual(before.session, null)
+
+    // 闲置超过 12 小时：会话作废，且被标记撤销。
+    env.advanceMs(13 * 60 * 60 * 1000)
+    const after = await env.service.status(env.sessionCookie)
+    assert.equal(after.session, null)
+    await assert.rejects(() => env.service.listClients(env.sessionCookie))
+  } finally {
+    rmSync(env.dir, { recursive: true, force: true })
+  }
+})

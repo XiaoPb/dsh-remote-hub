@@ -303,6 +303,14 @@ export const LEASE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 /** 浏览器会话默认有效期（7 天；与租约同周期但不是同一凭据）。 */
 export const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
+/**
+ * 会话闲置超时：超过这个时间没有任何请求，会话作废。
+ *
+ * 绝对有效期是 7 天，但「一直不用」的会话不该继续有效——被盗的 Cookie
+ * 往往在很久之后才被使用。
+ */
+export const SESSION_IDLE_MS = 12 * 60 * 60 * 1000
+
 /** 完成 2FA 之后允许「信任新客户端」的时效窗口。 */
 export const MFA_TRUST_WINDOW_MS = 10 * 60_000
 

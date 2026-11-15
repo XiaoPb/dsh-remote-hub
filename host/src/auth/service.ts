@@ -39,6 +39,7 @@ import {
   PROOF_MAX_SKEW_MS,
   PROOF_NONCE_TTL_MS,
   SESSION_TTL_MS,
+  SESSION_IDLE_MS,
   buildProofPayload,
   evaluatePassword,
   isPasswordPolicy,
@@ -363,6 +364,14 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     if (record.revokedAt !== null) return null
     if (record.expiresAt <= at) return null
     if (record.secretHash !== sha256Hex(parsed.secret)) return null
+    // 闲置超时：长时间没用过的会话直接作废（绝对有效期之外的第二道闸）。
+    if (record.lastSeenAt !== null && at - record.lastSeenAt > SESSION_IDLE_MS) {
+      void store.mutate((data) => {
+        const row = data.sessions.find(session => session.sid === record.sid)
+        if (row !== undefined && row.revokedAt === null) row.revokedAt = at
+      }, { deferred: true }).catch(() => { /* 忽略 */ })
+      return null
+    }
     // 节流更新 lastSeenAt。
     const previous = lastSeenTouch.get(record.sid) ?? 0
     if (at - previous >= TOUCH_THROTTLE_MS) {
