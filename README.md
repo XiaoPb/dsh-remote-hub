@@ -200,7 +200,7 @@ pnpm run build
 dsh plugin --profile web add link:$PWD
 ```
 
-主包为 `@xiaopb/dsh-remote-hub@0.3.6`（云端路径 UI 已内置，无需其它包）。要求 **Node.js ≥ 24.9.0**、**DSH ≥ 0.2.2-rc.1 < 0.3.0**（已发布：0.2.2-rc.1 / rc.2 / rc.3）。
+主包为 `@xiaopb/dsh-remote-hub@0.3.6`（云端路径 UI 已内置，无需其它包）。要求 **Node.js ≥ 24.9.0**（认证存储用内置 `node:sqlite`；22.5+ 亦可运行，但在 22.x 上属实验特性，仅供自测）、**DSH ≥ 0.2.2-rc.1 < 0.3.0**（已发布：0.2.2-rc.1 / rc.2 / rc.3）。
 
 ---
 
