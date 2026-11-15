@@ -604,7 +604,8 @@ const THEME_CSS = `
   padding: 0 12px; font-size: 13px; background: var(--rh-card); color: var(--rh-text);
   min-width: 120px; font-family: inherit;
 }
-.rh-root .rh-cold{ font-size: 12px; color: var(--rh-text-3); margin-top: 10px; }
+.rh-root .rh-cold{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-size: 12px; color: var(--rh-text-3); margin-top: 10px; }
 /* 运行日志 */
 .rh-root .rh-loglist{ display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
 .rh-root .rh-logrow{
@@ -1847,33 +1848,35 @@ function renderConfigBody(state: RemoteHubPageState, actions: RemoteHubPageActio
       value('restartPending') === true
         ? el('span', 'rh-pill small danger', { 'data-testid': 'restart-pending' }, STRINGS.cfgRestartPending)
         : null),
-    el('div', 'rh-crow', undefined,
-      el('div', 'rh-cl', undefined,
-        el('div', 'rh-ct1', undefined, '网络模式'),
-        el('div', 'rh-cd', undefined, STRINGS.cfgNetworkDesc)),
-      el('div', 'rh-cc', undefined,
-        el('select', 'rh-select', {
-          'data-testid': 'cfg-network',
-          value: String(value('network') ?? 'loopback'),
-          onChange: (event: React.ChangeEvent<HTMLSelectElement>) =>
-            actions.onConfigChange('network', event.currentTarget.value),
-        },
-        el('option', { value: 'loopback' }, STRINGS.netLoopback),
-        el('option', { value: 'lan' }, STRINGS.netLan)))),
-    el('div', 'rh-crow', undefined,
-      el('div', 'rh-cl', undefined,
-        el('div', 'rh-ct1', undefined, STRINGS.cfgPort),
-        el('div', 'rh-cd', undefined, STRINGS.cfgPortDesc)),
-      el('div', 'rh-cc', undefined,
-        el('input', 'rh-num', {
-          type: 'number', min: 1, max: 65_535, 'data-testid': 'cfg-port',
-          value: String(value('guardPort') ?? ''),
-          onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
-            const parsed = Number.parseInt(event.currentTarget.value, 10)
-            if (!Number.isNaN(parsed)) actions.onConfigChange('guardPort', parsed)
+    // 与热项同样的卡片 + 行样式（`rh-cfg` 提供内边距/分隔线/字号继承）。
+    el('div', 'rh-cfg', undefined,
+      el('div', 'rh-crow', undefined,
+        el('div', 'rh-cl', undefined,
+          el('div', 'rh-ct1', undefined, '网络模式'),
+          el('div', 'rh-cd', undefined, STRINGS.cfgNetworkDesc)),
+        el('div', 'rh-cc', undefined,
+          el('select', 'rh-select', {
+            'data-testid': 'cfg-network',
+            value: String(value('network') ?? 'loopback'),
+            onChange: (event: React.ChangeEvent<HTMLSelectElement>) =>
+              actions.onConfigChange('network', event.currentTarget.value),
           },
-        }))),
-    el('div', 'rh-minirow', { style: { marginTop: 8 } },
+          el('option', { value: 'loopback' }, STRINGS.netLoopback),
+          el('option', { value: 'lan' }, STRINGS.netLan)))),
+      el('div', 'rh-crow', undefined,
+        el('div', 'rh-cl', undefined,
+          el('div', 'rh-ct1', undefined, STRINGS.cfgPort),
+          el('div', 'rh-cd', undefined, STRINGS.cfgPortDesc)),
+        el('div', 'rh-cc', undefined,
+          el('input', 'rh-num', {
+            type: 'number', min: 1, max: 65_535, 'data-testid': 'cfg-port',
+            value: String(value('guardPort') ?? ''),
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+              const parsed = Number.parseInt(event.currentTarget.value, 10)
+              if (!Number.isNaN(parsed)) actions.onConfigChange('guardPort', parsed)
+            },
+          })))),
+    el('div', 'rh-minirow', { style: { marginTop: 12 } },
       el('div', undefined,
         el('div', 'rh-k', undefined, STRINGS.cfgQrTtl),
         el('div', 'rh-v', undefined, `${Math.round(Number(value('pairQrTtlMs') ?? 0) / 1000)}s`)),
