@@ -511,7 +511,10 @@ test('a long client list shows a preview with a show-all action', async () => {
   ))
   const allRows = (all.match(/data-testid="trusted-client"/gu) ?? []).length
   assert.equal(allRows, 7, '「显示全部」后展示所有在用客户端')
-  assert.doesNotMatch(all, /data-testid="clients-show-all"/u)
+  // 展开后按钮仍在，但文案变成「收起」，摘要变成「共 N 台，已全部显示」。
+  assert.match(all, /data-testid="clients-show-all"/u)
+  assert.match(all, /收起/u)
+  assert.match(all, /共 7 台，已全部显示/u)
 })
 
 test('settings exposes the password policy switch and a live rule checklist', async () => {
@@ -716,7 +719,9 @@ test('settings separates the local account from peer accounts', async () => {
     noopActions(), accountPage.initialDraft(), () => {},
   ))
   assert.equal((all.match(/data-testid="peer-account"/gu) ?? []).length, 5, '显示全部后列出所有对端')
-  assert.doesNotMatch(all, /data-testid="peers-show-all"/u)
+  assert.match(all, /data-testid="peers-show-all"/u)
+  assert.match(all, /收起/u)
+  assert.match(all, /共 5 个，已全部显示/u)
 })
 
 

@@ -1164,15 +1164,18 @@ export function renderAccountPage(
         '还没有受信客户端。信任本浏览器后即可免重复 2FA 访问 Hub。')
       : React.createElement('div', null,
         visibleClients.map(client => renderClientRow(client, state, actions)),
-        visibleClients.length < active.length
+        // 超过预览条数时才出现这一行：展开后按钮变成「收起」，不是消失。
+        active.length > CLIENTS_PREVIEW
           ? React.createElement('div', { className: 'rh-list-more' },
             React.createElement('span', { className: 'rh-muted' },
-              `还有 ${active.length - visibleClients.length} 台未显示`),
+              showAllClients
+                ? `共 ${active.length} 台，已全部显示`
+                : `还有 ${active.length - visibleClients.length} 台未显示`),
             React.createElement(Button, {
               'data-testid': 'clients-show-all',
               variant: 'ghost',
               size: 'small',
-              children: '显示全部',
+              children: showAllClients ? '收起' : '显示全部',
               onClick: () => actions.onToggleSection?.(CLIENTS_SHOW_ALL_KEY),
             }))
           : null),
@@ -1215,15 +1218,18 @@ export function renderAccountPage(
             children: '移除信任',
             onClick: () => actions.onForgetPeer(peer.id),
           })))),
-        visiblePeers.length < sortedPeers.length
+        // 超过预览条数时才出现这一行：展开后按钮变成「收起」。
+        sortedPeers.length > CLIENTS_PREVIEW
           ? React.createElement('div', { className: 'rh-list-more' },
             React.createElement('span', { className: 'rh-muted' },
-              `还有 ${sortedPeers.length - visiblePeers.length} 个未显示`),
+              showAllPeers
+                ? `共 ${sortedPeers.length} 个，已全部显示`
+                : `还有 ${sortedPeers.length - visiblePeers.length} 个未显示`),
             React.createElement(Button, {
               'data-testid': 'peers-show-all',
               variant: 'ghost',
               size: 'small',
-              children: '显示全部',
+              children: showAllPeers ? '收起' : '显示全部',
               onClick: () => actions.onToggleSection?.(PEERS_SHOW_ALL_KEY),
             }))
           : null),
