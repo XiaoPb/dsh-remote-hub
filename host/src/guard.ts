@@ -613,6 +613,9 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
               lastSeenAt: client.lastSeenAt,
               revokedAt: client.revokedAt,
               displacedAt: client.displacedAt ?? null,
+              // 归属账号（plan-optimization §9.3）：运行页与设置页共用同一字段。
+              accountId: client.accountId ?? null,
+              username: client.username ?? null,
             }))
             : deps.devices.list().map(device => ({
               deviceId: device.deviceId,

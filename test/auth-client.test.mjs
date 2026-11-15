@@ -57,13 +57,21 @@ async function loadBuiltClientModule(relativeFile) {
   // 设计系统（`rhui/`）也被 AccountPage 依赖：整个目录镜像过去，同样重写 `@core/*`。
   const rhuiDir = join(directory, 'rhui')
   await mkdir(rhuiDir, { recursive: true })
-  for (const name of ['index', 'tokens', 'components', 'format']) {
+  for (const name of ['index', 'tokens', 'components', 'format', 'qr-code']) {
     try {
       const text = await readFile(new URL(`../.build/client/client/src/rhui/${name}.js`, import.meta.url), 'utf8')
       await writeFile(join(rhuiDir, `${name}.js`), rewriteCore(text, '../core/src'), 'utf8')
     } catch {
       // 缺失时由导入方报错，测试自然失败。
     }
+  }
+  // `rhui/qr-code.js` 依赖 `panel/qr.js`（同一份相对结构），一并镜像。
+  await mkdir(join(directory, 'panel'), { recursive: true })
+  try {
+    const qrText = await readFile(new URL('../.build/client/client/src/panel/qr.js', import.meta.url), 'utf8')
+    await writeFile(join(directory, 'panel', 'qr.js'), rewriteCore(qrText, '../core/src'), 'utf8')
+  } catch {
+    // 缺失时由导入方报错。
   }
   // 目标保留原目录结构，模块内部的相对导入（`./keyring.js`）才能解析。
   const target = join(directory, relativeFile)

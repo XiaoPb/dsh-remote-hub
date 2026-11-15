@@ -48,6 +48,9 @@ export interface CloudDeviceRow {
   revokedAt?: string | null
   /** 被单控策略挤下线的时间（仍保留配对，可再次连接）。 */
   displacedAt?: string | null
+  /** 归属账号（plan-optimization §9.3）：与设置页同一字段。 */
+  accountId?: string | null
+  username?: string | null
 }
 
 /** 主控端本地保存的已配对出站目标（令牌仅保存在本地主控档案，不渲染到 DOM）。 */
@@ -356,6 +359,7 @@ const STRINGS = {
   statusConnected: '已连接',
   statusPaired: '已信任（离线）',
   statusInvalid: '已撤销',
+  devAccount: '归属账号',
   devCreatedAt: '信任于',
   devRole: '角色',
   devLastSeen: '最近活跃',
@@ -1129,6 +1133,11 @@ function renderDeviceCard(
       'data-status': status,
     }, el('span', 'rh-dot'), statusLabel)),
   el('div', 'rh-kv', { style: { margin: '2px 0' } },
+    device.username === undefined || device.username === null
+      ? null
+      : el('div', undefined,
+        el('div', 'rh-k', undefined, STRINGS.devAccount),
+        el('div', 'rh-v', { 'data-testid': 'device-account' }, `账号 ${device.username}`)),
     device.role
       ? el('div', undefined,
         el('div', 'rh-k', undefined, STRINGS.devRole),

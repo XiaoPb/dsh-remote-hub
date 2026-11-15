@@ -15,6 +15,7 @@ import type { RoleName } from '@core/roles.js'
 
 import {
   initialDraft,
+  initialSubAccounts,
   renderAccountPage,
   type AccountPageActions,
   type AccountFormDraft,
@@ -23,6 +24,11 @@ import {
 } from './AccountPage.js'
 import { createAuthApi, AuthApiError, type AuthApi } from './api.js'
 import { createKeyring, type ClientBinding, type ClientIdentity } from './keyring.js'
+
+/** 角色名守卫（下拉/分段控件回传的是字符串）。 */
+function isRoleValue(value: string): value is RoleName {
+  return value === 'read-only' || value === 'control' || value === 'full'
+}
 
 /** 装配依赖（测试可注入）。 */
 export interface AccountPageDeps {
@@ -77,6 +83,7 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
       notice: null,
       busy: false,
       mfaToken: null,
+      subAccounts: initialSubAccounts(),
     })
     const [draft, setDraft] = React.useState<AccountFormDraft>(initialDraft)
     const identityRef = React.useRef<ClientIdentity | null>(null)
@@ -93,6 +100,15 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
         const peers = deps.loadPeers === undefined
           ? []
           : await deps.loadPeers().catch(() => [] as readonly PeerAccountRow[])
+        // 子账号只对 admin 会话拉取（非 admin 不请求，也不渲染区块 G）。
+        const subAccounts = status.session?.role === 'admin'
+          ? await api.accounts({ action: 'list' })
+            .then(result => ({
+              ...initialSubAccounts(),
+              accounts: result.accounts ?? [],
+            }))
+            .catch(() => ({ ...initialSubAccounts(), accounts: [] }))
+          : initialSubAccounts()
         const session = status.session
         let phase: AccountPageState['phase']
         if (session === null) phase = status.bootstrapped ? 'login' : 'bootstrap'
@@ -108,6 +124,7 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
           policy: status.passwordPolicy === 'basic' ? 'basic' : 'strong',
           notice: null,
           busy: false,
+          subAccounts: { ...(current.subAccounts ?? initialSubAccounts()), ...subAccounts },
         }))
       } catch (error) {
         setState(current => ({
@@ -329,6 +346,204 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
         patch({ phase: 'loading', busy: false })
         void load()
       },
+      // ── 区块 G：子账号 ────────────────────────────────────────────────────
+      onSubCreateOpen(open) {
+        setState(current => ({
+          ...current,
+          subAccounts: {
+            ...(current.subAccounts ?? initialSubAccounts()),
+            creating: open,
+            error: null,
+            ...(open ? { created: null } : {}),
+          },
+        }))
+      },
+      onSubDraftChange(field, value) {
+        setState(current => {
+          const sub = current.subAccounts ?? initialSubAccounts()
+          return {
+            ...current,
+            subAccounts: {
+              ...sub,
+              draft: {
+                ...sub.draft,
+                [field]: field === 'roleCeiling' ? (isRoleValue(value) ? value : sub.draft.roleCeiling) : value,
+              },
+            },
+          }
+        })
+      },
+      onSubCreate() {
+        const sub = state.subAccounts ?? initialSubAccounts()
+        const username = sub.draft.username.trim()
+        if (username === '') return
+        patch({ busy: true })
+        void api.accounts({
+          action: 'create',
+          username,
+          ...(sub.draft.password === '' ? {} : { password: sub.draft.password }),
+          roleCeiling: sub.draft.roleCeiling,
+        })
+          .then(result => {
+            const created = {
+              username: result.account?.username ?? username,
+              initialPassword: result.initialPassword ?? null,
+            }
+            setState(current => ({
+              ...current,
+              busy: false,
+              subAccounts: {
+                ...(current.subAccounts ?? initialSubAccounts()),
+                accounts: result.account === undefined
+                  ? (current.subAccounts?.accounts ?? [])
+                  : [...(current.subAccounts?.accounts ?? []), result.account],
+                creating: false,
+                draft: { username: '', password: '', roleCeiling: 'read-only' },
+                created,
+                error: null,
+              },
+            }))
+          })
+          .catch((error: unknown) => {
+            setState(current => ({
+              ...current,
+              busy: false,
+              subAccounts: {
+                ...(current.subAccounts ?? initialSubAccounts()),
+                error: messageOf(error),
+              },
+            }))
+          })
+      },
+      onSubCreatedDismiss() {
+        setState(current => ({
+          ...current,
+          subAccounts: { ...(current.subAccounts ?? initialSubAccounts()), created: null },
+        }))
+      },
+      onSubRequest(accountId, action, role) {
+        setState(current => {
+          const sub = current.subAccounts ?? initialSubAccounts()
+          // 「启用」不需要新鲜 2FA：直接执行。
+          if (action === 'enable') {
+            void runSubAction(accountId, { action: 'enable' })
+            return current
+          }
+          if (action === 'delete' && sub.confirmingDelete !== accountId) {
+            // 第一次点删除 → 展开红色二次确认。
+            return {
+              ...current,
+              subAccounts: { ...sub, confirmingDelete: accountId, pending: null, error: null },
+            }
+          }
+          return {
+            ...current,
+            subAccounts: {
+              ...sub,
+              confirmingDelete: null,
+              pending: {
+                accountId,
+                action,
+                ...(role === undefined ? {} : { role }),
+                password: '',
+                code: '',
+                error: null,
+              },
+            },
+          }
+        })
+      },
+      onSubPendingChange(field, value) {
+        setState(current => {
+          const sub = current.subAccounts ?? initialSubAccounts()
+          if (sub.pending === null) return current
+          return {
+            ...current,
+            subAccounts: { ...sub, pending: { ...sub.pending, [field]: value, error: null } },
+          }
+        })
+      },
+      onSubCancel() {
+        setState(current => {
+          const sub = current.subAccounts ?? initialSubAccounts()
+          return { ...current, subAccounts: { ...sub, pending: null, confirmingDelete: null, error: null } }
+        })
+      },
+      onSubConfirm() {
+        const sub = state.subAccounts ?? initialSubAccounts()
+        const pending = sub.pending
+        if (pending === null) return
+        patch({ busy: true })
+        void (async () => {
+          await api.reauth({ password: pending.password, code: pending.code })
+          if (pending.action === 'disable') await runSubAction(pending.accountId, { action: 'disable' })
+          else if (pending.action === 'delete') await runSubAction(pending.accountId, { action: 'delete' })
+          else if (pending.action === 'ceiling') {
+            await runSubAction(pending.accountId, {
+              action: 'setCeiling',
+              role: pending.role ?? 'read-only',
+            })
+          }
+        })()
+          .then(() => load())
+          .catch((error: unknown) => {
+            const message = messageOf(error)
+            setState(current => {
+              const now = current.subAccounts ?? initialSubAccounts()
+              return {
+                ...current,
+                busy: false,
+                subAccounts: now.pending === null
+                  ? { ...now, error: message }
+                  : { ...now, pending: { ...now.pending, error: message } },
+              }
+            })
+          })
+      },
+    }
+
+    /**
+     * 执行一条子账号动作（不需要 / 已完成新鲜 2FA 时直接调用）。
+     * @param accountId - 目标账号。
+     * @param action - 动作。
+     */
+    async function runSubAction(
+      accountId: string,
+      action:
+        | { action: 'enable' }
+        | { action: 'disable' }
+        | { action: 'delete' }
+        | { action: 'setCeiling'; role: RoleName },
+    ): Promise<void> {
+      try {
+        if (action.action === 'delete') await api.accounts({ action: 'delete', accountId })
+        else if (action.action === 'setCeiling') await api.accounts({ action: 'setCeiling', accountId, role: action.role })
+        else await api.accounts({ action: action.action, accountId })
+        const refreshed = await api.accounts({ action: 'list' })
+        setState(current => ({
+          ...current,
+          busy: false,
+          subAccounts: {
+            ...(current.subAccounts ?? initialSubAccounts()),
+            accounts: refreshed.accounts ?? [],
+            pending: null,
+            confirmingDelete: null,
+            error: null,
+          },
+        }))
+      } catch (error) {
+        const message = messageOf(error)
+        setState(current => {
+          const sub = current.subAccounts ?? initialSubAccounts()
+          return {
+            ...current,
+            busy: false,
+            subAccounts: sub.pending === null
+              ? { ...sub, error: message }
+              : { ...sub, pending: { ...sub.pending, error: message } },
+          }
+        })
+      }
     }
 
     return renderAccountPage(state, actions, draft, setDraft)

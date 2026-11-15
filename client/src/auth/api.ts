@@ -7,6 +7,7 @@
  * @module dsh-remote-hub/client/auth/api
  */
 import type {
+  AccountView,
   AuthStatusResponse,
   ClientPublicKeyJwk,
   ClientType,
@@ -87,6 +88,25 @@ export interface AuthApi {
     | { action: 'setRole'; clientId: string; role: 'read-only' | 'control' | 'full' }
     | { action: 'setCeiling'; clientId: string; role: 'read-only' | 'control' | 'full' },
   ): Promise<{ clients?: TrustedClientView[]; client?: TrustedClientView }>
+  /**
+   * 子账号管理（admin only，`/remote-auth/accounts`）。
+   *
+   * 创建时可省略口令（服务端生成一次性口令并在响应里返回一次，账号首次登录
+   * 必须改密）；禁用 / 删除 / 抬上限要求新鲜 2FA（`auth-mfa-required`）。
+   */
+  accounts(action:
+    | { action: 'list' }
+    | { action: 'create'; username: string; password?: string; roleCeiling?: 'read-only' | 'control' | 'full' }
+    | { action: 'setCeiling'; accountId: string; role: 'read-only' | 'control' | 'full' }
+    | { action: 'disable'; accountId: string }
+    | { action: 'enable'; accountId: string }
+    | { action: 'delete'; accountId: string },
+  ): Promise<{
+    accounts?: AccountView[]
+    account?: AccountView
+    /** create 时仅在响应里出现一次的一次性初始口令。 */
+    initialPassword?: string
+  }>
 }
 
 /** 解析错误响应。 */
@@ -199,6 +219,9 @@ export function createAuthApi(options: AuthApiOptions = {}): AuthApi {
     },
     async clients(action) {
       return readJson(await post(AUTH_ROUTES.clients, action))
+    },
+    async accounts(action) {
+      return readJson(await post(AUTH_ROUTES.accounts, action))
     },
   }
 }

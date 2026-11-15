@@ -263,6 +263,12 @@ test('client enrollment requires a recent 2FA and yields a distinct key/lease', 
 
     const clients = await service.listClients(sessionCookie)
     assert.equal(clients.length, 2)
+    // 归属账号（plan-optimization §9.3）：运行页与设置页用同一字段显示「账号 xxx」。
+    for (const client of clients) {
+      assert.equal(typeof client.accountId, 'string', '客户端必须带归属账号 id')
+      assert.equal(typeof client.username, 'string', '客户端必须带归属账号用户名')
+      assert.equal(client.username, 'owner', '归属账号必须是登记该客户端的会话账号')
+    }
     // 对外视图绝不包含公钥或租约密文。
     const json = JSON.stringify(clients)
     assert.equal(json.includes('"lease"'), false)

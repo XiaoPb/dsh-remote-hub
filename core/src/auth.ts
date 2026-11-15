@@ -151,6 +151,16 @@ export interface TrustedClientView {
   /** 被单控挤下线的时间（仍保留信任，只是当前没在控制）。 */
   displacedAt?: string | null
   revokedAt: string | null
+  /**
+   * 归属账号 id（v1 单账号迁移期为 `acc_admin`）。
+   *
+   * 运行页与设置页用**同一字段**显示「账号 admin」，避免两套身份来源
+   * （plan-optimization §9.3）。由 `clientView()` 从 `record.accountId` 解析，
+   * 找不到时回退默认管理员。
+   */
+  accountId?: string
+  /** 归属账号的用户名（同上，找不到时为 null）。 */
+  username?: string | null
 }
 
 /** 认证通过后交给 Hub 的声明（**唯一**跨插件边界的数据）。 */

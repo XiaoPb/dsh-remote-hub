@@ -338,6 +338,10 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
   }
 
   function clientView(record: ClientRecord): TrustedClientView {
+    // 归属账号：客户端按 `accountId` 归属某个账号；v1 单账号迁移期没有该字段，
+    // 回退到默认管理员（`acc_admin`），保证 UI 永远能显示「账号 xxx」。
+    const ownerId = record.accountId ?? 'acc_admin'
+    const owner = findAccountById(store, ownerId) ?? accountOf(store)
     return {
       clientId: record.clientId,
       keyId: record.keyId,
@@ -354,6 +358,8 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
         ? null
         : new Date(record.displacedAt).toISOString(),
       revokedAt: record.revokedAt === null ? null : new Date(record.revokedAt).toISOString(),
+      accountId: owner?.accountId ?? ownerId,
+      username: owner?.username ?? null,
     }
   }
 

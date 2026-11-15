@@ -15,7 +15,7 @@
  */
 import React from 'react'
 
-import type { AuthStatusResponse, PasswordPolicy, TrustedClientView } from '@core/auth.js'
+import type { AccountView, AuthStatusResponse, PasswordPolicy, TrustedClientView } from '@core/auth.js'
 import {
   PASSWORD_POLICIES,
   evaluatePassword,
@@ -32,6 +32,8 @@ import {
   PasswordInput,
   Notice,
   Pill,
+  QrCode,
+  ROLE_OPTIONS,
   Section,
   Segmented,
   Select,
@@ -40,6 +42,7 @@ import {
   cx,
   formatRelative,
   formatRole,
+  formatRoleCeiling,
   roleOptionLabel,
 } from '../rhui/index.js'
 import { RH_CSS } from '../rhui/tokens.js'
@@ -57,6 +60,49 @@ export interface PeerAccountRow {
   lastConnectedAt?: number
 }
 
+/** 子账号行内待确认的操作（同一时刻只有一行展开验证区）。 */
+export interface SubAccountPending {
+  accountId: string
+  /** 待执行的动作；`ceiling` 需要同时给出目标角色。 */
+  action: 'disable' | 'enable' | 'delete' | 'ceiling'
+  role?: RoleName
+  /** 输入的新鲜 2FA 材料（禁用/删除/抬上限要求）。 */
+  password: string
+  code: string
+  /** 行内错误（2FA 失败等）。 */
+  error: string | null
+}
+
+/** 子账号区块 G 的状态（仅 admin 会话可见）。 */
+export interface SubAccountsState {
+  /** 列表；null = 尚未加载（或非 admin 不请求）。 */
+  accounts: readonly AccountView[] | null
+  /** 新建表单是否展开。 */
+  creating: boolean
+  /** 新建表单草稿。 */
+  draft: { username: string; password: string; roleCeiling: RoleName }
+  /** 创建成功结果（一次性口令，只显示到用户点「我已保存」）。 */
+  created: { username: string; initialPassword: string | null } | null
+  /** 正在等待行内确认的操作。 */
+  pending: SubAccountPending | null
+  /** 删除二次确认是否展开（行内红色确认区）。 */
+  confirmingDelete: string | null
+  error: string | null
+}
+
+/** 子账号区块的初始状态。 */
+export function initialSubAccounts(): SubAccountsState {
+  return {
+    accounts: null,
+    creating: false,
+    draft: { username: '', password: '', roleCeiling: 'read-only' },
+    created: null,
+    pending: null,
+    confirmingDelete: null,
+    error: null,
+  }
+}
+
 /** 页面状态。 */
 export interface AccountPageState {
   phase: AccountPhase
@@ -67,6 +113,12 @@ export interface AccountPageState {
   policy: PasswordPolicy
   /** 对端账号（出站信任记录）——与本机账号是两套身份。 */
   peers: readonly PeerAccountRow[]
+  /**
+   * 子账号管理（区块 G，admin only）。
+   *
+   * 缺省（旧调用方）时按「非 admin / 未加载」渲染，不出现区块 G。
+   */
+  subAccounts?: SubAccountsState
   /** TOTP 绑定流程中的一次性材料（start 之后、确认之前）。 */
   totp: { secret: string; otpauth: string; backupCodes: readonly string[] } | null
   /** TOTP 表单草稿（确认码 / 关闭时所需口令）。 */
@@ -124,6 +176,23 @@ export interface AccountPageActions {
   onSetCeiling(clientId: string, role: RoleName): void
   onLogout(): void
   onRefresh(): void
+  // ── 区块 G：子账号（admin only）───────────────────────────────────────────
+  /** 展开 / 收起新建表单。 */
+  onSubCreateOpen?(open: boolean): void
+  /** 修改新建表单草稿。 */
+  onSubDraftChange?(field: 'username' | 'password' | 'roleCeiling', value: string): void
+  /** 提交新建（口令留空 = 服务端生成一次性口令）。 */
+  onSubCreate?(): void
+  /** 创建成功的一次性口令已保存，可以收起。 */
+  onSubCreatedDismiss?(): void
+  /** 行内「禁用 / 启用 / 删除 / 抬上限」：先展开确认或 2FA 区。 */
+  onSubRequest?(accountId: string, action: 'disable' | 'enable' | 'delete' | 'ceiling', role?: RoleName): void
+  /** 行内验证区输入变更。 */
+  onSubPendingChange?(field: 'password' | 'code', value: string): void
+  /** 提交行内 2FA 并执行动作。 */
+  onSubConfirm?(): void
+  /** 取消行内确认。 */
+  onSubCancel?(): void
 }
 
 /** 表单草稿（受控输入）。 */
@@ -281,6 +350,11 @@ function renderClientRow(
       className: 'rh-pill',
     }, `当前 ${formatRole(client.activeRole)} / 上限 ${formatRole(client.roleCeiling)}`)),
   React.createElement('p', { className: 'rh-meta' },
+    client.username === undefined || client.username === null
+      ? null
+      : React.createElement(React.Fragment, null,
+        React.createElement('span', { 'data-testid': 'client-account' }, `账号 ${client.username}`),
+        ' · '),
     `指纹 `,
     React.createElement('code', {
       className: 'rh-inline-code',
@@ -380,6 +454,169 @@ function typeIcon(type: string): string {
   if (type === 'app') return '📱'
   if (type === 'cli') return '⌨'
   return '🖥'
+}
+
+/** 一次行内动作的中文名（用于按钮 aria-label 与文案）。 */
+const SUB_ACTION_LABEL: Record<'disable' | 'enable' | 'delete' | 'ceiling', string> = {
+  disable: '禁用',
+  enable: '启用',
+  delete: '删除',
+  ceiling: '修改上限',
+}
+
+/**
+ * 一行子账号（区块 G）。
+ *
+ * 行内状态：正常 / 已禁用（整行淡化）；`未绑定两步验证` 用橙色标签提示。
+ * 禁用 / 删除 / 调上限需要新鲜 2FA → 服务端回 `auth-mfa-required` 时**该行内**
+ * 展开验证区（与提权同一组件样式）。删除必须二次确认（展开红色确认区）。
+ *
+ * @param account - 账号视图。
+ * @param state - 页面状态。
+ * @param actions - 页面动作。
+ * @param sub - 区块 G 状态。
+ * @returns 行节点。
+ */
+function renderSubAccountRow(
+  account: AccountView,
+  state: AccountPageState,
+  actions: AccountPageActions,
+  sub: SubAccountsState,
+): React.ReactElement {
+  const disabled = account.disabledAt !== null
+  const pending = sub.pending !== null && sub.pending.accountId === account.accountId ? sub.pending : null
+  const confirming = sub.confirmingDelete === account.accountId
+  const request = (action: 'disable' | 'enable' | 'delete' | 'ceiling', role?: RoleName): void => {
+    actions.onSubRequest?.(account.accountId, action, role)
+  }
+  return React.createElement('div', {
+    key: account.accountId,
+    'data-testid': 'sub-account',
+    'data-account-id': account.accountId,
+    'data-username': account.username,
+    'data-disabled': disabled ? 'true' : 'false',
+    className: cx('rh-item', disabled ? 'is-disabled is-offline' : account.lastLoginAt === null ? 'is-offline' : ''),
+  },
+  React.createElement('div', { className: 'rh-item-head' },
+    React.createElement('span', { className: 'rh-item-name' }, typeIcon('user'), ' ', account.username),
+    React.createElement(Pill, { tone: 'purple', children: formatRoleCeiling(account.roleCeiling) }),
+    account.isAdmin ? React.createElement(Pill, { tone: 'info', children: '管理员' }) : null,
+    React.createElement(Pill, { tone: disabled ? 'error' : 'online', dot: true, children: disabled ? '已禁用' : '正常' })),
+  React.createElement('p', { className: 'rh-meta' },
+    account.lastLoginAt === null
+      ? '从未登录'
+      : `最近登录 ${formatRelative(account.lastLoginAt, Date.now())}`),
+  React.createElement('div', { className: 'rh-item-actions' },
+    disabled
+      ? React.createElement(Button, {
+        'data-testid': 'sub-account-enable',
+        size: 'small',
+        disabled: state.busy,
+        title: `启用子账号 ${account.username}`,
+        children: '启用',
+        onClick: () => request('enable'),
+      })
+      : React.createElement(Button, {
+        'data-testid': 'sub-account-disable',
+        variant: 'danger',
+        size: 'small',
+        disabled: state.busy,
+        title: `禁用子账号 ${account.username}`,
+        children: '禁用',
+        onClick: () => request('disable'),
+      }),
+    React.createElement(Button, {
+      'data-testid': 'sub-account-set-ceiling',
+      size: 'small',
+      disabled: state.busy || disabled,
+      title: `修改子账号 ${account.username} 的权限上限`,
+      children: '修改上限',
+      onClick: () => request('ceiling'),
+    }),
+    React.createElement(Button, {
+      'data-testid': 'sub-account-delete',
+      variant: 'danger',
+      size: 'small',
+      disabled: state.busy,
+      title: `删除子账号 ${account.username}`,
+      children: '删除',
+      onClick: () => request('delete'),
+    })),
+  // 删除二次确认（红色）
+  confirming
+    ? React.createElement('div', { className: 'rh-inline-panel is-danger' },
+      React.createElement(Notice, { tone: 'error' },
+        `删除 ${account.username} 不可恢复：该账号下所有客户端都会被撤销，已登录的会话立即失效。`),
+      React.createElement('div', { className: 'rh-row' },
+        React.createElement(Button, {
+          'data-testid': 'sub-account-confirm',
+          variant: 'danger',
+          size: 'small',
+          children: '确认删除',
+          onClick: () => request('delete'),
+        }),
+        React.createElement(Button, {
+          variant: 'ghost',
+          size: 'small',
+          children: '取消',
+          onClick: () => actions.onSubCancel?.(),
+        })))
+    : null,
+  // 行内 2FA（禁用 / 启用 / 删除 / 抬上限共用）
+  pending === null || pending.action === 'enable'
+    ? null
+    : React.createElement('div', { className: 'rh-inline-panel' },
+      React.createElement('div', { className: 'rh-cfg-title' },
+        `${SUB_ACTION_LABEL[pending.action]}「${account.username}」需要重新验证`),
+      pending.action === 'ceiling'
+        ? React.createElement(Segmented, {
+          'data-testid': 'sub-account-new-ceiling',
+          ariaLabel: '新的权限上限',
+          value: pending.role ?? account.roleCeiling,
+          options: ROLE_OPTIONS.map(option => ({ value: option.value, label: option.label })),
+          onChange: value => actions.onSubRequest?.(account.accountId, 'ceiling', value as RoleName),
+        })
+        : null,
+      React.createElement('div', { className: 'rh-row', style: { marginTop: 8 } },
+        React.createElement(PasswordInput, {
+          'data-testid': 'sub-account-verify-password',
+          ariaLabel: '当前口令',
+          autoComplete: 'current-password',
+          placeholder: '当前口令',
+          value: pending.password,
+          onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
+            actions.onSubPendingChange?.('password', event.currentTarget.value),
+        }),
+        React.createElement(Input, {
+          'data-testid': 'sub-account-verify-code',
+          ariaLabel: '6 位动态码',
+          inputMode: 'numeric',
+          autoComplete: 'one-time-code',
+          placeholder: '6 位动态码',
+          maxLength: 6,
+          value: pending.code,
+          onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
+            actions.onSubPendingChange?.('code', event.currentTarget.value),
+        })),
+      pending.error === null
+        ? null
+        : React.createElement('p', { className: 'rh-field-error', style: { margin: '6px 0 0' } }, pending.error),
+      React.createElement('div', { className: 'rh-row', style: { marginTop: 10 } },
+        React.createElement(Button, {
+          'data-testid': 'sub-account-verify',
+          variant: 'primary',
+          size: 'small',
+          loading: state.busy,
+          disabled: pending.password === '' || pending.code === '',
+          children: '验证并执行',
+          onClick: () => actions.onSubConfirm?.(),
+        }),
+        React.createElement(Button, {
+          variant: 'ghost',
+          size: 'small',
+          children: '取消',
+          onClick: () => actions.onSubCancel?.(),
+        }))))
 }
 
 /**
@@ -704,8 +941,16 @@ export function renderAccountPage(
         })
         : React.createElement(React.Fragment, null,
           React.createElement('p', { className: 'rh-muted', style: { margin: '0 0 10px' } },
-            '用认证器 App 导入下面的密钥（或扫码），然后填 6 位动态码确认；备用码只显示这一次。'),
+            '用认证器 App 扫码，或手动导入下面的密钥；然后填 6 位动态码确认。备用码只显示这一次。'),
           React.createElement('div', { className: 'rh-qr-wrap' },
+            React.createElement('div', { className: 'rh-qr-col' },
+              React.createElement(QrCode, {
+                'data-testid': 'totp-qr',
+                text: totp.otpauth,
+                size: 120,
+                label: '两步验证绑定二维码',
+                tooLong: 'otpauth 链接过长，无法生成二维码；请复制下方链接手动导入。',
+              })),
             React.createElement('div', { className: 'rh-qr-copy' },
               React.createElement('div', { className: 'rh-k' }, '认证器密钥'),
               React.createElement('div', { style: { margin: '4px 0 10px' } },
@@ -824,6 +1069,104 @@ export function renderAccountPage(
           }))))),
   })
 
+  // ── 区块 G：子账号（admin only，plan-optimization §3）─────────────────────
+  // 非 admin 会话不渲染整块（不是 disabled）。
+  const sub = state.subAccounts
+  const isAdmin = status?.session?.role === 'admin'
+  const subAccountsSection = sub === undefined || !isAdmin
+    ? null
+    : React.createElement(Section, {
+      'data-testid': 'sub-accounts',
+      title: `子账号（${sub.accounts?.length ?? 0}）`,
+      desc: '子账号可以被授予访问本机的权限；管理员可随时禁用或删除。',
+      actions: React.createElement(Button, {
+        'data-testid': 'sub-account-create-open',
+        variant: 'primary',
+        size: 'small',
+        disabled: sub.creating || state.busy,
+        children: '+ 新建子账号',
+        onClick: () => actions.onSubCreateOpen?.(true),
+      }),
+      children: React.createElement(React.Fragment, null,
+        sub.error === null ? null : React.createElement(Notice, { 'data-testid': 'sub-account-error', tone: 'error' }, sub.error),
+        // 新建表单（内联展开）
+        sub.creating
+          ? React.createElement('div', { className: 'rh-inline-panel' },
+            React.createElement('div', { className: 'rh-cfg-title' }, '新建子账号'),
+            React.createElement('div', { className: 'rh-row' },
+              React.createElement(Field, {
+                label: '用户名',
+                children: React.createElement(Input, {
+                  'data-testid': 'sub-account-username',
+                  ariaLabel: '子账号用户名',
+                  autoComplete: 'off',
+                  placeholder: '例如 ops-admin',
+                  value: sub.draft.username,
+                  onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
+                    actions.onSubDraftChange?.('username', event.currentTarget.value),
+                }),
+              }),
+              React.createElement(Field, {
+                label: '口令（留空 = 生成一次性口令）',
+                children: React.createElement(PasswordInput, {
+                  'data-testid': 'sub-account-password-input',
+                  ariaLabel: '子账号初始口令',
+                  autoComplete: 'new-password',
+                  placeholder: '可留空',
+                  value: sub.draft.password,
+                  onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
+                    actions.onSubDraftChange?.('password', event.currentTarget.value),
+                }),
+              })),
+            React.createElement(Field, {
+              label: '权限上限',
+              children: React.createElement(Segmented, {
+                'data-testid': 'sub-account-ceiling',
+                ariaLabel: '子账号权限上限',
+                value: sub.draft.roleCeiling,
+                options: ROLE_OPTIONS.map(option => ({ value: option.value, label: option.label })),
+                onChange: value => actions.onSubDraftChange?.('roleCeiling', value),
+              }),
+            }),
+            React.createElement('div', { className: 'rh-row' },
+              React.createElement(Button, {
+                'data-testid': 'sub-account-create',
+                variant: 'primary',
+                loading: state.busy,
+                disabled: sub.draft.username.trim() === '',
+                children: state.busy ? '创建中…' : '创建子账号',
+                onClick: () => actions.onSubCreate?.(),
+              }),
+              React.createElement(Button, {
+                variant: 'ghost',
+                children: '取消',
+                onClick: () => actions.onSubCreateOpen?.(false),
+              })))
+          : null,
+        // 创建成功：一次性口令只显示一次
+        sub.created === null
+          ? null
+          : React.createElement('div', { className: 'rh-inline-panel' },
+            React.createElement(Notice, { tone: 'success' }, `✓ 已创建 ${sub.created.username}`),
+            sub.created.initialPassword === null
+              ? null
+              : React.createElement(React.Fragment, null,
+                React.createElement('div', { className: 'rh-k' }, '一次性口令'),
+                React.createElement(CodeBox, { 'data-testid': 'sub-account-password' }, sub.created.initialPassword)),
+            React.createElement('p', { className: 'rh-k' }, '只显示这一次，首次登录必须修改。'),
+            React.createElement(Button, {
+              size: 'small',
+              children: '我已保存',
+              onClick: () => actions.onSubCreatedDismiss?.(),
+            })),
+        // 列表
+        sub.accounts === null
+          ? React.createElement('p', { className: 'rh-muted' }, '正在读取子账号…')
+          : sub.accounts.length === 0
+            ? React.createElement('p', { className: 'rh-muted', style: { margin: 0 } }, '还没有子账号。')
+            : React.createElement('div', null, sub.accounts.map(account => renderSubAccountRow(account, state, actions, sub)))),
+    })
+
   return pageRoot('ready', React.createElement(React.Fragment, null,
     pageHead(),
     // 两套账号必须分开显示：本机账号决定「谁能登录这台机器」，
@@ -834,6 +1177,7 @@ export function renderAccountPage(
     policySection,
     clientsSection,
     peersSection,
+    subAccountsSection,
     state.notice === null
       ? null
       : React.createElement(Notice, { 'data-testid': 'account-notice', tone: 'info', children: state.notice })))

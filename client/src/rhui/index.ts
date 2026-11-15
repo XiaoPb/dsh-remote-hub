@@ -7,6 +7,7 @@
  * @module dsh-remote-hub/client/rhui
  */
 export { RH_CSS, RH_TOKEN_CSS } from './tokens.js'
+export { QrCode, type QrCodeProps } from './qr-code.js'
 export {
   Button,
   Card,
