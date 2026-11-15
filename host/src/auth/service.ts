@@ -375,22 +375,46 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     return { record, view: sessionView(record) }
   }
 
-  function checkLoginRate(username: string): { ok: true } | { ok: false; retryAfterMs: number } {
+  /**
+   * 限流桶：`src:<来源>` 与 `user:<用户名>` 分别计数。
+   *
+   * 只按用户名计数时，知道账号名的攻击者每窗口失败几次就能把管理员锁死；
+   * 因此**来源**是主控制（默认 5 次/窗口），用户名维度更宽（4×），
+   * 两者都超过才拒绝，且窗口结束自动恢复。
+   */
+  function checkBucket(key: string, limit: number): { ok: true } | { ok: false; retryAfterMs: number } {
     const at = now()
-    const entry = loginFailures.get(username)
+    const entry = loginFailures.get(key)
     if (entry === undefined || entry.resetAt <= at) return { ok: true }
-    if (entry.count >= maxLoginAttempts) return { ok: false, retryAfterMs: entry.resetAt - at }
-    return { ok: true }
+    if (entry.count < limit) return { ok: true }
+    return { ok: false, retryAfterMs: entry.resetAt - at }
   }
 
-  function recordLoginFailure(username: string): void {
+  function bumpBucket(key: string): void {
     const at = now()
-    const entry = loginFailures.get(username)
+    const entry = loginFailures.get(key)
     if (entry === undefined || entry.resetAt <= at) {
-      loginFailures.set(username, { count: 1, resetAt: at + loginWindowMs })
+      loginFailures.set(key, { count: 1, resetAt: at + loginWindowMs })
       return
     }
     entry.count += 1
+  }
+
+  function checkLoginRate(username: string, source: string): { ok: true } | { ok: false; retryAfterMs: number } {
+    const bySource = checkBucket(`src:${source}`, maxLoginAttempts)
+    if (!bySource.ok) return bySource
+    return checkBucket(`user:${username}`, maxLoginAttempts * 4)
+  }
+
+  function recordLoginFailure(username: string, source: string): void {
+    bumpBucket(`src:${source}`)
+    bumpBucket(`user:${username}`)
+  }
+
+  /** 成功登录清空该来源与该用户名的失败计数（不惩罚正常用户）。 */
+  function clearLoginFailures(username: string, source: string): void {
+    loginFailures.delete(`src:${source}`)
+    loginFailures.delete(`user:${username}`)
   }
 
   function currentLease(client: ClientRecord, generation: number, secret: string): boolean {
@@ -771,7 +795,8 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     async login(input) {
       const account = accountOf(store)
       const username = String(input.username ?? '')
-      const rate = checkLoginRate(username)
+      const source = String(input.source ?? 'local')
+      const rate = checkLoginRate(username, source)
       if (!rate.ok) {
         return {
           ok: false,
@@ -781,16 +806,17 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       }
       // 账号不存在与口令错误返回同一个错误码（不泄露账号是否存在）。
       if (account === null || account.username !== username) {
-        recordLoginFailure(username)
+        recordLoginFailure(username, source)
         return { ok: false, code: AUTH_ERROR_CODES.invalidCredentials, reason: 'invalid username or password' }
       }
       const valid = await verifyPassword(String(input.password ?? ''), account.passwordHash)
       if (!valid) {
-        recordLoginFailure(username)
+        recordLoginFailure(username, source)
         return { ok: false, code: AUTH_ERROR_CODES.invalidCredentials, reason: 'invalid username or password' }
       }
 
       const at = now()
+      clearLoginFailures(username, source)
       await store.mutate((data) => {
         if (data.account !== null) data.account.lastLoginAt = at
       }, { deferred: true })

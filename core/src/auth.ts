@@ -195,6 +195,12 @@ export interface AuthStatusResponse {
 export interface LoginRequest {
   username: string
   password: string
+  /**
+   * 请求来源（IP 或隧道对端标识），用于按来源限流。
+   *
+   * 服务端自己填；客户端传了也会被覆盖。缺省 `local`（测试/本机调用）。
+   */
+  source?: string
 }
 
 /** 登录成功（或需要第二步）的响应。 */

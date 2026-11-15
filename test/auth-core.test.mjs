@@ -620,3 +620,30 @@ test('raising a client ceiling requires a fresh MFA; lowering does not', { skip:
     rmSync(env.dir, { recursive: true, force: true })
   }
 })
+
+test('login throttling is per source, so one attacker cannot lock the account', { skip: !dynamic }, async () => {
+  const env = await bootstrappedService('rate-source')
+  try {
+    const wrong = 'definitely-not-it'
+    // 同一来源连续失败达到上限。
+    for (let attempt = 0; attempt < 6; attempt++) {
+      await env.service.login({ username: 'owner', password: wrong, source: '10.0.0.1' })
+    }
+    const blocked = await env.service.login({ username: 'owner', password: wrong, source: '10.0.0.1' })
+    assert.equal(blocked.ok, false)
+    assert.equal(blocked.code, auth.AUTH_ERROR_CODES.rateLimited)
+
+    // 另一个来源不受影响：仍然走到口令校验。
+    const other = await env.service.login({ username: 'owner', password: wrong, source: '10.0.0.2' })
+    assert.equal(other.ok, false)
+    assert.equal(other.code, auth.AUTH_ERROR_CODES.invalidCredentials)
+
+    // 正常来源仍可登录（用户名维度更宽：4×上限）。
+    const legitimate = await env.service.login({
+      username: 'owner', password: 'Correct-Horse-9-Battery!', source: '10.0.0.2',
+    })
+    assert.equal(legitimate.ok, true)
+  } finally {
+    rmSync(env.dir, { recursive: true, force: true })
+  }
+})

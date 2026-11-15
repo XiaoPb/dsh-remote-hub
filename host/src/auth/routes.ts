@@ -113,6 +113,19 @@ function sendJson(res: ServerResponse, status: number, body: unknown, cookie?: s
 }
 
 /** 构造会话 Cookie（`Max-Age` 与签发时一致）。 */
+/**
+ * 登录限流用的来源标识。
+ *
+ * 只取 socket 对端地址：`X-Forwarded-For` 可被客户端伪造，用它做限流键
+ * 等于给攻击者一个「换个来源就重置」的开关。
+ * @param req - 入站请求。
+ * @returns 来源字符串（缺失时 `unknown`）。
+ */
+function sessionSource(req: IncomingMessage): string {
+  const address = req.socket.remoteAddress
+  return typeof address === 'string' && address !== '' ? address : 'unknown'
+}
+
 function sessionCookie(value: string, secure: boolean, maxAgeSeconds: number): string {
   return [
     `${SESSION_COOKIE}=${value}`,
@@ -261,6 +274,9 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
         const result = await service.login({
           username: String(body.username ?? ''),
           password: String(body.password ?? ''),
+          // 只信 socket 地址：不读取 X-Forwarded-For，否则攻击者可以用它
+          // 伪造来源绕过按来源限流。
+          source: sessionSource(req),
         })
         if (!result.ok) {
           sendJson(res, statusFor(result.code), { ok: false, code: result.code, message: result.reason })
