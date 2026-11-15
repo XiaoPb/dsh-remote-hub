@@ -400,8 +400,11 @@ test('seven-day leases rotate, old generation is rejected and revokes the client
     assert.equal(stale.ok, false)
     assert.equal(stale.code, 'auth-lease-expired')
 
+    // 重放触发的撤销同样立刻从列表里消失；用「未撤销的客户端」证明撤销前它在。
     const clients = await service.listClients(sessionCookie)
-    assert.equal(clients[0].revokedAt !== null, true, 'stale-generation replay must revoke the client')
+    assert.equal(clients.every(row => row.revokedAt === null), true, '已撤销的客户端不再列出')
+    assert.equal(clients.some(row => row.clientId === renewed.client.clientId), false,
+      'stale-generation replay must revoke the client')
   } finally {
     await service.dispose()
     rmSync(dir, { recursive: true, force: true })
@@ -959,6 +962,52 @@ test('leases renew only inside the window and the old one dies', { skip: !dynami
     const afterRevoke = await verify(renewed.lease, renewed.generation)
     assert.equal(afterRevoke.ok, false, '重放检测应撤销客户端')
   } finally {
+    rmSync(env.dir, { recursive: true, force: true })
+  }
+})
+
+test('a revoked client disappears from the lists and is pruned after a day', { skip: !dynamic }, async () => {
+  const env = await bootstrappedService('revoked-retention')
+  try {
+    const key = clientKeyPair()
+    const enrolled = await env.service.enroll(env.sessionCookie, {
+      label: 'old-laptop', clientType: 'browser', publicKey: key.jwk, roleCeiling: 'control',
+    })
+
+    // 撤销后立刻不可见（运行页与设置页同源）。
+    await env.service.revokeClient(env.sessionCookie, enrolled.client.clientId)
+    // bootstrappedService 自己会登记一个会话客户端，所以按 label 判定。
+    const hasLabel = (rows, label) => rows.some(row => row.label === label)
+    assert.equal(hasLabel(await env.service.listClients(env.sessionCookie), 'old-laptop'), false, '撤销后设置页不再列出')
+    assert.equal(hasLabel(env.service.listTrustedClients(), 'old-laptop'), false, '撤销后运行页不再列出')
+
+    // 一天之内仍保留记录（迟到请求判为「已撤销」而不是「未知客户端」），但列表里不出现。
+    // 会话也随时钟一起过期，所以每个时刻都重新登录一次。
+    const reloginAt = async () => {
+      const step = await env.service.login({ username: 'owner', password: 'Correct-Horse-9-Battery!' })
+      return (await env.service.verifyMfa({
+        mfaToken: step.response.mfaToken,
+        code: auth.totpCodeAt(env.secret, env.now()),
+      })).cookie
+    }
+    env.advanceMs(23 * 60 * 60 * 1000)
+    const sessionDay = await reloginAt()
+    assert.equal(hasLabel(await env.service.listClients(sessionDay), 'old-laptop'), false)
+    assert.equal(hasLabel(env.service.listTrustedClients(), 'old-laptop'), false)
+
+    // 超过一天：记录连同公钥/租约一起被清理（再 enroll 一次触发 prune）。
+    // 会话本身也随时钟一起过期，所以先重新登录。
+    env.advanceMs(2 * 60 * 60 * 1000)
+    const session = await reloginAt()
+    const another = clientKeyPair()
+    await env.service.enroll(session, {
+      label: 'new-laptop', clientType: 'browser', publicKey: another.jwk, roleCeiling: 'control',
+    })
+    const rows = await env.service.listClients(session)
+    assert.equal(hasLabel(rows, 'new-laptop'), true)
+    assert.equal(hasLabel(rows, 'old-laptop'), false, '过期记录不得再出现')
+  } finally {
+    await env.service.dispose()
     rmSync(env.dir, { recursive: true, force: true })
   }
 })

@@ -436,6 +436,11 @@ ${DARK_TOKENS}
 }
 .rh-select-pair .rh-select { width: 100%; min-width: 0; }
 .rh-item-actions > .rh-btn { margin-left: auto; }
+/* 「还有 N 台未显示 / 显示全部」：列表底部的轻量行。 */
+.rh-list-more {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--rh-border);
+}
 
 /* 设备卡 */
 .rh-devgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--rh-gap); }
@@ -444,14 +449,23 @@ ${DARK_TOKENS}
   background: var(--rh-surface); border: 1px solid var(--rh-border);
   border-radius: var(--rh-radius); padding: 14px 16px; box-shadow: var(--rh-shadow);
 }
-.rh-dev-top { display: flex; align-items: center; gap: 10px; }
+.rh-dev-top { display: flex; align-items: flex-start; gap: 10px; }
 .rh-dev-ico {
   width: 36px; height: 36px; border-radius: 10px; background: var(--rh-bg); flex: none;
   display: flex; align-items: center; justify-content: center; font-size: 17px;
 }
 .rh-dev-meta { flex: 1; min-width: 0; }
-.rh-dev-nm { font-size: var(--rh-fs-h3); font-weight: 700; overflow-wrap: anywhere; }
-.rh-dev-sub { font-size: var(--rh-fs-mono); color: var(--rh-text-3); overflow-wrap: anywhere; }
+/* 标题与地址都必须能断行：窄列下 URL 不许按字符竖排。 */
+.rh-dev-nm {
+  font-size: var(--rh-fs-h3); font-weight: 700;
+  overflow-wrap: anywhere; word-break: break-word; line-height: 1.35;
+}
+.rh-dev-sub {
+  font-size: var(--rh-fs-mono); color: var(--rh-text-3);
+  overflow-wrap: anywhere; word-break: break-all; margin-top: 2px;
+}
+/* 右上角状态 pill 不参与压缩，也不允许把标题挤成一条竖线。 */
+.rh-dev-top > .rh-pill { flex: none; align-self: flex-start; margin-top: 2px; }
 .rh-dev-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; flex-wrap: wrap; }
 .rh-dev.is-revoked .rh-dev-meta { opacity: .6; }
 .rh-dev.is-offline .rh-dev-ico { filter: grayscale(1); }

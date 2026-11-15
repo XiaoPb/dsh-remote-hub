@@ -227,6 +227,15 @@ const DEFAULT_LOGIN_WINDOW_MS = 15 * 60_000
 const MAX_MFA_ATTEMPTS = 5
 const MFA_TOKEN_TTL_MS = 5 * 60_000
 
+/**
+ * 已撤销的客户端记录保留时长（24 小时）。
+ *
+ * 撤销后立刻从所有列表里消失（运行页、设置页都不再展示），但记录本身留一天：
+ * 这段时间内的迟到请求仍会被判为 `device-revoked`（而不是「未知客户端」），
+ * 审计与排查都能对上号。超过一天后记录被真正删除，相关配置一并清除。
+ */
+export const REVOKED_CLIENT_RETENTION_MS = 24 * 60 * 60 * 1000
+
 /** 解析 `Authorization` 里的 Bearer 租约。 */
 function leaseFromHeader(value: string | undefined): string {
   if (typeof value !== 'string') return ''
@@ -371,6 +380,31 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     // 会话/挑战也顺手清理，避免文件无限增长。
     store.data.sessions = store.data.sessions.filter(session => session.expiresAt > at)
     store.data.challenges = store.data.challenges.filter(challenge => challenge.expiresAt > at)
+    // 已撤销超过一天的客户端记录：连同它的公钥、租约、角色配置一起丢弃。
+    store.data.clients = store.data.clients.filter(client => !isExpiredRevocation(client, at))
+  }
+
+  /**
+   * 这条客户端记录是否应当出现在列表里（运行页 / 设置页共用）。
+   *
+   * 已撤销的**立刻**隐藏——撤销是「用户不想再看到它」的明确动作；
+   * 记录本身保留一天用于识别迟到请求（`isExpiredRevocation`）。
+   * @param record - 客户端记录。
+   * @returns 应在列表中出现则为 true。
+   */
+  function isListable(record: ClientRecord): boolean {
+    return record.revokedAt === null || record.revokedAt === undefined
+  }
+
+  /**
+   * 这条客户端记录是否「撤销已超过保留期」。
+   * @param record - 客户端记录。
+   * @param at - 判定时刻（缺省为当前时间）。
+   * @returns 过期则为 true（调用方应隐藏或删除）。
+   */
+  function isExpiredRevocation(record: ClientRecord, at = now()): boolean {
+    if (record.revokedAt === null || record.revokedAt === undefined) return false
+    return at - record.revokedAt > REVOKED_CLIENT_RETENTION_MS
   }
 
   function findSession(record: { sid: string }): SessionRecord | undefined {
@@ -1071,11 +1105,13 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
     async listClients(sessionToken) {
       await requireReadySession(sessionToken)
-      return store.data.clients.map(clientView)
+      // 已撤销的客户端立刻不再展示；记录本身保留一天（见 `isExpiredRevocation`）。
+      return store.data.clients.filter(client => isListable(client)).map(clientView)
     },
 
     listTrustedClients() {
-      return store.data.clients.map(clientView)
+      // 已撤销的立刻隐藏；一天后记录本身也被 prune 掉。
+      return store.data.clients.filter(client => isListable(client)).map(clientView)
     },
 
     async listAccounts(sessionToken) {

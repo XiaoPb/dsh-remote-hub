@@ -134,6 +134,44 @@ export function outboundTargetLabel(target: OutboundTarget, targets: readonly Ou
   return `${label} · ${fingerprint}`
 }
 
+/**
+ * 卡片标题：一行就能放下的短标识。
+ *
+ * 优先用设备名（人类可读），但长度超过 40 字符的「名字」实际是旧版写入的地址串
+ * （如 `http://127.0.0.1:8850 · controller 127.0.0.1:3091`），窄卡片里会被逐字折行，
+ * 这种情况退回显示 origin。
+ * @param target - 对端目标。
+ * @returns 标题文本。
+ */
+export function outboundTargetTitle(target: OutboundTarget): string {
+  const origin = normalizeOrigin(target.origin) ?? target.origin
+  const label = target.deviceLabel
+  if (label === undefined || label === null || label === '') return origin
+  if (label.length > 40 || label.includes(' · ')) return origin
+  return label
+}
+
+/**
+ * 卡片副标题：同源目标的区分信息（设备名 / 指纹）。
+ *
+ * 标题行固定显示 `origin`（一行放得下），区分信息放副标题，避免长标签把卡片标题撑成
+ * 多行（窄列下会被逐字折行）。只有一个目标且没有设备名时不显示多余文字。
+ * @param target - 对端目标。
+ * @param targets - 全部已保存目标（用于判断同源重复）。
+ * @returns 副标题文本（可能为空串）。
+ */
+export function outboundTargetMeta(target: OutboundTarget, targets: readonly OutboundTarget[]): string {
+  const origin = normalizeOrigin(target.origin) ?? target.origin
+  const peers = targets.filter(item => (normalizeOrigin(item.origin) ?? item.origin) === origin)
+  const fingerprint = outboundTargetIdentity(target).slice(-6)
+  const device = target.deviceLabel === undefined || target.deviceLabel === null
+    || target.deviceLabel === '' || target.deviceLabel === origin
+    ? ''
+    : target.deviceLabel
+  if (peers.length >= 2) return `${device === '' ? '' : `${device} · `}${fingerprint}`
+  return device
+}
+
 /** Persist the local escape before reloading; archive failure does not block disconnect. */
 export async function runDetachPersistence(input: {
   saveTargets(): boolean
@@ -714,6 +752,7 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
   const accountDraft = state.accountDraft ?? { username: '', password: '', code: '', role: 'control' as RoleName }
 
   // 主控端卡片（区块 3 的「连接其他设备」；阶段 B 换成账号登录多步流）
+  // 标题只放名称 + 状态 pill：IP / 已保存目标等**数据**一律进正文，避免挤占标题行。
   const clientCard = React.createElement(Section, {
     'data-testid': 'client-section',
     title: React.createElement(React.Fragment, null,
@@ -725,15 +764,24 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
       })),
     desc: STRINGS.clientSub,
     children: React.createElement(React.Fragment, null,
-      // ── 3D 已连接 ─────────────────────────────────────────────────────────
+      // ── 当前指向（地址/来源进正文，标题行保持干净）─────────────────────────
+      React.createElement('div', {
+        className: 'rh-fact',
+        'data-testid': 'client-target',
+      },
+      React.createElement('span', { className: 'rh-fact-key' }, isCloud ? '已连接' : '当前指向'),
+      React.createElement('span', { className: 'rh-fact-value' },
+        isCloud
+          ? `${state.mode.deviceLabel ?? state.mode.origin ?? STRINGS.modeCloud}`
+          : ''),
+      (state.mode.origin ?? '') === '' || !isCloud
+        ? null
+        : React.createElement('code', { className: 'rh-inline-code' }, state.mode.origin)),
+
+      // ── 已连接时的说明与断开（3D）────────────────────────────────────────
       isCloud
-        ? React.createElement('div', { className: 'rh-stack', 'data-testid': 'connected-to' },
-          React.createElement('div', { className: 'rh-row' },
-            React.createElement(Pill, { tone: 'online', dot: true, children: STRINGS.connected }),
-            React.createElement('span', { className: 'rh-item-name' },
-              state.mode.deviceLabel ?? state.mode.origin ?? STRINGS.modeCloud),
-            React.createElement('code', { className: 'rh-inline-code' }, state.mode.origin ?? '')),
-          React.createElement('p', { className: 'rh-meta', style: { margin: 0 } },
+        ? React.createElement('div', { className: 'rh-row', 'data-testid': 'connected-to' },
+          React.createElement('span', { className: 'rh-k' },
             '当前数据面已切换到该设备：侧栏、会话、插件都读取那台机器的数据。'),
           React.createElement(Button, {
             'data-testid': 'detach',
@@ -1204,8 +1252,8 @@ function renderOutboundCard(state: RemoteHubPageState, actions: RemoteHubPageAct
       el('div', 'rh-dev-top', undefined,
         el('div', 'rh-dev-ico', undefined, '💤'),
         el('div', 'rh-dev-meta', undefined,
-          el('div', 'rh-dev-nm', undefined, outboundTargetLabel(target, state.outboundTargets)),
-          el('div', 'rh-dev-sub', undefined, target.origin)),
+          el('div', 'rh-dev-nm', undefined, outboundTargetTitle(target)),
+          el('div', 'rh-dev-sub', undefined, outboundTargetMeta(target, state.outboundTargets))),
         el('span', 'rh-pill is-offline', undefined, el('span', 'rh-dot'), STRINGS.statusPaired)),
       renderOutboundFacts(target),
       actions.onForgetOutbound ? el('button', 'rh-btn is-small is-danger', {
@@ -1232,8 +1280,8 @@ function renderOutboundCard(state: RemoteHubPageState, actions: RemoteHubPageAct
         el('div', 'rh-dev-top', undefined,
           el('div', 'rh-dev-ico', undefined, '💤'),
           el('div', 'rh-dev-meta', undefined,
-            el('div', 'rh-dev-nm', undefined, outboundTargetLabel(target, state.outboundTargets)),
-            el('div', 'rh-dev-sub', undefined, target.origin)),
+            el('div', 'rh-dev-nm', undefined, outboundTargetTitle(target)),
+            el('div', 'rh-dev-sub', undefined, outboundTargetMeta(target, state.outboundTargets))),
           el('span', 'rh-pill is-offline', undefined, el('span', 'rh-dot'), STRINGS.statusPaired)),
         renderOutboundFacts(target),
         el('div', 'rh-dev-foot', undefined,

@@ -233,6 +233,12 @@ export function initialDraft(): AccountFormDraft {
 /** 页头副标题（所有阶段共用）。 */
 const LEAD = '管理本机 DSH 的登录、安全策略与设备信任；之后每个请求都由本客户端的私钥签名，7 天租约自动轮换。'
 
+/** 「可信客户端」折叠时默认展示的条数（其余收进「显示全部」）。 */
+const CLIENTS_PREVIEW = 3
+
+/** `state.expanded` 里表示「客户端列表已全部展开」的键。 */
+const CLIENTS_SHOW_ALL_KEY = 'clients-show-all'
+
 /**
  * 页头：`account-title` 始终存在（`plan-settings.md §5`）。
  *
@@ -893,7 +899,23 @@ export function renderAccountPage(
 
   // ── ready：区块 A–F（plan-settings.md §2.7）────────────────────────────────
   const clients = status?.clients ?? []
-  const active = clients.filter(client => client.revokedAt === null)
+  // 排序：在线（最近有活动）优先 → 离线 → 按最近活动时间倒序 → 按名称。
+  // 已撤销的不再展示（Host 保留一天后连记录一起清除）。
+  const active = clients
+    .filter(client => client.revokedAt === null)
+    .slice()
+    .sort((a, b) => {
+      const aOnline = a.lastSeenAt !== null && a.lastSeenAt !== undefined
+      const bOnline = b.lastSeenAt !== null && b.lastSeenAt !== undefined
+      if (aOnline !== bOnline) return aOnline ? -1 : 1
+      const aSeen = a.lastSeenAt === null || a.lastSeenAt === undefined ? 0 : Date.parse(a.lastSeenAt) || 0
+      const bSeen = b.lastSeenAt === null || b.lastSeenAt === undefined ? 0 : Date.parse(b.lastSeenAt) || 0
+      if (aSeen !== bSeen) return bSeen - aSeen
+      return a.label.localeCompare(b.label, 'zh-Hans-CN')
+    })
+  // 列表过长时默认只显示前若干台，其余折叠到「显示全部」。
+  const showAllClients = (state.expanded ?? {})[CLIENTS_SHOW_ALL_KEY] === true
+  const visibleClients = showAllClients ? active : active.slice(0, CLIENTS_PREVIEW)
   const totpEnabled = status?.totpEnabled === true
   const totp = state.totp ?? null
   const totpDraft = state.totpDraft ?? { code: '', password: '' }
@@ -1122,11 +1144,24 @@ export function renderAccountPage(
     onToggle: () => actions.onToggleSection?.('clients-list'),
     summary: active.length + ' 台',
     title: `可信客户端（${active.length}）`,
-    desc: '这些客户端被允许用本机账号访问 Hub；提高上限不会改变浏览器当前角色，受信浏览器需重新信任后才会以新权限运行。',
-    children: clients.length === 0
+    desc: '这些客户端被允许用本机账号访问 Hub；提高上限不会改变浏览器当前角色，受信浏览器需重新信任后才会以新权限运行。已撤销的客户端不再显示（记录一天后自动清除）。',
+    children: active.length === 0
       ? React.createElement('p', { 'data-testid': 'clients-empty', className: 'rh-muted', style: { margin: 0 } },
         '还没有受信客户端。信任本浏览器后即可免重复 2FA 访问 Hub。')
-      : React.createElement('div', null, clients.map(client => renderClientRow(client, state, actions))),
+      : React.createElement('div', null,
+        visibleClients.map(client => renderClientRow(client, state, actions)),
+        visibleClients.length < active.length
+          ? React.createElement('div', { className: 'rh-list-more' },
+            React.createElement('span', { className: 'rh-muted' },
+              `还有 ${active.length - visibleClients.length} 台未显示`),
+            React.createElement(Button, {
+              'data-testid': 'clients-show-all',
+              variant: 'ghost',
+              size: 'small',
+              children: '显示全部',
+              onClick: () => actions.onToggleSection?.(CLIENTS_SHOW_ALL_KEY),
+            }))
+          : null),
   })
 
   const peersSection = React.createElement(Section, {

@@ -408,7 +408,7 @@ test('first sign-in with the default account is gated on a password change', asy
   assert.match(markup, /只需一次/u)
 })
 
-test('a revoked client is rendered disabled', async () => {  const markup = await renderMarkup(accountPage.renderAccountPage(
+test('a revoked client is hidden from the list entirely', async () => {  const markup = await renderMarkup(accountPage.renderAccountPage(
     {
       phase: 'ready',
       expanded: {
@@ -451,8 +451,67 @@ test('a revoked client is rendered disabled', async () => {  const markup = awai
     accountPage.initialDraft(),
     () => {},
   ))
-  assert.match(markup, /已撤销/u)
-  assert.match(markup, /data-revoked="true"/u)
+  // 已撤销的客户端不再出现在列表里（Host 保留一天后连记录一起清除）。
+  assert.doesNotMatch(markup, /旧手机/u)
+  assert.doesNotMatch(markup, /data-revoked="true"/u)
+  assert.match(markup, /data-testid="clients-empty"/u, '没有在用客户端时给出空态')
+})
+
+test('a long client list shows a preview with a show-all action', async () => {
+  const makeClient = (index) => ({
+    clientId: 'cli_' + String(index).padStart(26, '0'),
+    keyId: 'k' + index,
+    label: '设备 ' + index,
+    clientType: 'browser',
+    fingerprint: String(index).padStart(16, '0'),
+    roleCeiling: 'control',
+    activeRole: 'control',
+    createdAt: new Date().toISOString(),
+    lastSeenAt: null,
+    leaseExpiresAt: null,
+    leaseGeneration: 1,
+    revokedAt: null,
+  })
+  const stateWith = (expanded) => ({
+    phase: 'ready',
+    expanded: { 'clients-list': true, ...expanded },
+    policy: 'strong',
+    peers: [],
+    escalation: null,
+    totp: null,
+    totpDraft: { code: '', password: '' },
+    status: {
+      ready: true,
+      bootstrapped: true,
+      mfaEnabled: true,
+      session: {
+        accountId: 'owner', username: 'owner', role: 'admin',
+        createdAt: new Date().toISOString(), expiresAt: Date.now() + 1000, lastMfaAt: Date.now(),
+      },
+      username: 'owner',
+      clients: [0, 1, 2, 3, 4, 5, 6].map(makeClient),
+    },
+    binding: null,
+    enrollment: null,
+    notice: null,
+    busy: false,
+    mfaToken: null,
+  })
+
+  const preview = await renderMarkup(accountPage.renderAccountPage(
+    stateWith({}), noopActions(), accountPage.initialDraft(), () => {},
+  ))
+  const previewRows = (preview.match(/data-testid="trusted-client"/gu) ?? []).length
+  assert.equal(previewRows, 3, '默认只展示 3 台')
+  assert.match(preview, /还有 4 台未显示/u)
+  assert.match(preview, /data-testid="clients-show-all"/u)
+
+  const all = await renderMarkup(accountPage.renderAccountPage(
+    stateWith({ 'clients-show-all': true }), noopActions(), accountPage.initialDraft(), () => {},
+  ))
+  const allRows = (all.match(/data-testid="trusted-client"/gu) ?? []).length
+  assert.equal(allRows, 7, '「显示全部」后展示所有在用客户端')
+  assert.doesNotMatch(all, /data-testid="clients-show-all"/u)
 })
 
 test('settings exposes the password policy switch and a live rule checklist', async () => {
