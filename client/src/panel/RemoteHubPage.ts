@@ -302,13 +302,7 @@ export interface RemoteHubPageActions {
 }
 
 // ── 样式 ─────────────────────────────────────────────────────────────────────
-// 组件样式集中在 THEME_CSS 的 .rh-* 类中（参考文档组件体系），此处仅保留
-// 少量动态内联样式（按状态切换的类名与行内布局）。
-
-const S = {
-  root: { width: '100%', height: '100vh', boxSizing: 'border-box', padding: '28px 32px 56px', overflowY: 'auto', overflowX: 'hidden', fontSize: 14, lineHeight: 1.6 },
-  badge: { 'data-testid': 'mode-badge' },
-} as const
+// 页面尺寸与滚动交给 .rh-root 的响应式样式。
 
 // ── 主题 token（语义化 CSS 变量；不写死任何示意参数，方便外部整体换肤）───────
 //
@@ -397,6 +391,12 @@ const THEME_CSS = `
   overflow-x: hidden;
 }
 .rh-root .rh-shell{ max-width: 1080px; margin: 0 auto; }
+.rh-root .rh-page-head{
+  position: sticky; top: -28px; z-index: 20; background: var(--rh-bg);
+  padding: 28px 0 12px; border-bottom: 1px solid var(--rh-border);
+}
+.rh-root .rh-page-title{ min-width: 0; overflow-wrap: anywhere; }
+.rh-root .rh-page-head .rh-lead{ margin: 0; }
 .rh-root h1{ margin: 0 0 4px; font-size: 24px; font-weight: 700; letter-spacing: -.3px;
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .rh-root .rh-lead{ margin: 0 0 6px; font-size: 14px; color: var(--rh-text-2); }
@@ -440,9 +440,18 @@ const THEME_CSS = `
 .rh-root .rh-minirow{ display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 12px; }
 .rh-root .rh-minirow .rh-k{ font-size: 11px; color: var(--rh-text-3); }
 .rh-root .rh-minirow .rh-v{ font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
-.rh-root .rh-diagnostic-grid{ display: grid; grid-template-columns: repeat(auto-fit,minmax(min(210px,100%),1fr)); gap: 12px; box-sizing: border-box; }
-.rh-root .rh-diagnostic-grid > div{ min-width: 0; padding: 12px; background: var(--rh-bg); border: 1px solid var(--rh-border); border-radius: var(--rh-radius-sm); }
-.rh-root .rh-diagnostic-grid .rh-v{ font-size: 12px; line-height: 1.6; margin-top: 4px; font-family: var(--rh-mono); font-weight: 400; overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
+.rh-root .rh-diagnostic-grid{
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px;
+  box-sizing: border-box; margin: 0;
+}
+.rh-root .rh-diagnostic-grid > div{
+  min-width: 0; padding: 12px 0; border-bottom: 1px solid var(--rh-border);
+}
+.rh-root .rh-diagnostic-grid .rh-k{ font-size: 11px; color: var(--rh-text-3); }
+.rh-root .rh-diagnostic-grid .rh-v{
+  font-size: 12px; line-height: 1.6; margin-top: 4px; font-family: var(--rh-mono);
+  font-weight: 400; overflow-wrap: anywhere; word-break: break-word; min-width: 0;
+}
 .rh-root .rh-dev-meta{ min-width: 0; }
 .rh-root .rh-dev-nm,.rh-root .rh-dev-sub{ overflow-wrap: anywhere; }
 .rh-root [data-testid="outbound-facts"]{ display: grid; grid-template-columns: repeat(auto-fit,minmax(min(160px,100%),1fr)); gap: 8px 16px; font-size: 12px; color: var(--rh-text-2); }
@@ -466,9 +475,8 @@ const THEME_CSS = `
 .rh-root .rh-dev .rh-dev-sub{ font-size: 12px; color: var(--rh-text-3); font-family: var(--rh-mono); word-break: break-all; }
 .rh-root .rh-dev .rh-dev-meta{ flex: 1; min-width: 0; }
 .rh-root .rh-dev .rh-dev-foot{ display: flex; align-items: center; gap: 8px; margin-top: auto; flex-wrap: wrap; }
-.rh-root .rh-dev.revoked{ opacity: .45; }
-/* 已配对但离线：置灰（2026-11-12：用户要求「不在线就变灰」） */
-.rh-root .rh-dev.offline{ opacity: .6; }
+.rh-root .rh-dev.revoked .rh-dev-meta{ opacity: .6; }
+/* 已配对但离线：弱化状态，不削弱操作按钮的对比度。 */
 .rh-root .rh-dev.offline .rh-dev-ico{ filter: grayscale(1); }
 .rh-root .rh-dev.offline .rh-dev-nm{ color: var(--rh-text-2); }
 /* 设备分组（参考 .group-head） */
@@ -637,6 +645,41 @@ const THEME_CSS = `
   .rh-root select.rh-select, .rh-root input.rh-num{ min-height: 40px; flex: 1 1 auto; }
   .rh-root .rh-cfg .rh-cc{ width: 100%; justify-content: flex-end; }
   .rh-root .rh-minirow{ gap: 14px; }
+}
+/* Only this page scrolls; its heading remains visible while cards pass underneath. */
+.rh-root{ scroll-padding-top: 92px; }
+.rh-root .rh-card{ border-radius: min(var(--rh-radius), 8px); }
+.rh-root button.rh-btn{ touch-action: manipulation; }
+.rh-root button.rh-btn:focus-visible,.rh-root button.rh-linkbtn:focus-visible,
+.rh-root input.rh-input:focus-visible{
+  outline: 2px solid var(--rh-primary); outline-offset: 2px;
+}
+@media (hover: hover){
+  .rh-root button.rh-btn:hover:not(:disabled){ opacity: .85; }
+}
+.rh-root .rh-dev-foot .rh-btn.danger{ margin-left: auto; }
+.rh-root .rh-dev-foot .rh-btn.primary{ order: -1; }
+@media (max-width: 639px){
+  .rh-root{ padding-top: 0; scroll-padding-top: 76px; }
+  .rh-root .rh-page-head{ top: 0; padding: 16px 0 12px; }
+  .rh-root .rh-dev-foot .rh-btn.primary{ min-width: 96px; }
+  .rh-root .rh-card{ margin: 12px 0; }
+  .rh-root .rh-section-head{ align-items: flex-start; }
+  .rh-root .rh-section-head .rh-right{ max-width: 100%; }
+  .rh-root .rh-devgrid{ grid-template-columns: minmax(0, 1fr); }
+  .rh-root .rh-diagnostic-grid{ grid-template-columns: minmax(0, 1fr); }
+  .rh-root .rh-dev-top{ flex-wrap: wrap; }
+  .rh-root .rh-dev-top .rh-pill{ margin-left: auto; }
+  .rh-root button.rh-btn,.rh-root button.rh-btn.small{ min-height: 44px; height: auto; white-space: normal; }
+  .rh-root button.rh-linkbtn{ min-height: 44px; padding: 0 12px; }
+  .rh-root input.rh-input,.rh-root input.rh-num,.rh-root select.rh-select{ font-size: 16px; min-width: 0; }
+  .rh-root input.rh-input{ flex-basis: 100%; }
+  .rh-root .rh-dev-foot .rh-btn.danger{ margin-left: auto; }
+  .rh-root .rh-logrow{ grid-template-columns: 68px minmax(0, 1fr); }
+  .rh-root .rh-logdetail{ grid-column: 1 / -1; }
+}
+@media (prefers-reduced-motion: reduce){
+  .rh-root .rh-btn,.rh-root .rh-countdown > i{ transition: none; }
 }
 `
 
@@ -901,6 +944,11 @@ export function parsePairLink(text: string): { origin: string; secret: string } 
   const secret = value.slice(at + PAIR_LINK_MARKER.length)
   if (normalizeOrigin(origin) === undefined || classifyPairSecret(secret) === null) return null
   return { origin, secret }
+}
+
+export function connectionAddressDraft(value: string): { origin: string; secret?: string } {
+  const link = parsePairLink(value)
+  return link === null ? { origin: value } : { origin: link.origin, secret: link.secret }
 }
 
 /** 渲染 QR（白底 + 黑色模块；需显式白底，深色主题下也能扫——唯一允许的硬编码色）。 */
@@ -1170,14 +1218,22 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
       : el('p', 'rh-lbl', { 'data-testid': 'not-connected' }, STRINGS.notConnected),
     el('div', 'rh-row', undefined,
       el('input', 'rh-input', {
-        'data-testid': 'origin-input', 'aria-label': '目标设备地址',
+        'data-testid': 'origin-input',
+        'aria-label': '目标设备地址',
+        type: 'url',
+        inputMode: 'url', // 移动端显示 URL 键盘
+        autocomplete: 'url',
         placeholder: STRINGS.originPlaceholder,
         value: state.originDraft,
         onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onOriginChange(event.currentTarget.value),
       })),
     el('div', 'rh-row', undefined,
       el('input', 'rh-input', {
-        'data-testid': 'secret-input', 'aria-label': '配对短码、票据或链接',
+        'data-testid': 'secret-input',
+        'aria-label': '配对短码、票据或链接',
+        type: 'text',
+        inputMode: 'text',
+        autocomplete: 'off', // 敏感信息不自动填充
         placeholder: STRINGS.secretPlaceholder,
         value: state.secretDraft,
         onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onSecretChange(event.currentTarget.value),
@@ -1205,7 +1261,7 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
 
   return React.createElement(
     'div',
-    { className: 'rh-root', style: S.root, 'data-testid': 'remote-hub-page', 'data-mode': state.mode.mode },
+    { className: 'rh-root', 'data-testid': 'remote-hub-page', 'data-mode': state.mode.mode },
     // 主题样式：幂等注入（相同节点不会重复）；外部可预先覆盖 --rh-* 变量。
     React.createElement('style', { key: 'rh-theme', 'data-rh-theme': '' }, THEME_CSS),
 
@@ -1213,14 +1269,15 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
     el('div', 'rh-shell', undefined,
 
     // 页头
-    React.createElement('h1', { 'data-testid': 'page-title' }, STRINGS.title,
-      React.createElement('span', {
-        className: `rh-pill ${isCloud ? 'on' : ''}`,
-        ...(isCloud ? {} : { style: { color: 'var(--rh-text-2)' } }),
-        'data-testid': 'mode-badge',
-      }, el('span', 'rh-dot'),
-      isCloud ? `☁ ${state.mode.deviceLabel ?? state.mode.origin ?? STRINGS.modeCloud}` : STRINGS.modeLocal)),
-    el('p', 'rh-lead', undefined, STRINGS.lead),
+    el('header', 'rh-page-head', undefined,
+      React.createElement('h1', { className: 'rh-page-title', 'data-testid': 'page-title' }, STRINGS.title,
+        React.createElement('span', {
+          className: `rh-pill ${isCloud ? 'on' : ''}`,
+          ...(isCloud ? {} : { style: { color: 'var(--rh-text-2)' } }),
+          'data-testid': 'mode-badge',
+        }, el('span', 'rh-dot'),
+        isCloud ? `☁ ${state.mode.deviceLabel ?? state.mode.origin ?? STRINGS.modeCloud}` : STRINGS.modeLocal)),
+      el('p', 'rh-lead', undefined, STRINGS.lead)),
 
     // 四区（参考文档 ①→②→③→④；主控端连接表单收进 ② 出站分组下方）
     hostCard,
@@ -1336,7 +1393,7 @@ function renderDiagnosticCard(state: RemoteHubPageState): React.ReactNode {
           ? '—'
           : `${injection.ageSeconds}s`))),
   // 整机接管状态：carrier 是否已把 transport 指向远端。
-  el('div', 'rh-diagnostic-grid', { 'data-testid': 'diagnostic-transport-grid' }, ...renderTakeoverRow(state)),
+  el('div', 'rh-diagnostic-grid', { 'data-testid': 'diagnostic-transport-grid', style: { padding: '0 16px' } }, ...renderTakeoverRow(state)),
   el('div', 'rh-minirow rh-diagnostic-grid', { 'data-testid': 'diagnostic-request-grid', style: { padding: '0 16px' } },
     el('div', undefined,
       el('div', 'rh-k', undefined, STRINGS.diagLastRequest),
@@ -1618,16 +1675,16 @@ function renderOutboundCard(state: RemoteHubPageState, actions: RemoteHubPageAct
             el('div', 'rh-dev-sub', undefined, target.origin)),
           el('span', 'rh-pill small off', undefined, el('span', 'rh-dot'), STRINGS.statusPaired)),
         renderOutboundFacts(target),
-      actions.onForgetOutbound ? el('button', 'rh-btn small danger', {
-        type: 'button', 'data-testid': 'outbound-delete', disabled: state.busy !== null,
-        onClick: () => actions.onForgetOutbound?.(target),
-      }, '删除配对 / Delete') : null,
         el('div', 'rh-dev-foot', undefined,
           el('button', 'rh-btn small primary', {
             type: 'button', 'data-testid': 'reconnect',
             disabled: state.busy !== null,
             onClick: () => actions.onReconnect(target),
-          }, STRINGS.connect)))))
+          }, STRINGS.connect),
+          actions.onForgetOutbound ? el('button', 'rh-btn small danger', {
+            type: 'button', 'data-testid': 'outbound-delete', disabled: state.busy !== null,
+            onClick: () => actions.onForgetOutbound?.(target),
+          }, '删除配对 / Delete') : null))))
 }
 
 // ── ③ 统计区子渲染 ────────────────────────────────────────────────────────────
@@ -2470,7 +2527,12 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
           })
           .finally(() => { setBusy(null) })
       },
-      onOriginChange(value) { setOriginDraft(value) },
+      onOriginChange(value) {
+        const draft = connectionAddressDraft(value)
+        setOriginDraft(draft.origin)
+        if (draft.secret !== undefined) setSecretDraft(draft.secret)
+        if (error !== null) setError(null)
+      },
       onSecretChange(value) {
         setSecretDraft(value)
         // 粘贴二维码链接时自动填充地址。

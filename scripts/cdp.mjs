@@ -176,6 +176,32 @@ try {
       expression: rest.join(' '), returnByValue: true, awaitPromise: true,
     })
     process.stdout.write(`${JSON.stringify(result.result.value, null, 2)}\n`)
+  } else if (command === 'viewport') {
+    if (rest[0] === 'reset') {
+      await cdp.send('Emulation.clearDeviceMetricsOverride')
+    } else {
+      const [width, height] = rest.map(Number)
+      if (![width, height].every(value => Number.isInteger(value) && value > 0 && value <= 4096)) {
+        throw new Error('viewport requires width and height between 1 and 4096, or reset')
+      }
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: true })
+      if (rest[2]) {
+        try {
+          const measurement = await cdp.send('Runtime.evaluate', {
+            expression: rest[2], returnByValue: true, awaitPromise: true,
+          })
+          process.stdout.write(`${JSON.stringify(measurement.result.value, null, 2)}\n`)
+          if (rest[3]) {
+            const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png' })
+            writeFileSync(rest[3], Buffer.from(screenshot.data, 'base64'))
+            process.stdout.write(`saved ${rest[3]}\n`)
+          }
+        } finally {
+          await cdp.send('Emulation.clearDeviceMetricsOverride')
+        }
+      }
+    }
+    process.stdout.write('VIEWPORT_SET\n')
   } else if (command === 'shot') {
     const result = await cdp.send('Page.captureScreenshot', { format: 'png' })
     writeFileSync(rest[0], Buffer.from(result.data, 'base64'))

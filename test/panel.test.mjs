@@ -580,6 +580,36 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
     assert.ok(texts.some(t => t.includes('配对失效')), '已吊销行显示「配对失效」')
   })
 
+  it('页头独立吸顶，卡片标题不参与跨卡片滚动', async () => {
+    const { renderRemoteHubPage } = await loadPage()
+    const tree = renderRemoteHubPage(baseState(), noopActions)
+    const title = collectByTestId(tree, 'page-title')[0]
+    assert.equal(collectByTestId(tree, 'remote-hub-page')[0].props.style, undefined)
+    assert.equal(title.props.className, 'rh-page-title')
+    assert.equal(collectByTestId(tree, 'host-section')[0].props['data-sticky-header'], undefined)
+    assert.equal(collectByTestId(tree, 'devices-section')[0].props['data-sticky-header'], undefined)
+  })
+
+  it('清除全部只进入既有动作的一次确认流程', async () => {
+    const { renderRemoteHubPage } = await loadPage()
+    let called = 0
+    const tree = renderRemoteHubPage(baseState({ devices: [
+      { deviceId: 'd1', label: 'Pixel', revokedAt: null },
+    ] }), { ...noopActions, onRevokeAll() { called += 1 } })
+    collectByTestId(tree, 'revoke-all')[0].props.onClick()
+    assert.equal(called, 1)
+  })
+
+  it('已配对目标卡的连接为主操作，删除与其分开', async () => {
+    const { renderRemoteHubPage } = await loadPage()
+    const tree = renderRemoteHubPage(baseState({ outboundTargets: [
+      { id: 'a'.repeat(64), origin: 'http://example.test', deviceLabel: 'Device' },
+    ] }), noopActions)
+    const card = collectByTestId(tree, 'outbound-paired')[0]
+    assert.match(collectByTestId(card, 'reconnect')[0].props.className, /primary/)
+    assert.match(collectByTestId(card, 'outbound-delete')[0].props.className, /danger/)
+  })
+
   it('已配对设备都提供删除入口，确认后由 Host 撤销并移除设备记录', async () => {
     const { renderRemoteHubPage } = await loadPage()
     const tree = renderRemoteHubPage(baseState({ devices: [
@@ -624,6 +654,14 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
     const scan = collectByTestId(tree, 'scan')
     assert.equal(scan.length, 1, 'scan button rendered')
     assert.ok(String(scan[0].props['aria-label']).includes('摄像头'))
+  })
+
+  it('地址栏粘贴完整配对链接时拆分为地址和票据', async () => {
+    const { connectionAddressDraft } = await loadPage()
+    const link = `http://192.168.0.17:8443#dshrh=${'a'.repeat(43)}`
+    assert.deepEqual(connectionAddressDraft(link), { origin: 'http://192.168.0.17:8443', secret: 'a'.repeat(43) })
+    assert.deepEqual(connectionAddressDraft('http://192.168.0.17:8443'), { origin: 'http://192.168.0.17:8443' })
+    assert.deepEqual(connectionAddressDraft('invalid'), { origin: 'invalid' })
   })
 
   it('非法输入禁用连接并给内联提示', async () => {
