@@ -359,4 +359,35 @@ describe('守卫：账号认证模式', () => {
     })
     assert.equal(response.status, 401)
   })
+
+  it('account mode lists auth clients and enforces single control', async () => {
+    // 1) 设备表来自 auth clients，而不是空的 legacy 设备表。
+    const list = await fetch(`${base}/remote/devices`, {
+      headers: { 'x-pair-issue-token': 'test-issue-token', 'x-hub-protocol': '1' },
+    })
+    assert.equal(list.status, 200)
+    const listed = await list.json()
+    const ids = listed.devices.map(row => row.deviceId)
+    assert.ok(ids.includes(enrolled.client.clientId), '已信任客户端必须出现在设备表里')
+
+    // 2) 第二个客户端上线后，第一个被标记为「被挤下线」（单控）。
+    const secondKey = keyPair()
+    const second = await service.enroll(sessionCookie, {
+      label: 'second', clientType: 'browser', publicKey: secondKey.jwk, roleCeiling: 'control',
+    })
+    const bodyText = JSON.stringify({ type: 'client-request', rpcId: 'r-sc', method: 'hub/health', payload: { args: {} } })
+    const response = await signedRpc(base, second, secondKey, bodyText)
+    assert.notEqual(response.status, 401, '第二个客户端的签名必须被接受')
+
+    const after = service.listTrustedClients()
+    const first = after.find(row => row.clientId === enrolled.client.clientId)
+    const newcomer = after.find(row => row.clientId === second.client.clientId)
+    assert.notEqual(first?.displacedAt ?? null, null, '先连的客户端必须被挤下线')
+    assert.equal(newcomer?.displacedAt ?? null, null, '当前控制者不应被标记')
+
+    const deviceRow = (await (await fetch(`${base}/remote/devices`, {
+      headers: { 'x-pair-issue-token': 'test-issue-token', 'x-hub-protocol': '1' },
+    })).json()).devices.find(row => row.deviceId === enrolled.client.clientId)
+    assert.notEqual(deviceRow?.displacedAt ?? null, null, '设备表同样反映挤下线状态')
+  })
 })

@@ -63,6 +63,8 @@ export interface ClientRecord {
   leaseExpiresAt: number | null
   createdAt: number
   lastSeenAt: number | null
+  /** 被单控挤下线的时间（仍保留信任，只是当前不在控制）。 */
+  displacedAt?: number | null
   revokedAt: number | null
 }
 

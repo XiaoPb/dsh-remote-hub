@@ -471,6 +471,34 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
     deps.audit?.(event, fields)
   }
 
+  /**
+   * 账号认证模式的单控：某个客户端开始控制时，把其它客户端标记为「被挤下线」。
+   *
+   * 旧流程只在**邀请兑换**时挤压设备记录；账号模式没有兑换这一步，所以必须
+   * 在认证通过后自己执行，否则「单控已启用」只是页面文案（P2）。
+   * 60 秒去抖：同一客户端的连续请求不重复写盘/断连。
+   */
+  const lastAuthSessionStart = new Map<string, number>()
+  const enforceSingleController = async (clientId: string): Promise<void> => {
+    if (!config.singleController || deps.auth === undefined) return
+    const at = Date.now()
+    const previous = lastAuthSessionStart.get(clientId) ?? 0
+    lastAuthSessionStart.set(clientId, at)
+    if (at - previous < 60_000) return
+    let displaced: readonly string[]
+    try {
+      displaced = await deps.auth.displaceOthers(clientId)
+    } catch (error) {
+      audit('single-controller-failed', { reason: error instanceof Error ? error.message : String(error) })
+      return
+    }
+    if (displaced.length === 0) return
+    audit('single-controller-displaced', { keep: clientId, count: displaced.length })
+    for (const id of displaced) {
+      try { deps.onSessionDisplaced?.(id) } catch { /* 忽略 */ }
+    }
+  }
+
   /** 守卫层统一拒绝（仍是官方 server-response 形状，便于客户端只解析一种信封）。 */
   const reject = (res: ServerResponse, rpcId: string, error: GuardError): void => {
     sendJson(res, error.status, JSON.parse(rpcFailureBody(rpcId, error)) as unknown, protocolHeader)
@@ -688,16 +716,28 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
             reject(res, rpcId, failure(ERROR_CODES.notFound, 404, 'not found'))
             return
           }
-          const rows = deps.devices.list().map(device => ({
-            deviceId: device.deviceId,
-            label: device.label,
-            role: device.role,
-            createdAt: device.createdAt,
-            lastSeenAt: device.lastSeenAt,
-            revokedAt: device.revokedAt,
-            // 被单控挤下线（仍保留配对）——UI 据此区分「已配对」与「配对失效」。
-            displacedAt: device.displacedAt ?? null,
-          }))
+          // 账号认证模式下「客户端」是 auth clients，不是旧版设备表：
+          // 运行页与设置页必须看到同一批身份，否则两处各说各话（P2）。
+          const rows = deps.auth !== undefined
+            ? deps.auth.listTrustedClients().map(client => ({
+              deviceId: client.clientId,
+              label: client.label,
+              role: client.activeRole,
+              createdAt: client.createdAt,
+              lastSeenAt: client.lastSeenAt,
+              revokedAt: client.revokedAt,
+              displacedAt: client.displacedAt ?? null,
+            }))
+            : deps.devices.list().map(device => ({
+              deviceId: device.deviceId,
+              label: device.label,
+              role: device.role,
+              createdAt: device.createdAt,
+              lastSeenAt: device.lastSeenAt,
+              revokedAt: device.revokedAt,
+              // 被单控挤下线（仍保留配对）——UI 据此区分「已配对」与「配对失效」。
+              displacedAt: device.displacedAt ?? null,
+            }))
           sendJson(res, 200, {
             ok: true,
             protocolVersion: PROTOCOL_VERSION,
@@ -846,6 +886,7 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
           reject(res, rpcId, failure(ERROR_CODES.unauthorized, 401, verdict.reason))
           return
         }
+        await enforceSingleController(verdict.claims.clientId)
         const grant = issueWsTicket({
           deviceId: verdict.claims.clientId,
           role: verdict.claims.activeRole,
@@ -907,6 +948,7 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
             return
           }
           identity = { deviceId: verdict.claims.clientId, role: verdict.claims.activeRole }
+          await enforceSingleController(verdict.claims.clientId)
         } else {
           const legacy = await deps.tokens.verify(token)
           identity = legacy === null

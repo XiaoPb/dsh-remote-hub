@@ -116,6 +116,14 @@ export interface AuthService extends HubAuthPort {
   /** 账号是否仍在等待初始改密（无账号 / 已完成 → false）。 */
   initialPasswordPending(): boolean
   listClients(sessionToken: string | undefined): Promise<TrustedClientView[]>
+  /** 守卫用：不需要会话即可列出全部客户端（账号模式下的「设备表」）。 */
+  listTrustedClients(): readonly TrustedClientView[]
+  /**
+   * 单控：把 `keepClientId` 之外的客户端标记为被挤下线，返回**本次新挤掉**的 id。
+   *
+   * 只改标记，不断连接；断连由 Hub 的 `onSessionDisplaced` 负责。
+   */
+  displaceOthers(keepClientId: string): Promise<readonly string[]>
   revokeClient(sessionToken: string | undefined, clientId: string): Promise<void>
   setActiveRole(sessionToken: string | undefined, clientId: string, role: RoleName): Promise<TrustedClientView>
   setRoleCeiling(sessionToken: string | undefined, clientId: string, role: RoleName): Promise<TrustedClientView>
@@ -283,6 +291,9 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       lastSeenAt: record.lastSeenAt === null ? null : new Date(record.lastSeenAt).toISOString(),
       leaseExpiresAt: record.leaseExpiresAt,
       leaseGeneration: record.leaseGeneration,
+      displacedAt: record.displacedAt === undefined || record.displacedAt === null
+        ? null
+        : new Date(record.displacedAt).toISOString(),
       revokedAt: record.revokedAt === null ? null : new Date(record.revokedAt).toISOString(),
     }
   }
@@ -877,6 +888,29 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     async listClients(sessionToken) {
       await requireReadySession(sessionToken)
       return store.data.clients.map(clientView)
+    },
+
+    listTrustedClients() {
+      return store.data.clients.map(clientView)
+    },
+
+    async displaceOthers(keepClientId) {
+      const at = now()
+      const displaced: string[] = []
+      await store.mutate((data) => {
+        for (const row of data.clients) {
+          if (row.clientId === keepClientId) {
+            // 重新上台：清掉旧的「被挤下线」标记。
+            if (row.displacedAt !== undefined && row.displacedAt !== null) row.displacedAt = null
+            continue
+          }
+          if (row.revokedAt !== null) continue
+          if (row.displacedAt !== undefined && row.displacedAt !== null) continue
+          row.displacedAt = at
+          displaced.push(row.clientId)
+        }
+      })
+      return displaced
     },
 
     async revokeClient(sessionToken, clientId) {

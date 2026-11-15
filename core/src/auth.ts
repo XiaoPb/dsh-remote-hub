@@ -134,6 +134,8 @@ export interface TrustedClientView {
   leaseExpiresAt: number | null
   /** 当前租约代次（轮换检测用；单调递增，从 1 开始）。 */
   leaseGeneration: number
+  /** 被单控挤下线的时间（仍保留信任，只是当前没在控制）。 */
+  displacedAt?: string | null
   revokedAt: string | null
 }
 
@@ -330,6 +332,20 @@ export interface HubAuthPort {
   readonly serviceName: 'remoteHubAuth'
   /** 校验一次 Hub 请求（租约 + 客户端签名）。 */
   verifyHubRequest(input: HubAuthVerifyInput): Promise<HubAuthVerdict>
+  /**
+   * 列出全部可信客户端（不需要会话）。
+   *
+   * 只给**守卫**用：账号认证模式下，`/remote/devices` 必须展示真正的身份表
+   * （auth clients），而不是旧版设备表，否则运行页与设置页会各说各话。
+   */
+  listTrustedClients(): readonly TrustedClientView[]
+  /**
+   * 单控：把 `keepClientId` 之外的客户端标记为「被挤下线」并返回它们的 id。
+   *
+   * 只动标记，不断连接——断连由调用方走 `onSessionDisplaced`/`dropDevice`，
+   * 这样认证层不依赖 Hub 的连接管理。
+   */
+  displaceOthers(keepClientId: string): Promise<readonly string[]>
   /** 客户端被撤销（Hub 丢弃该客户端的 Peer 与流）。 */
   onClientRevoked(listener: (clientId: string) => void): () => void
   /** 客户端角色变化（Hub 断开旧连接，避免降权只对新请求生效）。 */
