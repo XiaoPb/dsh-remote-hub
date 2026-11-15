@@ -41,12 +41,15 @@ async function loadBuiltClientModule(relativeFile) {
     }
   }
   // 依赖的相对路径也要镜像过去（auth/ 子目录）。
+  // ⚠️ 每个镜像文件都要把 `@core/*` 改写成相对路径——只改目标文件会让
+  // 被依赖的模块（如 `lazy.js` 依赖的 `session.js`）解析失败。
   const authDir = join(directory, 'auth')
   await mkdir(authDir, { recursive: true })
-  for (const name of ['keyring', 'session']) {
+  const rewriteCore = (text, prefix) => text.replace(/from '@core\/([^']+)'/gu, (_match, rest) => `from '${prefix}/${rest}'`)
+  for (const name of ['keyring', 'session', 'lazy']) {
     try {
       const text = await readFile(new URL(`../.build/client/client/src/auth/${name}.js`, import.meta.url), 'utf8')
-      await writeFile(join(authDir, `${name}.js`), text, 'utf8')
+      await writeFile(join(authDir, `${name}.js`), rewriteCore(text, '../core/src'), 'utf8')
     } catch {
       // 缺失时由导入方报错，测试自然失败。
     }
@@ -56,7 +59,7 @@ async function loadBuiltClientModule(relativeFile) {
   await mkdir(join(target, '..'), { recursive: true })
   const depth = relativeFile.split('/').length - 1
   const corePrefix = `${'../'.repeat(depth)}core/src`
-  const rewritten = source.replace(/from '@core\/([^']+)'/gu, (_match, rest) => `from '${corePrefix}/${rest}'`)
+  const rewritten = rewriteCore(source, corePrefix)
   await writeFile(target, rewritten, 'utf8')
   try {
     return await import(pathToFileURL(target).href)
@@ -565,4 +568,26 @@ test('bindings are keyed by origin so two targets do not overwrite each other', 
   await ring.clearBinding('http://192.168.1.20:8443')
   assert.equal(await ring.loadBinding('http://192.168.1.20:8443'), null)
   assert.equal((await ring.loadBinding('http://127.0.0.1:3091')).clientId, 'c-a', '清除一个不能影响另一个')
+})
+
+test('lazy signer reads the per-origin binding on first use', async () => {
+  const lazyModule = await loadBuiltClientModule('auth/lazy.js')
+  const ring = keyring.createKeyring()
+  await ring.loadOrCreate()
+  const origin = 'http://peer.test:8443'
+  await ring.saveBinding({
+    clientId: 'c-lazy', keyId: 'k-lazy', lease: 'c-lazy.1.secret', generation: 1,
+    expiresAt: Date.now() + 3_600_000,
+  }, origin)
+
+  const signer = lazyModule.createLazySigner(origin, { keyring: ring })
+  assert.equal(signer.snapshot().lease, '', '未加载前不应有快照')
+  const headers = await signer.headers({ method: 'POST', path: '/remote/rpc', body: '{}' })
+  assert.equal(headers['x-hub-client-id'], 'c-lazy')
+  assert.match(headers['x-hub-signature'], /^[A-Za-z0-9+/=]+$/u)
+  assert.equal(signer.snapshot().lease, 'c-lazy.1.secret')
+
+  const missing = lazyModule.createLazySigner('http://never-trusted.test', { keyring: ring })
+  await assert.rejects(() => missing.headers({ method: 'POST', path: '/remote/rpc', body: '{}' }),
+    /尚未受信/u)
 })

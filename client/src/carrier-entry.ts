@@ -36,7 +36,7 @@ import {
  */
 type HostCarrierState =
   | { mode: 'local'; explicit: boolean }
-  | { mode: 'cloud'; origin: string; token: string; targetId?: string; deviceLabel?: string }
+  | { mode: 'cloud'; origin: string; token?: string; account?: boolean; targetId?: string; deviceLabel?: string }
 
 /**
  * 通过同源管理端点读取磁盘上的出站状态。
@@ -73,13 +73,16 @@ async function queryHostCarrierMode(): Promise<HostCarrierState> {
     if (raw === undefined) return { mode: 'local', explicit: false }
     if (raw.mode === 'local') return { mode: 'local', explicit: exists }
     if (raw.mode !== 'cloud') return { mode: 'local', explicit: false }
-    if (typeof raw.origin !== 'string' || typeof raw.token !== 'string') {
+    // 账号模式没有长期 token：只要有 origin + account 即可接管。
+    const account = raw.account === true
+    if (typeof raw.origin !== 'string' || (!account && typeof raw.token !== 'string')) {
       return { mode: 'local', explicit: false }
     }
     return {
       mode: 'cloud',
       origin: raw.origin,
-      token: raw.token,
+      ...(account ? { account: true } : {}),
+      ...(typeof raw.token === 'string' ? { token: raw.token } : {}),
       ...(typeof raw.targetId === 'string' && raw.targetId !== '' ? { targetId: raw.targetId } : {}),
       ...(typeof raw.deviceLabel === 'string' && raw.deviceLabel !== ''
         ? { deviceLabel: raw.deviceLabel }
@@ -163,13 +166,16 @@ function readHostCarrierModeSync(): HostCarrierState | null {
     if (raw === undefined) return { mode: 'local', explicit: false }
     if (raw.mode === 'local') return { mode: 'local', explicit: exists }
     if (raw.mode !== 'cloud') return { mode: 'local', explicit: false }
-    if (typeof raw.origin !== 'string' || typeof raw.token !== 'string') {
+    // 账号模式没有长期 token：只要有 origin + account 即可接管。
+    const account = raw.account === true
+    if (typeof raw.origin !== 'string' || (!account && typeof raw.token !== 'string')) {
       return { mode: 'local', explicit: false }
     }
     return {
       mode: 'cloud',
       origin: raw.origin,
-      token: raw.token,
+      ...(account ? { account: true } : {}),
+      ...(typeof raw.token === 'string' ? { token: raw.token } : {}),
       ...(typeof raw.targetId === 'string' && raw.targetId !== '' ? { targetId: raw.targetId } : {}),
       ...(typeof raw.deviceLabel === 'string' && raw.deviceLabel !== ''
         ? { deviceLabel: raw.deviceLabel }

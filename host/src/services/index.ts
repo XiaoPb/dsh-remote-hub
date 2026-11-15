@@ -118,6 +118,21 @@ export async function readCarrierFile(): Promise<{
   if (typeof value.targetId === 'string' && value.targetId !== '') {
     const target = await createOutboundTargetStore(dshHome()).get(value.targetId)
     if (target === undefined || target.origin !== value.origin) return { mode: { mode: 'local' }, at, exists: true }
+    if (target.account === true) {
+      // 账号模式：没有 bearer，凭据是浏览器里的「私钥 + 租约」。
+      return {
+        mode: {
+          mode: 'cloud',
+          origin: target.origin,
+          account: true,
+          targetId: target.id,
+          ...(target.deviceLabel === undefined ? {} : { deviceLabel: target.deviceLabel }),
+        },
+        at,
+        exists: true,
+      }
+    }
+    if (target.token === undefined) return { mode: { mode: 'local' }, at, exists: true }
     let resolvedAt = at
     if (typeof value.token === 'string') {
       resolvedAt = await writeCarrierFile({

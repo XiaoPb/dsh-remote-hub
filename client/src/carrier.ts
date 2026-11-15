@@ -44,6 +44,7 @@ import {
   type CarrierMode,
 } from '@core/carrier-contract.js'
 import { announcePermissionDenied } from './permission-notice.js'
+import { createLazySigner } from './auth/lazy.js'
 import { fetchWsTicket, type AuthSigner } from './auth/session.js'
 import { AUTH_HEADER, BEARER_SCHEME, ERROR_CODES, GUARD_ROUTES, HUB_PROTOCOL_HEADER, PROTOCOL_VERSION } from '@core/protocol.js'
 
@@ -252,7 +253,9 @@ export function createCarrier(options: CarrierOptions = {}): CarrierInstallResul
   const globalObject = (options.globalObject ?? (globalThis as unknown as CarrierGlobal))
 
   const mode = readMode()
-  if (mode.mode !== 'cloud' || mode.origin === undefined || mode.token === undefined) {
+  // 账号模式：没有长期 token，用「租约 + 每请求签名」。
+  const accountMode = mode.account === true
+  if (mode.mode !== 'cloud' || mode.origin === undefined || (!accountMode && mode.token === undefined)) {
     return {
       active: false,
       transport: undefined,
@@ -264,6 +267,9 @@ export function createCarrier(options: CarrierOptions = {}): CarrierInstallResul
 
   const guardOrigin = mode.origin.replace(/\/+$/u, '')
   const token = mode.token
+  // 账号模式：懒签名器（同步构造，首次签名时才读 IndexedDB）。
+  const signer = options.signer
+    ?? (accountMode && mode.origin !== undefined ? createLazySigner(mode.origin) : undefined)
   const snapshot = globalObject.__DSH_TRANSPORT__
   let fallbackDone = false
 
@@ -277,12 +283,12 @@ export function createCarrier(options: CarrierOptions = {}): CarrierInstallResul
   const ticketPool: string[] = []
   let ticketFetching = false
   async function ensureTickets(): Promise<void> {
-    if (options.signer === undefined || ticketFetching) return
+    if (signer === undefined || ticketFetching) return
     if (ticketPool.length >= 2) return
     ticketFetching = true
     try {
       while (ticketPool.length < 2) {
-        ticketPool.push(await fetchWsTicket(options.signer, guardOrigin, fetchImpl))
+        ticketPool.push(await fetchWsTicket(signer, guardOrigin, fetchImpl))
       }
     } catch {
       // 票据不可用：本次连接会以无 token 尝试，服务端 401，随后走既有降级路径。
@@ -291,7 +297,7 @@ export function createCarrier(options: CarrierOptions = {}): CarrierInstallResul
     }
   }
   function takeTicket(): string | undefined {
-    if (options.signer === undefined) return undefined
+    if (signer === undefined) return undefined
     const next = ticketPool.shift()
     void ensureTickets()
     return next
@@ -357,9 +363,9 @@ export function createCarrier(options: CarrierOptions = {}): CarrierInstallResul
     let response: Response
     try {
       // 账号认证模式：每次请求都带租约与客户端签名（正文参与摘要）。
-      const authBasis = options.signer === undefined
-        ? authHeaders(token)
-        : await options.signer.headers({
+      const authBasis = signer === undefined
+        ? authHeaders(token ?? '')
+        : await signer.headers({
           method: 'POST',
           path: GUARD_ROUTES.rpc,
           body: typeof init?.body === 'string' ? init.body : '',
@@ -414,7 +420,7 @@ export function createCarrier(options: CarrierOptions = {}): CarrierInstallResul
   const createWebSocket = (url: string): WebSocket => {
     // 账号认证模式：URL 里只放**一次性票据**（长期租约绝不进 URL）。
     const ticket = takeTicket()
-    const target = buildGuardWebSocketUrl(url, ticket ?? token)
+    const target = buildGuardWebSocketUrl(url, ticket ?? token ?? '')
     const factory = options.webSocketImpl ?? ((href: string) => new WebSocket(href))
     return factory(target)
   }

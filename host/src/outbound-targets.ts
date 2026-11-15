@@ -6,7 +6,17 @@ import { writeFileAtomic, withFileLock } from '@deepseek-ai/dsh-atomic-write'
 export interface OutboundTargetRecord {
   id: string
   origin: string
-  token: string
+  /**
+   * 旧版：长期 bearer（账号认证模式不再接受）。
+   *
+   * 账号模式的目标没有可用 bearer——凭据是「客户端私钥 + 租约」，私钥在浏览器
+   * IndexedDB 里，Host 档案只留 `account: true` + `accountId`（= 客户端 id）。
+   */
+  token?: string
+  /** 账号认证模式的目标。 */
+  account?: boolean
+  /** 账号模式下的客户端 id（= 目标端 auth client 的 clientId）。 */
+  accountId?: string
   deviceLabel?: string
   deviceId?: string
   role?: string
@@ -45,8 +55,17 @@ function parseTarget(value: unknown): OutboundTargetRecord {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new Error('outbound-targets: target must be an object')
   const row = value as Record<string, unknown>
   const origin = normalizeOrigin(row.origin)
-  if (typeof row.token !== 'string' || !TOKEN_RE.test(row.token)) throw new Error('outbound-targets: invalid bearer token')
-  const id = targetId(origin, row.token)
+  const account = row.account === true
+  const token = typeof row.token === 'string' ? row.token : undefined
+  if (account) {
+    if (typeof row.accountId !== 'string' || row.accountId === '') {
+      throw new Error('outbound-targets: account target requires accountId')
+    }
+    if (token !== undefined) throw new Error('outbound-targets: account target must not carry a bearer token')
+  } else if (token === undefined || !TOKEN_RE.test(token)) {
+    throw new Error('outbound-targets: invalid bearer token')
+  }
+  const id = targetId(origin, token ?? `account:${String(row.accountId)}`)
   if (row.id !== undefined && row.id !== id) throw new Error('outbound-targets: target id does not match credential')
   for (const field of ['deviceLabel', 'deviceId', 'role'] as const) {
     if (row[field] !== undefined && typeof row[field] !== 'string') throw new Error(`outbound-targets: invalid ${field}`)
@@ -56,7 +75,9 @@ function parseTarget(value: unknown): OutboundTargetRecord {
   return {
     id,
     origin,
-    token: row.token,
+    ...(account
+      ? { account: true, accountId: row.accountId as string }
+      : { token: token as string }),
     ...(typeof row.deviceLabel === 'string' ? { deviceLabel: row.deviceLabel } : {}),
     ...(typeof row.deviceId === 'string' ? { deviceId: row.deviceId } : {}),
     ...(typeof row.role === 'string' ? { role: row.role } : {}),
