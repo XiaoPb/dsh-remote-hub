@@ -31,6 +31,8 @@ import {
 import type { IssuedDeviceToken } from '@core/device.js'
 import type { RoleName } from '@core/roles.js'
 
+import type { AuthSigner } from './auth/session.js'
+
 /** 官方 `client-request` 信封。 */
 export interface ClientRequestEnvelope {
   type: 'client-request'
@@ -170,6 +172,15 @@ export interface TransportOptions {
    * 设为空字符串可强制关闭（仅用于测试守卫直连路径）。
    */
   adminChannel?: string
+  /**
+   * 账号认证签名器（`client/src/auth/session.ts`）。
+   *
+   * 给出时：每个 Hub 请求都附带「租约 + 客户端签名」，**不再**发送设备令牌。
+   * 与 `token` 互斥——账号认证模式下长期 bearer 令牌在服务端也会被拒绝。
+   */
+  signer?: AuthSigner
+  /** 租约到期前的后台轮换（默认启用；需要 `signer`）。 */
+  autoRenew?: boolean
 }
 
 /** 一条已配对设备（守卫 `/remote/devices` 的返回行）。 */
@@ -343,6 +354,32 @@ export function createTransport(options: TransportOptions): RemoteTransport {
     ...(token === undefined ? {} : { [AUTH_HEADER]: `${BEARER_SCHEME} ${token}` }),
   })
 
+  /**
+   * 认证头：账号认证模式下由签名器生成（租约 + 签名），否则退回设备令牌。
+   * @param path - 请求路径（签名只覆盖 pathname）。
+   * @param method - HTTP 方法。
+   * @param body - 请求正文。
+   * @returns 要合并进请求的头。
+   */
+  const authHeadersFor = async (path: string, method: string, body: string): Promise<Record<string, string>> => {
+    if (options.signer !== undefined) {
+      return options.signer.headers({ method, path, body })
+    }
+    return token === undefined ? {} : { [AUTH_HEADER]: `${BEARER_SCHEME} ${token}` }
+  }
+
+  // 租约到期前静默轮换：7 天周期，用户不会被要求重新登录/重输 2FA。
+  if (options.signer !== undefined && options.autoRenew !== false) {
+    const timer = setInterval(() => {
+      if (closed) return
+      if (!options.signer!.needsRenewal()) return
+      void options.signer!.renew().catch(() => {
+        // 轮换失败（例如客户端已被撤销）由下一次请求的 401 处理。
+      })
+    }, 60 * 60 * 1000)
+    ;(timer as { unref?: () => void }).unref?.()
+  }
+
   const handleUnauthorized = (): void => {
     token = undefined
     if (unauthorizedCalled) return
@@ -403,7 +440,11 @@ export function createTransport(options: TransportOptions): RemoteTransport {
     try {
       response = await fetchImpl(url, {
         method: init.method,
-        headers: { ...baseHeaders(), ...(init.headers ?? {}) },
+        headers: {
+          ...baseHeaders(),
+          ...(await authHeadersFor(path, init.method, init.body ?? '')),
+          ...(init.headers ?? {}),
+        },
         ...(init.body === undefined ? {} : { body: init.body }),
       })
     } catch (cause) {

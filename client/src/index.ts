@@ -48,6 +48,26 @@ export { applyCloudPaths } from './paths/mount.js'
 export { cloudPathContext, pathRpc, OPEN_REMOTE_FILES, RemoteFilesDialog, RemoteDirectoryFlow } from './paths/index.js'
 export type { CloudPathContext, DirectoryListing, WorkspaceListing, PathEntry } from './paths/context.js'
 
+// 账号认证（客户端密钥环 / 每请求签名 / 租约轮换 / 认证面 API）。
+export {
+  createKeyring,
+  generateClientIdentity,
+  signPayload,
+  sha256Hex,
+  subtleCrypto,
+} from './auth/keyring.js'
+export type { ClientIdentity, KeyringBackend } from './auth/keyring.js'
+export {
+  createAuthSigner,
+  fetchWsTicket,
+  leaseFromGrant,
+  leaseExpired,
+  DEFAULT_LEASE_TTL_MS,
+} from './auth/session.js'
+export type { AuthSigner, AuthSignerOptions, LeaseState, SignInput } from './auth/session.js'
+export { createAuthApi, AuthApiError } from './auth/api.js'
+export type { AuthApi, AuthApiOptions } from './auth/api.js'
+
 /**
  * 必需服务。
  *
