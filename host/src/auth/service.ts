@@ -37,6 +37,7 @@ import {
   AUTH_ERROR_CODES,
   AUTH_HEADERS,
   DEFAULT_PASSWORD_POLICY,
+  LEASE_RENEW_WINDOW_MS,
   LEASE_TTL_MS,
   MFA_TRUST_WINDOW_MS,
   PROOF_MAX_SKEW_MS,
@@ -1344,6 +1345,11 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       if (!verdict.ok) return { error: verdict.code, reason: verdict.reason }
       if (verdict.client.keyId !== input.keyId) {
         return { error: AUTH_ERROR_CODES.proofInvalid, reason: 'key mismatch' }
+      }
+      // 只在到期前 24h 内允许续租：过早续租等于无限滑动会话，客户端应等到窗口再换。
+      const expiresAt = verdict.client.leaseExpiresAt
+      if (expiresAt !== null && now() < expiresAt - LEASE_RENEW_WINDOW_MS) {
+        return { error: AUTH_ERROR_CODES.leaseNotExpired, reason: 'lease still outside the renewal window' }
       }
       return rotateLease(verdict.client)
     },

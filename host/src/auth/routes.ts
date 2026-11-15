@@ -163,6 +163,7 @@ function statusFor(code: string): number {
       return 404
     case AUTH_ERROR_CODES.accountExists:
     case AUTH_ERROR_CODES.lastAdmin:
+    case AUTH_ERROR_CODES.leaseNotExpired:
       return 409
     case AUTH_ERROR_CODES.rateLimited:
       return 429

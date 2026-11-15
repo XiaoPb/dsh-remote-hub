@@ -346,7 +346,7 @@ test('signed requests verify; replays and tampering are refused', { skip: !dynam
 })
 
 test('seven-day leases rotate, old generation is rejected and revokes the client', { skip: !dynamic }, async () => {
-  const { service, dir, sessionCookie } = await bootstrappedService('lease')
+  const { service, store, dir, sessionCookie, now } = await bootstrappedService('lease')
   try {
     const key = clientKeyPair()
     const enrolled = await service.enroll(sessionCookie, {
@@ -355,7 +355,7 @@ test('seven-day leases rotate, old generation is rejected and revokes the client
     const audience = '127.0.0.1:8443'
     const bodyDigest = createHash('sha256').update('').digest('hex')
     const signedHeaders = (generation, nonce) => {
-      const timestamp = String(Date.now())
+      const timestamp = String(now())
       const payload = auth.buildProofPayload({
         method: 'POST', path: '/remote-auth/lease', audience, timestamp, nonce,
         clientId: enrolled.client.clientId, keyId: enrolled.client.keyId, generation, bodyDigest,
@@ -369,6 +369,11 @@ test('seven-day leases rotate, old generation is rejected and revokes the client
         'x-hub-signature': key.sign(payload),
       }
     }
+    // 续租窗口是到期前 24h：直接把租约到期时间挪进窗口，避免推进时钟让会话闲置过期。
+    await store.mutate((data) => {
+      const row = data.clients.find(item => item.clientId === enrolled.client.clientId)
+      if (row !== undefined) row.leaseExpiresAt = now() + 60_000
+    })
     const renewed = await service.renewLease({
       lease: enrolled.lease.lease,
       keyId: enrolled.client.keyId,
@@ -890,5 +895,64 @@ test('raising a ceiling takes effect on the very next request', { skip: !dynamic
     assert.equal(after.claims.activeRole, 'full')
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('leases renew only inside the window and the old one dies', { skip: !dynamic }, async () => {
+  const env = await bootstrappedService('lease-renew')
+  try {
+    const key = clientKeyPair()
+    const enrolled = await env.service.enroll(env.sessionCookie, {
+      label: 'browser', clientType: 'browser', publicKey: key.jwk, roleCeiling: 'control',
+    })
+    const audience = '127.0.0.1:8443'
+    const bodyDigest = createHash('sha256').update('{}').digest('hex')
+    const proofFor = (path, generation) => {
+      const timestamp = String(env.now())
+      const nonce = `n${Math.random().toString(36).slice(2, 12)}`
+      const payload = auth.buildProofPayload({
+        method: 'POST', path, audience, timestamp, nonce,
+        clientId: enrolled.client.clientId, keyId: enrolled.client.keyId, generation, bodyDigest,
+      })
+      return {
+        'x-hub-client-id': enrolled.client.clientId,
+        'x-hub-key-id': enrolled.client.keyId,
+        'x-hub-ts': timestamp,
+        'x-hub-nonce': nonce,
+        'x-hub-body-sha256': bodyDigest,
+        'x-hub-signature': key.sign(payload),
+      }
+    }
+    const renew = (lease, generation) => env.service.renewLease({
+      lease, keyId: enrolled.client.keyId, generation,
+      proofHeaders: proofFor('/remote/auth/lease', generation),
+      audience, method: 'POST', path: '/remote/auth/lease', bodyDigest,
+    })
+    const verify = (lease, generation) => env.service.verifyHubRequest({
+      lease: `Bearer ${lease}`, method: 'POST', path: '/remote/rpc', audience, bodyDigest,
+      headers: proofFor('/remote/rpc', generation),
+    })
+
+    // 刚签发：不在续租窗口内。
+    const early = await renew(enrolled.lease.lease, enrolled.lease.generation)
+    assert.equal(early.error, 'auth-lease-not-expired')
+
+    // 进入到期前 24h（7 天 TTL 的第 6 天）。
+    env.advanceMs(6 * 24 * 3600 * 1000 + 3600 * 1000)
+    const renewed = await renew(enrolled.lease.lease, enrolled.lease.generation)
+    assert.equal('error' in renewed, false, JSON.stringify(renewed))
+    assert.equal(renewed.generation, enrolled.lease.generation + 1)
+    assert.ok(renewed.expiresAt > env.now())
+
+    // 新租约先验证可用（旧代次一旦被判定为重放，会连带撤销客户端）。
+    const fresh = await verify(renewed.lease, renewed.generation)
+    assert.equal(fresh.ok, true, fresh.ok ? '' : fresh.reason)
+    // 旧租约重放 → 拒绝，并撤销该客户端（随后新租约也失效）。
+    const stale = await verify(enrolled.lease.lease, enrolled.lease.generation)
+    assert.equal(stale.ok, false)
+    const afterRevoke = await verify(renewed.lease, renewed.generation)
+    assert.equal(afterRevoke.ok, false, '重放检测应撤销客户端')
+  } finally {
+    rmSync(env.dir, { recursive: true, force: true })
   }
 })

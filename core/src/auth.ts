@@ -85,6 +85,8 @@ export const AUTH_ERROR_CODES = {
   clientInvalid: 'auth-client-invalid',
   /** 租约过期或已轮换。 */
   leaseExpired: 'auth-lease-expired',
+  /** 还没到续租窗口（距到期超过 24h）。 */
+  leaseNotExpired: 'auth-lease-not-expired',
   /** 请求签名不合法（含时间戳漂移、nonce 重放、正文摘要不符）。 */
   proofInvalid: 'auth-proof-invalid',
   /** 请求角色超出该客户端的上限。 */
@@ -337,6 +339,8 @@ export const PROOF_MAX_SKEW_MS = 120_000
 export const PROOF_NONCE_TTL_MS = 10 * 60_000
 
 /** 7 天租约（固定语义；后台在此周期轮换）。 */
+export const LEASE_RENEW_WINDOW_MS = 24 * 60 * 60 * 1000
+
 export const LEASE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 /** 浏览器会话默认有效期（7 天；与租约同周期但不是同一凭据）。 */
