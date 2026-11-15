@@ -662,9 +662,14 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
         mfaEnabled: requireMfa,
         totpEnabled: account?.totp?.verified === true,
         session: session?.view ?? null,
-        username: account?.username ?? null,
-        // 策略是部署事实，不敏感：登录页/引导页据此显示规则清单。
-        passwordPolicy: currentPolicy(),
+        // 匿名请求只给「能不能登录」所需的事实：账号名与口令策略属于
+        // 已认证信息，不该向未登录访客暴露（P5）。
+        ...(session === null
+          ? {}
+          : {
+            username: account?.username ?? null,
+            passwordPolicy: currentPolicy(),
+          }),
       }
       if (session !== null) {
         base.clients = store.data.clients.map(clientView)

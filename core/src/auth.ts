@@ -179,8 +179,8 @@ export interface AuthStatusResponse {
   totpEnabled?: boolean
   /** 当前浏览器会话；未登录为 null。 */
   session: AuthSessionView | null
-  /** 当前账号名（未引导时为 null）。 */
-  username: string | null
+  /** 当前账号名；**匿名请求不返回**（仅已登录时有值）。 */
+  username?: string | null
   /** 该账号已信任的客户端（仅已登录时返回）。 */
   clients?: readonly TrustedClientView[]
   /**

@@ -388,6 +388,8 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
   // socket 地址恒为回环、且伪造了 Host 头，也过不了签发端（§9.3 第 1 条的补强）。
   const pairIssueToken = deps.pairIssueToken ?? randomBytes(32).toString('base64url')
   const limiter = new RedeemLimiter(LIMITS.pairRedeemPerMinute)
+  /** 认证面（login/mfa/bootstrap）的来源限流：与配对预算分开计。 */
+  const authLimiter = new RedeemLimiter(LIMITS.pairRedeemPerMinute)
   const rpcSlots = new DeviceSemaphore(LIMITS.maxInflightRequestsPerDevice)
   const protocol = 'http:' as const
   const sockets = new Set<import('node:net').Socket>()
@@ -560,6 +562,17 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
 
       // ③.5 认证面：交给认证插件提供的处理器（头会话，无 Cookie 依赖）。
       if (isAuthPath && deps.authHttp !== undefined) {
+        // login / mfa / bootstrap 是暴力破解面：按来源限流；status 不消耗预算。
+        const isAttempt = path.endsWith('/login') || path.endsWith('/mfa') || path.endsWith('/bootstrap')
+        if (isAttempt) {
+          const source = req.socket.remoteAddress ?? 'unknown'
+          if (!authLimiter.allow(source)) {
+            deps.metrics?.countAuthDenied()
+            audit('auth-surface-throttled', { path })
+            reject(res, rpcId, failure(ERROR_CODES.rateLimited, 429, 'too many authentication attempts'))
+            return
+          }
+        }
         await deps.authHttp.handle(req, res)
         return
       }

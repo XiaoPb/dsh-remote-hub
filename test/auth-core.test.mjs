@@ -664,3 +664,20 @@ test('idle sessions expire before their absolute TTL', { skip: !dynamic }, async
     rmSync(env.dir, { recursive: true, force: true })
   }
 })
+
+test('anonymous status hides the account name and password policy', { skip: !dynamic }, async () => {
+  const env = await bootstrappedService('status-anon')
+  try {
+    const anonymous = await env.service.status(undefined)
+    assert.equal(anonymous.bootstrapped, true)
+    assert.equal(anonymous.session, null)
+    assert.equal(anonymous.username, undefined, '匿名请求不应泄露账号名')
+    assert.equal(anonymous.passwordPolicy, undefined, '匿名请求不应泄露口令策略')
+
+    const authed = await env.service.status(env.sessionCookie)
+    assert.equal(authed.username, 'owner')
+    assert.equal(authed.passwordPolicy, 'strong')
+  } finally {
+    rmSync(env.dir, { recursive: true, force: true })
+  }
+})
