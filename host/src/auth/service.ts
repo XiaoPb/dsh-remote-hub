@@ -1273,8 +1273,10 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       await store.mutate((data) => {
         const row = data.clients.find(item => item.clientId === clientId)
         if (row === undefined) return
+        // 上限变化即生效：抬高时把当前角色一并抬到新上限（否则「改了上限却没权限」），
+        // 降低时收敛到新上限。
+        if (row.roleCeiling !== role) row.activeRole = role
         row.roleCeiling = role
-        if (!roleAtMost(row.activeRole, role)) row.activeRole = role
       })
       const next = store.data.clients.find(row => row.clientId === clientId)!
       for (const listener of [...roleListeners]) listener(clientId, next.activeRole)

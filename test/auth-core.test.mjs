@@ -845,3 +845,50 @@ test('creating an account without a password returns a one-time password', { ski
     rmSync(env.dir, { recursive: true, force: true })
   }
 })
+
+test('raising a ceiling takes effect on the very next request', { skip: !dynamic }, async () => {
+  const { service, dir, sessionCookie } = await bootstrappedService('ceiling-instant')
+  try {
+    const key = clientKeyPair()
+    const enrolled = await service.enroll(sessionCookie, {
+      label: 'browser', clientType: 'browser', publicKey: key.jwk, roleCeiling: 'control',
+    })
+    const audience = '127.0.0.1:8443'
+    const bodyDigest = createHash('sha256').update('{}').digest('hex')
+    const prove = () => {
+      const timestamp = String(Date.now())
+      const nonce = `n${Math.random().toString(36).slice(2, 12)}`
+      const payload = auth.buildProofPayload({
+        method: 'POST', path: '/remote/rpc', audience, timestamp, nonce,
+        clientId: enrolled.client.clientId, keyId: enrolled.client.keyId,
+        generation: enrolled.lease.generation, bodyDigest,
+      })
+      return {
+        'x-hub-client-id': enrolled.client.clientId,
+        'x-hub-key-id': enrolled.client.keyId,
+        'x-hub-ts': timestamp,
+        'x-hub-nonce': nonce,
+        'x-hub-body-sha256': bodyDigest,
+        'x-hub-signature': key.sign(payload),
+      }
+    }
+    const call = () => service.verifyHubRequest({
+      lease: `Bearer ${enrolled.lease.lease}`, method: 'POST', path: '/remote/rpc', audience, bodyDigest, headers: prove(),
+    })
+
+    const before = await call()
+    assert.equal(before.ok, true, before.ok ? '' : before.reason)
+    assert.equal(before.claims.activeRole, 'control')
+
+    const raised = await service.setRoleCeiling(sessionCookie, enrolled.client.clientId, 'full')
+    assert.equal(raised.roleCeiling, 'full')
+    assert.equal(raised.activeRole, 'full', '抬高上限应立即生效到当前角色')
+
+    // 同一个租约、下一个请求就按新角色放行（不需要重新信任）。
+    const after = await call()
+    assert.equal(after.ok, true, after.ok ? '' : after.reason)
+    assert.equal(after.claims.activeRole, 'full')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
