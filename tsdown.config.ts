@@ -47,6 +47,7 @@ const PKG_ID = (
 const HOST_CORE = fileURLToPath(new URL('./.build/host/core/src/', import.meta.url))
 const CLIENT_CORE = fileURLToPath(new URL('./.build/client/core/src/', import.meta.url))
 const HOST_ENTRY = fileURLToPath(new URL('./.build/host/host/src/index.js', import.meta.url))
+const AUTH_ENTRY = fileURLToPath(new URL('./.build/host/host/src/auth-entry.js', import.meta.url))
 const CLIENT_ENTRY = fileURLToPath(new URL('./.build/client/client/src/index.js', import.meta.url))
 
 /** `@core/x.js` → emit 后的 core 目录。 */
@@ -91,6 +92,20 @@ export default defineConfig([
     alias: aliasFor(HOST_CORE),
     deps: { neverBundle: nodeExternal, alwaysBundle: (s: string) => !nodeExternal(s) },
     outputOptions: { entryFileNames: 'index.js' },
+  },
+  {
+    name: 'dsh-remote-hub/auth',
+    entry: { auth: AUTH_ENTRY },
+    outDir: 'lib',
+    format: 'esm',
+    platform: 'node',
+    target: 'es2024',
+    fixedExtension: false,
+    dts: false,
+    clean: false,
+    alias: aliasFor(HOST_CORE),
+    deps: { neverBundle: nodeExternal, alwaysBundle: (s: string) => !nodeExternal(s) },
+    outputOptions: { entryFileNames: 'auth.js' },
   },
   {
     // 第一段：carrier 独立 IIFE（bundle 顶层执行）。必须先于 client 打包。

@@ -26,6 +26,7 @@ import {
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 export const PATHS = Object.freeze({
   lib: join(ROOT, 'lib', 'index.js'),
+  auth: join(ROOT, 'lib', 'auth.js'),
   packageJson: join(ROOT, 'package.json'),
   coreSrc: join(ROOT, 'core', 'src'),
   hostSrc: join(ROOT, 'host', 'src'),
@@ -53,6 +54,19 @@ export async function testLoadLib() {
   if (!existsSync(PATHS.lib)) return {}
   try {
     return await import('../lib/index.js')
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * `lib/auth.js`（认证插件入口）命名空间，或 `{}`。
+ * 与 `testLoadLib` 同样在不存在的构建下退化为静态断言，不崩。
+ */
+export async function testLoadAuth() {
+  if (!existsSync(PATHS.auth)) return {}
+  try {
+    return await import('../lib/auth.js')
   } catch {
     return {}
   }
