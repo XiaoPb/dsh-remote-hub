@@ -58,6 +58,17 @@ export interface SectionProps extends Testable {
   desc?: React.ReactNode
   /** 是否套一层卡片（设置页用；设备页区块自带卡片时可关掉）。 */
   card?: boolean
+  /**
+   * 可收起：标题右上角出现展开/收起按钮，内容默认收起（摘要行仍在）。
+   * 设置页的每个卡片都用这个，避免一屏塞满。
+   */
+  collapsible?: boolean
+  /** 当前是否已展开（受控；`collapsible` 时由页面状态决定）。 */
+  expanded?: boolean
+  /** 展开 / 收起回调（受控时必给）。 */
+  onToggle?: () => void
+  /** 收起时在标题行右侧显示的摘要（如「2 个客户端」「已启用」）。 */
+  summary?: React.ReactNode
   tone?: 'default' | 'danger'
   className?: string
   children?: React.ReactNode
@@ -74,6 +85,10 @@ export function Section({
   actions,
   desc,
   card = true,
+  collapsible = false,
+  expanded = true,
+  onToggle,
+  summary,
   tone = 'default',
   className,
   children,
@@ -82,24 +97,53 @@ export function Section({
   // 标题 / 描述 / 操作区里经常直接塞组件元素（`Pill` / `Button` / `Segmented`）。
   // 用 Fragment 包住即可在**渲染树**里原地展开，页面渲染函数仍是纯函数
   // （不实例化子组件），测试也能按 `data-testid` 直接找到它们。
+  const open = !collapsible || expanded
+  const toggle = collapsible
+    ? React.createElement('button', {
+      type: 'button',
+      className: 'rh-section-toggle',
+      'data-testid': 'section-toggle',
+      'aria-expanded': open ? 'true' : 'false',
+      title: open ? '收起' : '展开',
+      'aria-label': open ? '收起' : '展开',
+      onClick: () => { onToggle?.() },
+    }, React.createElement('span', { className: 'rh-caret', 'aria-hidden': 'true' }))
+    : null
   const head = React.createElement('div', { className: 'rh-section-head' },
     React.createElement('h2', { className: 'rh-section-title' },
       React.createElement(React.Fragment, null, title)),
-    actions === undefined || actions === null
-      ? null
-      : React.createElement('div', { className: 'rh-section-actions' },
-        React.createElement(React.Fragment, null, actions)))
+    React.createElement('div', { className: 'rh-section-actions' },
+      // 收起时把摘要露出来（如「2 个客户端」），展开时换成操作区。
+      collapsible && !open && summary !== undefined && summary !== null
+        ? React.createElement('span', { className: 'rh-section-summary' }, summary)
+        : null,
+      open && actions !== undefined && actions !== null
+        ? React.createElement(React.Fragment, null, actions)
+        : null,
+      toggle))
   const body = React.createElement(React.Fragment, null,
     head,
-    desc === undefined || desc === null
-      ? null
-      : React.createElement('p', { className: 'rh-section-desc' }, React.createElement(React.Fragment, null, desc)),
-    children === undefined || children === null
-      ? null
-      : React.createElement('div', { className: 'rh-section-body' }, React.createElement(React.Fragment, null, children)))
+    open
+      ? React.createElement(React.Fragment, null,
+        desc === undefined || desc === null
+          ? null
+          : React.createElement('p', { className: 'rh-section-desc' }, React.createElement(React.Fragment, null, desc)),
+        children === undefined || children === null
+          ? null
+          : React.createElement('div', { className: 'rh-section-body' }, React.createElement(React.Fragment, null, children)))
+      : null)
   return React.createElement(card ? 'section' : 'div', {
     ...rest,
-    className: cx('rh-section', card && 'is-card', card && 'rh-card', tone === 'danger' && 'is-danger', className),
+    className: cx(
+      'rh-section',
+      card && 'is-card',
+      card && 'rh-card',
+      collapsible && 'is-collapsible',
+      collapsible && !open && 'is-collapsed',
+      tone === 'danger' && 'is-danger',
+      className,
+    ),
+    ...(collapsible ? { 'data-collapsed': open ? 'false' : 'true' } : {}),
   }, body)
 }
 

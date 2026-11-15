@@ -114,7 +114,13 @@ export interface AccountPageState {
   /** 对端账号（出站信任记录）——与本机账号是两套身份。 */
   peers: readonly PeerAccountRow[]
   /**
-   * 子账号管理（区块 G，admin only）。
+   * 各区块的展开状态（设置页每张卡片默认收起，点标题右上角的按钮展开）。
+   *
+   * 键是区块 id（`local-account` / `totp-section` / `sub-accounts` …）。
+   * 缺省（旧调用方）时按「全部收起」处理。
+   */
+  expanded?: Readonly<Record<string, boolean>>
+  /** 子账号管理（区块 G，admin only）。
    *
    * 缺省（旧调用方）时按「非 admin / 未加载」渲染，不出现区块 G。
    */
@@ -176,6 +182,11 @@ export interface AccountPageActions {
   onSetCeiling(clientId: string, role: RoleName): void
   onLogout(): void
   onRefresh(): void
+  /**
+   * 展开 / 收起某个区块（设置页每张卡片默认收起）。
+   * @param sectionId - 区块的 `data-testid`（如 `totp-section`）。
+   */
+  onToggleSection?(sectionId: string): void
   // ── 区块 G：子账号（admin only）───────────────────────────────────────────
   /** 展开 / 收起新建表单。 */
   onSubCreateOpen?(open: boolean): void
@@ -224,30 +235,98 @@ const LEAD = '管理本机 DSH 的登录、安全策略与设备信任；之后�
 
 /**
  * 页头：`account-title` 始终存在（`plan-settings.md §5`）。
+ *
+ * 标题随阶段变化（登录 / 两步验证 / 设置新口令 / 登录与账号），但 testid 不变。
+ * 副标题只在登录前的阶段显示：进入 ready 后顶部已经有账号 pill、步骤条和
+ * 区块摘要，再放一整段说明会把 top 区域撑空。
  * @param title - 主标题。
+ * @param lead - 是否显示副标题。
  * @returns 页头节点。
  */
-function pageHead(title = '登录与账号'): React.ReactElement {
-  return React.createElement('header', { className: 'rh-page-head' },
-    React.createElement('h1', { className: 'rh-h1', 'data-testid': 'account-title' }, title),
-    React.createElement('p', { className: 'rh-lead' }, LEAD))
+function pageHead(title: string = '登录与账号', lead = false): React.ReactElement {
+  return React.createElement('header', { className: cx('rh-page-head', !lead && 'is-compact') },
+    React.createElement('div', { className: 'rh-page-head-row' },
+      React.createElement('h1', { className: 'rh-h1', 'data-testid': 'account-title' }, title),
+      lead ? null : React.createElement('span', { className: 'rh-page-head-hint' }, '账号、两步验证与设备信任')),
+    lead ? React.createElement('p', { className: 'rh-lead' }, LEAD) : null)
 }
 
-/** 页面根容器：注入 token 样式表 + `data-testid="account-page"`。 */
+/** 登录流程的三步（`plan-settings.md §2` 的状态矩阵收敛为一条路径）。 */
+const STEPS: readonly { key: 'login' | 'verify' | 'ready'; label: string }[] = [
+  { key: 'login', label: '账号口令' },
+  { key: 'verify', label: '两步验证' },
+  { key: 'ready', label: '账号设置' },
+]
+
+/**
+ * 当前阶段落在哪一步：`bootstrap` / `change-password` 属于第一步（还没进门），
+ * `mfa` 是第二步，其余（`ready`）是第三步。`loading` / `error` 不显示步骤条。
+ * @param phase - 页面阶段。
+ * @returns 步骤索引；null = 不显示。
+ */
+function stepIndex(phase: AccountPhase): number | null {
+  if (phase === 'loading' || phase === 'error') return null
+  if (phase === 'mfa') return 1
+  if (phase === 'ready') return 2
+  return 0
+}
+
+/**
+ * 步骤条：一次只走一步（输入账号口令 → 两步验证 → 进入设置）。
+ * @param phase - 页面阶段。
+ * @param busy - 是否进行中（决定哪一步是 active）。
+ * @returns 步骤条节点。
+ */
+function stepBar(phase: AccountPhase): React.ReactElement | null {
+  const current = stepIndex(phase)
+  if (current === null) return null
+  return React.createElement('ol', {
+    className: 'rh-steps',
+    'data-testid': 'account-steps',
+    'data-step': String(current + 1),
+    'aria-label': '登录步骤',
+  }, STEPS.map((step, index) => React.createElement('li', {
+    key: step.key,
+    className: cx(
+      'rh-step',
+      index < current && 'is-done',
+      index === current && 'is-current',
+    ),
+    'data-step-key': step.key,
+    'aria-current': index === current ? 'step' : undefined,
+  },
+  React.createElement('span', { className: 'rh-step-no' }, index < current ? '✓' : String(index + 1)),
+  React.createElement('span', { className: 'rh-step-label' }, step.label))))
+}
+
+/**
+ * 页面根容器：注入 token 样式表 + 自带的滚动容器 + `data-testid="account-page"`。
+ *
+ * 滚动：设置页宿主（DSH Settings 弹窗）高度不可控，内容又很长（ready 态约 3600px），
+ * 所以页面自己成为**唯一**滚动容器（`rh-root rh-scroll`），页头与步骤条吸顶。
+ * @param phase - 页面阶段。
+ * @param children - 内容。
+ * @param options - 主题与宽度。
+ * @returns 根节点。
+ */
 function pageRoot(
   phase: AccountPhase,
   children: React.ReactNode,
-  options: { narrow?: boolean; theme?: 'dark' | 'light' } = {},
+  options: { narrow?: boolean; theme?: 'dark' | 'light'; title?: string; lead?: boolean } = {},
 ): React.ReactElement {
   return React.createElement('div', {
-    className: cx('rh-root', 'rh-embed'),
+    className: cx('rh-root', 'rh-scroll', 'rh-settings'),
     'data-testid': 'account-page',
     'data-phase': phase,
     'data-rh-scope': '',
     ...(options.theme === undefined ? {} : { 'data-theme': options.theme }),
   },
   ThemeStyle(RH_CSS),
-  React.createElement('div', { className: cx('rh-shell', options.narrow !== false && 'rh-narrow') }, children))
+  React.createElement('div', { className: cx('rh-shell', options.narrow !== false && 'rh-narrow') },
+    React.createElement('div', { className: 'rh-page-sticky' },
+      pageHead(options.title, options.lead === true),
+      stepBar(phase)),
+    React.createElement('div', { className: 'rh-page-body', 'data-testid': 'account-body' }, children)))
 }
 
 /**
@@ -367,26 +446,28 @@ function renderClientRow(
       ? '无租约'
       : `租约 ${formatRelative(client.leaseExpiresAt, Date.now()).replace('前', '后')}到期`),
   React.createElement('div', { className: 'rh-item-actions' },
-    React.createElement(Select, {
-      'data-testid': 'client-role-select',
-      ariaLabel: `客户端 ${client.label} 的当前角色`,
-      value: client.activeRole,
-      disabled: revoked || state.busy,
-      options: ROLE_NAMES.map(role => ({ value: role, label: roleOptionLabel(role) })),
-      onChange: (event: React.ChangeEvent<HTMLSelectElement>) => {
-        actions.onSetRole(client.clientId, event.currentTarget.value as RoleName)
-      },
-    }),
-    React.createElement(Select, {
-      'data-testid': 'client-ceiling-select',
-      ariaLabel: `客户端 ${client.label} 的权限上限`,
-      value: client.roleCeiling,
-      disabled: revoked || state.busy,
-      options: ROLE_NAMES.map(role => ({ value: role, label: `上限 ${roleOptionLabel(role)}` })),
-      onChange: (event: React.ChangeEvent<HTMLSelectElement>) => {
-        actions.onSetCeiling(client.clientId, event.currentTarget.value as RoleName)
-      },
-    }),
+    // 两个下拉框并排两列（plan-settings §2.7 E）；撤销按钮在右侧独立。
+    React.createElement('div', { className: 'rh-select-pair' },
+      React.createElement(Select, {
+        'data-testid': 'client-role-select',
+        ariaLabel: `客户端 ${client.label} 的当前角色`,
+        value: client.activeRole,
+        disabled: revoked || state.busy,
+        options: ROLE_NAMES.map(role => ({ value: role, label: roleOptionLabel(role) })),
+        onChange: (event: React.ChangeEvent<HTMLSelectElement>) => {
+          actions.onSetRole(client.clientId, event.currentTarget.value as RoleName)
+        },
+      }),
+      React.createElement(Select, {
+        'data-testid': 'client-ceiling-select',
+        ariaLabel: `客户端 ${client.label} 的权限上限`,
+        value: client.roleCeiling,
+        disabled: revoked || state.busy,
+        options: ROLE_NAMES.map(role => ({ value: role, label: `上限 ${roleOptionLabel(role)}` })),
+        onChange: (event: React.ChangeEvent<HTMLSelectElement>) => {
+          actions.onSetCeiling(client.clientId, event.currentTarget.value as RoleName)
+        },
+      })),
     React.createElement(Button, {
       'data-testid': 'revoke-client',
       variant: 'danger',
@@ -639,21 +720,18 @@ export function renderAccountPage(
 
   if (state.phase === 'loading') {
     return pageRoot('loading', React.createElement(React.Fragment, null,
-      pageHead(),
       React.createElement('section', { className: 'rh-card', 'data-testid': 'account-loading', 'aria-busy': 'true' },
         React.createElement(Skeleton, { lines: 3 }))))
   }
 
   if (state.phase === 'error') {
     return pageRoot('error', React.createElement(React.Fragment, null,
-      pageHead(),
       React.createElement(Notice, { tone: 'error', children: React.createElement('span', { 'data-testid': 'account-error' }, state.notice ?? '认证服务不可用') }),
       React.createElement(Button, { variant: 'primary', children: '重试', onClick: () => actions.onRefresh() })))
   }
 
   if (state.phase === 'bootstrap') {
     return pageRoot('bootstrap', React.createElement(React.Fragment, null,
-      pageHead('创建管理员账号'),
       React.createElement(Notice, {
         'data-testid': 'bootstrap-hint',
         tone: 'info',
@@ -697,12 +775,11 @@ export function renderAccountPage(
             children: state.busy ? '创建中…' : '创建管理员',
             onClick: () => actions.onSubmitBootstrap(draft.username.trim(), draft.password),
           })),
-      })))
+      })), { title: '创建管理员账号', lead: true })
   }
 
   if (state.phase === 'login') {
     return pageRoot('login', React.createElement(React.Fragment, null,
-      pageHead('登录'),
       React.createElement(Section, {
         title: '欢迎回来',
         desc: '登录这台 DSH，继续管理设备与账号。',
@@ -743,12 +820,11 @@ export function renderAccountPage(
           state.notice === null
             ? null
             : React.createElement(Notice, { 'data-testid': 'login-notice', tone: 'error', children: state.notice })),
-      })))
+      })), { title: '登录', lead: true })
   }
 
   if (state.phase === 'mfa') {
     return pageRoot('mfa', React.createElement(React.Fragment, null,
-      pageHead('两步验证'),
       React.createElement(Section, {
         title: '输入动态码',
         desc: '请输入认证器中的 6 位动态码，或一个一次性备用码。',
@@ -784,14 +860,13 @@ export function renderAccountPage(
             children: React.createElement('p', { className: 'rh-muted', style: { margin: 0 } },
               '把备用码填进上面的验证码框即可（格式 xxxx-xxxx）。'),
           })),
-      })))
+      })), { title: '两步验证', lead: true })
   }
 
   if (state.phase === 'change-password') {
     const verdict = evaluatePassword(draft.newPassword, state.policy, username)
     const valid = draft.currentPassword !== '' && verdict.ok && draft.newPassword !== draft.currentPassword
     return pageRoot('change-password', React.createElement(React.Fragment, null,
-      pageHead('设置新口令'),
       React.createElement(Notice, {
         'data-testid': 'change-password-required',
         tone: 'warning',
@@ -813,7 +888,7 @@ export function renderAccountPage(
             onClick: () => actions.onChangePassword(draft.currentPassword, draft.newPassword),
           }),
           state.notice === null ? null : React.createElement(Notice, { tone: 'error', children: state.notice })),
-      })))
+      })), { title: '设置新口令', lead: true })
   }
 
   // ── ready：区块 A–F（plan-settings.md §2.7）────────────────────────────────
@@ -826,6 +901,10 @@ export function renderAccountPage(
 
   const localAccount = React.createElement(Section, {
     'data-testid': 'local-account',
+    collapsible: true,
+    expanded: (state.expanded ?? {})['local-account'] === true,
+    onToggle: () => actions.onToggleSection?.('local-account'),
+    summary: username === '' ? null : username,
     title: '本机账号（这台 DSH）',
     desc: '用于登录这台机器的 DSH Web 与设置页；双因素与口令策略都作用于它。',
     actions: React.createElement(React.Fragment, null,
@@ -856,6 +935,10 @@ export function renderAccountPage(
   const trustSection = state.binding === null
     ? React.createElement(Section, {
       'data-testid': 'trust-section',
+    collapsible: true,
+    expanded: (state.expanded ?? {})['trust-section'] === true,
+    onToggle: () => actions.onToggleSection?.('trust-section'),
+    summary: trusted ? '已受信' : '未受信',
       title: '信任本浏览器',
       desc: '信任后访问 Hub 由私钥签名，不再重复输入两步验证码。',
       children: React.createElement(React.Fragment, null,
@@ -893,6 +976,10 @@ export function renderAccountPage(
 
   const totpSection = React.createElement(Section, {
     'data-testid': 'totp-section',
+    collapsible: true,
+    expanded: (state.expanded ?? {})['totp-section'] === true,
+    onToggle: () => actions.onToggleSection?.('totp-section'),
+    summary: totpEnabled ? '已启用' : '未启用',
     title: React.createElement(React.Fragment, null,
       '两步验证',
       React.createElement(Pill, {
@@ -994,6 +1081,10 @@ export function renderAccountPage(
 
   const policySection = React.createElement(Section, {
     'data-testid': 'password-policy-section',
+    collapsible: true,
+    expanded: (state.expanded ?? {})['password-policy-section'] === true,
+    onToggle: () => actions.onToggleSection?.('password-policy-section'),
+    summary: state.policy === 'strong' ? '强' : '标准',
     title: '口令管理',
     desc: '口令策略切换后立即生效：之后设置/修改口令都按新规则校验（已有口令不受影响）。',
     children: React.createElement(React.Fragment, null,
@@ -1026,6 +1117,10 @@ export function renderAccountPage(
 
   const clientsSection = React.createElement(Section, {
     'data-testid': 'clients-list',
+    collapsible: true,
+    expanded: (state.expanded ?? {})['clients-list'] === true,
+    onToggle: () => actions.onToggleSection?.('clients-list'),
+    summary: active.length + ' 台',
     title: `可信客户端（${active.length}）`,
     desc: '这些客户端被允许用本机账号访问 Hub；提高上限不会改变浏览器当前角色，受信浏览器需重新信任后才会以新权限运行。',
     children: clients.length === 0
@@ -1036,6 +1131,10 @@ export function renderAccountPage(
 
   const peersSection = React.createElement(Section, {
     'data-testid': 'peer-accounts',
+    collapsible: true,
+    expanded: (state.expanded ?? {})['peer-accounts'] === true,
+    onToggle: () => actions.onToggleSection?.('peer-accounts'),
+    summary: (state.peers ?? []).length + ' 个',
     title: `对端账号（${state.peers.length}）`,
     desc: '本机作为控制端，在其它设备上建立过的信任。用的是对端的账号；与本机账号互不影响。',
     children: state.peers.length === 0
@@ -1077,6 +1176,10 @@ export function renderAccountPage(
     ? null
     : React.createElement(Section, {
       'data-testid': 'sub-accounts',
+    collapsible: true,
+    expanded: (state.expanded ?? {})['sub-accounts'] === true,
+    onToggle: () => actions.onToggleSection?.('sub-accounts'),
+    summary: (sub?.accounts ?? []).length + ' 个',
       title: `子账号（${sub.accounts?.length ?? 0}）`,
       desc: '子账号可以被授予访问本机的权限；管理员可随时禁用或删除。',
       actions: React.createElement(Button, {
@@ -1168,7 +1271,6 @@ export function renderAccountPage(
     })
 
   return pageRoot('ready', React.createElement(React.Fragment, null,
-    pageHead(),
     // 两套账号必须分开显示：本机账号决定「谁能登录这台机器」，
     // 对端账号是本机作为控制端在别的机器上建立的信任。
     localAccount,

@@ -73,6 +73,15 @@ async function render(state, actions = {}) {
 function readyState(overrides = {}) {
   const base = {
     phase: 'ready',
+    expanded: {
+      'local-account': true,
+      'trust-section': true,
+      'totp-section': true,
+      'password-policy-section': true,
+      'clients-list': true,
+      'peer-accounts': true,
+      'sub-accounts': true,
+    },
     policy: 'strong',
     peers: [],
     escalation: null,

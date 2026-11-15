@@ -178,7 +178,10 @@ describe('QR 编码器：规格级还原', () => {
   })
 
   it('超长载荷抛错（不静默截断）', () => {
-    assert.throws(() => QR.encodeQr('x'.repeat(QR.QR_MAX_BYTES + 1)), /payload too long/u)
+    // 窄模式放不下时自动升级到宽模式（版本 10-L），所以只有**超过宽模式容量**
+    // 才抛错。窄模式自己的上限由宽模式测试覆盖。
+    assert.equal(QR.encodeQr('x'.repeat(QR.QR_MAX_BYTES + 1)).size, QR.QR_WIDE_SIZE)
+    assert.throws(() => QR.encodeQr('x'.repeat(QR.QR_WIDE_MAX_BYTES + 1)), /payload too long/u)
     assert.doesNotThrow(() => QR.encodeQr('x'.repeat(QR.QR_MAX_BYTES)))
   })
 

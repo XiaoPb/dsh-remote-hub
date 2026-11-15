@@ -14,7 +14,7 @@
  * @module dsh-remote-hub/client/panel/qr
  */
 
-/** 版本 5 的模块边长。 */
+/** 版本 5 的模块边长（窄模式：≤106 字节）。 */
 export const QR_SIZE = 37
 
 /** 版本 5-L：数据码字 / 纠错码字。 */
@@ -23,6 +23,19 @@ const EC_CODEWORDS = 26
 
 /** 版本 5-L byte 模式最大载荷（字节）。 */
 export const QR_MAX_BYTES = 106
+
+/**
+ * 宽模式：版本 10-L（57×57 模块）。
+ *
+ * TOTP 的 `otpauth://` 链接约 139 字节，超过版本 5 的 106 字节上限。版本 10-L
+ * 是**单块** Reed-Solomon 的最大版本（274 数据码字 + 18 纠错码字，容量 271 字节），
+ * 再往上（≥ 11）就要多块交织。仍然只需一个版本、一套码字表。
+ */
+export const QR_WIDE_SIZE = 57
+const WIDE_DATA_CODEWORDS = 274
+const WIDE_EC_CODEWORDS = 18
+/** 版本 10-L byte 模式最大载荷（字节）。 */
+export const QR_WIDE_MAX_BYTES = 271
 
 /** 纠错等级 L 的格式信息位（2 bit）。 */
 const EC_FORMAT_L = 1
@@ -77,13 +90,16 @@ function bit(value: number, index: number): boolean {
   return ((value >>> index) & 1) !== 0
 }
 
-/** 把 UTF-8 载荷编码成 70 个码字（55 数据 + 15 纠错）。 */
-export function encodeCodewords(text: string): Uint8Array {
+/** 把 UTF-8 载荷编码成码字（窄模式 134 个 / 宽模式 292 个）。 */
+export function encodeCodewords(text: string, wide = false): Uint8Array {
   const bytes = new TextEncoder().encode(text)
-  if (bytes.length > QR_MAX_BYTES) {
-    throw new Error(`qr: payload too long (${bytes.length} bytes > ${QR_MAX_BYTES})`)
+  const maxBytes = wide ? QR_WIDE_MAX_BYTES : QR_MAX_BYTES
+  if (bytes.length > maxBytes) {
+    throw new Error(`qr: payload too long (${bytes.length} bytes > ${maxBytes})`)
   }
-  const capacityBits = DATA_CODEWORDS * 8
+  const dataCount = wide ? WIDE_DATA_CODEWORDS : DATA_CODEWORDS
+  const ecCount = wide ? WIDE_EC_CODEWORDS : EC_CODEWORDS
+  const capacityBits = dataCount * 8
   const bits: number[] = []
   const push = (value: number, length: number): void => {
     for (let i = length - 1; i >= 0; i--) bits.push((value >>> i) & 1)
@@ -96,19 +112,19 @@ export function encodeCodewords(text: string): Uint8Array {
   // 补齐到字节边界
   while (bits.length % 8 !== 0) bits.push(0)
   // 填充码字 0xEC / 0x11
-  const data = new Uint8Array(DATA_CODEWORDS)
-  for (let i = 0; i < DATA_CODEWORDS; i++) {
+  const data = new Uint8Array(dataCount)
+  for (let i = 0; i < dataCount; i++) {
     let byte = 0
     for (let j = 0; j < 8; j++) byte = (byte << 1) | (bits[i * 8 + j] ?? 0)
     data[i] = byte
   }
-  for (let i = Math.ceil(bits.length / 8), pad = 0; i < DATA_CODEWORDS; i++, pad++) {
+  for (let i = Math.ceil(bits.length / 8), pad = 0; i < dataCount; i++, pad++) {
     data[i] = pad % 2 === 0 ? 0xec : 0x11
   }
-  const ec = rsRemainder(data, rsDivisor(EC_CODEWORDS))
-  const out = new Uint8Array(DATA_CODEWORDS + EC_CODEWORDS)
+  const ec = rsRemainder(data, rsDivisor(ecCount))
+  const out = new Uint8Array(dataCount + ecCount)
   out.set(data, 0)
-  out.set(ec, DATA_CODEWORDS)
+  out.set(ec, dataCount)
   return out
 }
 
@@ -129,6 +145,8 @@ export interface QrMatrix {
  * @throws 载荷超长时。
  */
 export function encodeQr(text: string): QrMatrix {
+  // 窄模式（版本 5-L）放不下时自动升到宽模式（版本 10-L）；两套都放不下才抛错。
+  if (new TextEncoder().encode(text).length > QR_MAX_BYTES) return encodeQrWide(text)
   const codewords = encodeCodewords(text)
   const size = QR_SIZE
   const modules: boolean[][] = Array.from({ length: size }, () => Array.from({ length: size }, () => false))
@@ -234,6 +252,148 @@ export function encodeQr(text: string): QrMatrix {
       bestMask = mask
     }
     applyMask(mask) // 撤销（异或自反）
+  }
+  applyMask(bestMask)
+  drawFormat(bestMask)
+
+  return { size, modules, mask: bestMask }
+}
+
+/**
+ * 宽模式编码：版本 10-L（57×57，单块 274 + 18 码字）。
+ *
+ * 与窄模式同一套算法，差异只有：码字表、边长、定位/校正/版本信息位置。
+ * 版本 ≥ 7 必须画**版本信息块**（18 bit，BCH(18,6)），否则扫码器会拒读。
+ *
+ * @param text - 待编码文本（UTF-8，≤271 字节）。
+ * @returns 矩阵（含掩码编号）。
+ * @throws 载荷超过 {@link QR_WIDE_MAX_BYTES} 时。
+ */
+export function encodeQrWide(text: string): QrMatrix {
+  const codewords = encodeCodewords(text, true)
+  const size = QR_WIDE_SIZE
+  const modules: boolean[][] = Array.from({ length: size }, () => Array.from({ length: size }, () => false))
+  const isFn: boolean[][] = Array.from({ length: size }, () => Array.from({ length: size }, () => false))
+
+  const setFn = (x: number, y: number, dark: boolean): void => {
+    if (x < 0 || y < 0 || x >= size || y >= size) return
+    modules[y]![x] = dark
+    isFn[y]![x] = true
+  }
+
+  const drawFinder = (cx: number, cy: number): void => {
+    for (let dy = -4; dy <= 4; dy++) {
+      for (let dx = -4; dx <= 4; dx++) {
+        const dist = Math.max(Math.abs(dx), Math.abs(dy))
+        setFn(cx + dx, cy + dy, dist !== 2 && dist !== 4)
+      }
+    }
+  }
+
+  const drawAlignment = (cx: number, cy: number): void => {
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
+        setFn(cx + dx, cy + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1)
+      }
+    }
+  }
+
+  const drawFormat = (mask: number): void => {
+    const bits = formatBits(mask)
+    for (let i = 0; i <= 5; i++) setFn(8, i, bit(bits, i))
+    setFn(8, 7, bit(bits, 6))
+    setFn(8, 8, bit(bits, 7))
+    setFn(7, 8, bit(bits, 8))
+    for (let i = 9; i < 15; i++) setFn(14 - i, 8, bit(bits, i))
+    for (let i = 0; i < 8; i++) setFn(size - 1 - i, 8, bit(bits, i))
+    for (let i = 8; i < 15; i++) setFn(8, size - 15 + i, bit(bits, i))
+    setFn(8, size - 8, true)
+  }
+
+  // ── 功能图形 ──────────────────────────────────────────────────────────────
+  drawFinder(3, 3)
+  drawFinder(size - 4, 3)
+  drawFinder(3, size - 4)
+  // 版本 10 的校正图形中心（ISO/IEC 18004 附录 E）。
+  const ALIGN = [6, 28, 50]
+  for (const cy of ALIGN) {
+    for (const cx of ALIGN) {
+      // 与三个定位图形重叠的位置不画。
+      if ((cx === 6 && cy === 6) || (cx === 6 && cy === size - 7) || (cx === size - 7 && cy === 6)) continue
+      drawAlignment(cx, cy)
+    }
+  }
+  for (let i = 8; i < size - 8; i++) {
+    setFn(i, 6, i % 2 === 0)
+    setFn(6, i, i % 2 === 0)
+  }
+  // 版本信息块（版本 ≥ 7 必需）：BCH(18,6)，生成多项式 0x1F25。
+  {
+    const version = 10
+    let rem = version
+    for (let i = 0; i < 12; i++) rem = (rem << 1) ^ ((rem >>> 11) * 0x1f25)
+    const bits = (version << 12) | rem
+    for (let i = 0; i < 18; i++) {
+      const dark = bit(bits, i)
+      const a = size - 11 + (i % 3)
+      const b = Math.floor(i / 3)
+      setFn(a, b, dark)
+      setFn(b, a, dark)
+    }
+  }
+  drawFormat(0) // 占位（数据放置要跳过这些模块）
+
+  // ── 数据码字（zigzag 两列一组，自右向左）────────────────────────────────
+  {
+    let index = 0
+    for (let right = size - 1; right >= 1; right -= 2) {
+      if (right === 6) right = 5
+      for (let vert = 0; vert < size; vert++) {
+        for (let j = 0; j < 2; j++) {
+          const x = right - j
+          const upward = ((right + 1) & 2) === 0
+          const y = upward ? size - 1 - vert : vert
+          if (!isFn[y]![x]! && index < codewords.length * 8) {
+            modules[y]![x] = bit(codewords[index >>> 3]!, 7 - (index & 7))
+            index++
+          }
+        }
+      }
+    }
+  }
+
+  // ── 掩码选择（与窄模式同一套罚分）───────────────────────────────────────
+  const applyMask = (mask: number): void => {
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        if (isFn[y]![x]!) continue
+        let invert: boolean
+        switch (mask) {
+          case 0: invert = (x + y) % 2 === 0; break
+          case 1: invert = y % 2 === 0; break
+          case 2: invert = x % 3 === 0; break
+          case 3: invert = (x + y) % 3 === 0; break
+          case 4: invert = (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0; break
+          case 5: invert = (x * y) % 2 + (x * y) % 3 === 0; break
+          case 6: invert = ((x * y) % 2 + (x * y) % 3) % 2 === 0; break
+          default: invert = ((x + y) % 2 + (x * y) % 3) % 2 === 0; break
+        }
+        if (invert) modules[y]![x] = !modules[y]![x]
+      }
+    }
+  }
+
+  let bestMask = 0
+  let bestPenalty = Number.POSITIVE_INFINITY
+  for (let mask = 0; mask < 8; mask++) {
+    applyMask(mask)
+    drawFormat(mask)
+    const penalty = penaltyScore(modules)
+    if (penalty < bestPenalty) {
+      bestPenalty = penalty
+      bestMask = mask
+    }
+    applyMask(mask)
   }
   applyMask(bestMask)
   drawFormat(bestMask)

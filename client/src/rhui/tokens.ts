@@ -116,18 +116,114 @@ ${DARK_TOKENS}
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
-.rh-root.rh-scroll { height: 100vh; overflow-y: auto; overflow-x: hidden; scroll-padding-top: 92px; }
-/* 设置页（DSH Settings 弹窗内）不自己滚动，交给宿主。 */
+.rh-root.rh-scroll {
+  height: 100%;
+  max-height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  /* 最外层必须自己留白：宿主 main 槽位没有内边距，否则内容直接贴边。 */
+  padding: 24px 24px 56px;
+  scroll-padding-top: 92px;
+  overscroll-behavior: contain;
+}
+.rh-root.rh-scroll > .rh-shell { padding: 0; }
+/* 嵌入式（宿主已给内边距）：不重复留白。 */
 .rh-root.rh-embed { padding: 0; }
 .rh-shell { max-width: 1080px; margin: 0 auto; width: 100%; box-sizing: border-box; }
 .rh-shell.rh-narrow { max-width: 760px; }
 
-/* 页头 */
+/* ===== 页头（标题栏）=====
+ * 吸顶时背景要横跨整宽，标题文字却必须与卡片左缘对齐：
+ * 用负外边距把背景铺满，再用等量内边距把内容推回 24px，与卡片左缘严格对齐。 */
 .rh-page-head { margin: 0 0 24px; }
-.rh-root.rh-scroll > .rh-shell > .rh-page-head {
-  position: sticky; top: 0; z-index: 20; background: var(--rh-bg);
-  padding-top: 24px; padding-bottom: 12px; border-bottom: 1px solid var(--rh-border);
+.rh-root.rh-scroll:not(.rh-settings) > .rh-shell > .rh-page-head {
+  position: sticky; top: -24px; z-index: 20;
+  margin: 0 -24px 20px;
+  padding: 24px 24px 12px;
+  background: var(--rh-bg);
+  border-bottom: 1px solid var(--rh-border);
 }
+
+/* ===== 设置页：自带滚动容器 + 吸顶页头/步骤条 =====
+ * 宿主（DSH Settings 弹窗）高度不可控、内容又很长，页面必须自己滚：
+ * .rh-root.rh-settings 是唯一滚动容器，页头与步骤条一起吸顶。 */
+.rh-root.rh-settings {
+  height: 100%;
+  max-height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  padding: 24px 24px 56px;
+  scroll-padding-top: 96px;
+  overscroll-behavior: contain;
+}
+.rh-root.rh-settings > .rh-shell { padding: 0; }
+.rh-page-sticky {
+  position: sticky; top: -24px; z-index: 20;
+  background: var(--rh-bg);
+  padding: 24px 0 10px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--rh-border);
+}
+.rh-page-sticky .rh-page-head { margin: 0 0 12px; }
+.rh-page-sticky .rh-page-head { padding: 0; border: 0; position: static; }
+.rh-page-body { display: block; min-width: 0; }
+
+/* 紧凑页头（ready 态）：标题与右侧提示同一行，不再占一整段说明。 */
+.rh-page-head.is-compact { margin-bottom: 10px; }
+.rh-page-head-row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.rh-page-head-hint {
+  font-size: var(--rh-fs-label); color: var(--rh-text-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ===== 可收起的卡片（设置页区块默认收起）===== */
+.rh-section.is-collapsible > .rh-section-head { margin-bottom: 0; }
+.rh-section.is-collapsed { padding-top: 14px; padding-bottom: 14px; }
+.rh-section.is-collapsed .rh-section-title { font-weight: 600; }
+.rh-section-summary {
+  font-size: var(--rh-fs-label); color: var(--rh-text-2); font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%;
+}
+.rh-section-toggle {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 28px; height: 28px; margin-left: 4px; padding: 0;
+  border: 1px solid var(--rh-border-strong); border-radius: 50%;
+  background: var(--rh-surface); color: var(--rh-text-2);
+  cursor: pointer; transition: transform .18s ease, border-color .15s ease, color .15s ease;
+}
+.rh-section-toggle:hover { color: var(--rh-text); border-color: var(--rh-text-3); }
+.rh-section-toggle:focus-visible { outline: 2px solid var(--rh-blue); outline-offset: 2px; }
+.rh-caret {
+  width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent;
+  border-top: 6px solid currentColor; transform: translateY(1px);
+  transition: transform .18s ease;
+}
+.rh-section-toggle[aria-expanded="false"] .rh-caret { transform: rotate(-90deg) translateX(2px); }
+.rh-section.is-collapsible > .rh-section-head + .rh-section-desc { margin-top: 8px; }
+
+/* 步骤条（登录 → 两步验证 → 设置） */
+.rh-steps {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  list-style: none; margin: 0; padding: 0;
+}
+.rh-step {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: var(--rh-fs-label); font-weight: 500; color: var(--rh-text-3);
+  padding: 3px 10px 3px 4px; border-radius: var(--rh-radius-pill);
+  background: var(--rh-bg);
+}
+.rh-step-no {
+  width: 18px; height: 18px; border-radius: 50%; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+  background: var(--rh-border); color: var(--rh-text-2);
+}
+.rh-step.is-current { color: var(--rh-text); background: var(--rh-surface); border: 1px solid var(--rh-border-strong); }
+.rh-step.is-current .rh-step-no { background: var(--rh-accent); color: var(--rh-accent-fg); }
+.rh-step.is-done { color: var(--rh-green); }
+.rh-step.is-done .rh-step-no { background: var(--rh-green-bg); color: var(--rh-green); }
 .rh-h1 {
   margin: 0; font-size: var(--rh-fs-h1); font-weight: 700; letter-spacing: -.3px;
   color: var(--rh-text); display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -316,8 +412,7 @@ ${DARK_TOKENS}
 .rh-meta { margin: 6px 0 0; font-size: var(--rh-fs-label); color: var(--rh-text-3); overflow-wrap: anywhere; }
 
 /* 列表行（客户端 / 设备 / 子账号） */
-.rh-item {
-  display: flex; flex-direction: column; gap: 8px;
+.rh-item {  display: flex; flex-direction: column; gap: 8px;
   box-sizing: border-box; min-width: 0; margin: 0 0 10px;
   padding: 14px 16px; border-radius: var(--rh-radius-sm);
   border: 1px solid var(--rh-border); border-left: 3px solid var(--rh-green);
@@ -331,6 +426,16 @@ ${DARK_TOKENS}
 .rh-item-name { font-size: var(--rh-fs-h3); font-weight: 600; color: var(--rh-text); overflow-wrap: anywhere; }
 .rh-item-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .rh-item.is-grid .rh-item-actions { justify-content: flex-end; }
+/* 「可信客户端」行：两个下拉框并排两列，等宽；撤销按钮靠右。 */
+.rh-select-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.rh-select-pair .rh-select { width: 100%; min-width: 0; }
+.rh-item-actions > .rh-btn { margin-left: auto; }
 
 /* 设备卡 */
 .rh-devgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--rh-gap); }

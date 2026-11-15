@@ -346,6 +346,12 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
         patch({ phase: 'loading', busy: false })
         void load()
       },
+      onToggleSection(sectionId) {
+        setState(current => ({
+          ...current,
+          expanded: { ...(current.expanded ?? {}), [sectionId]: !(current.expanded ?? {})[sectionId] },
+        }))
+      },
       // ── 区块 G：子账号 ────────────────────────────────────────────────────
       onSubCreateOpen(open) {
         setState(current => ({

@@ -327,6 +327,15 @@ test('ready page lists trusted clients with role controls and offers trust', asy
   const markup = await renderMarkup(accountPage.renderAccountPage(
     {
       phase: 'ready',
+      expanded: {
+        'local-account': true,
+        'trust-section': true,
+        'totp-section': true,
+        'password-policy-section': true,
+        'clients-list': true,
+        'peer-accounts': true,
+        'sub-accounts': true,
+      },
       policy: 'strong',
       peers: [],
       escalation: null,
@@ -402,6 +411,15 @@ test('first sign-in with the default account is gated on a password change', asy
 test('a revoked client is rendered disabled', async () => {  const markup = await renderMarkup(accountPage.renderAccountPage(
     {
       phase: 'ready',
+      expanded: {
+        'local-account': true,
+        'trust-section': true,
+        'totp-section': true,
+        'password-policy-section': true,
+        'clients-list': true,
+        'peer-accounts': true,
+        'sub-accounts': true,
+      },
       policy: 'strong',
       peers: [],
       escalation: null,
@@ -440,6 +458,15 @@ test('a revoked client is rendered disabled', async () => {  const markup = awai
 test('settings exposes the password policy switch and a live rule checklist', async () => {
   const readyState = (policy) => ({
     phase: 'ready',
+    expanded: {
+      'local-account': true,
+      'trust-section': true,
+      'totp-section': true,
+      'password-policy-section': true,
+      'clients-list': true,
+      'peer-accounts': true,
+      'sub-accounts': true,
+    },
     status: {
       ready: true,
       bootstrapped: true,
@@ -495,6 +522,15 @@ test('settings exposes the password policy switch and a live rule checklist', as
 test('raising a ceiling without fresh 2FA opens the escalation prompt', async () => {
   const base = {
     phase: 'ready',
+    expanded: {
+      'local-account': true,
+      'trust-section': true,
+      'totp-section': true,
+      'password-policy-section': true,
+      'clients-list': true,
+      'peer-accounts': true,
+      'sub-accounts': true,
+    },
     status: {
       ready: true,
       bootstrapped: true,
@@ -544,6 +580,15 @@ test('raising a ceiling without fresh 2FA opens the escalation prompt', async ()
 test('settings separates the local account from peer accounts', async () => {
   const base = {
     phase: 'ready',
+    expanded: {
+      'local-account': true,
+      'trust-section': true,
+      'totp-section': true,
+      'password-policy-section': true,
+      'clients-list': true,
+      'peer-accounts': true,
+      'sub-accounts': true,
+    },
     status: {
       ready: true,
       bootstrapped: true,
@@ -629,6 +674,15 @@ test('lazy signer reads the per-origin binding on first use', async () => {
 test('settings offers TOTP enrollment until it is enabled', async () => {
   const state = (overrides) => ({
     phase: 'ready',
+    expanded: {
+      'local-account': true,
+      'trust-section': true,
+      'totp-section': true,
+      'password-policy-section': true,
+      'clients-list': true,
+      'peer-accounts': true,
+      'sub-accounts': true,
+    },
     status: {
       ready: true, bootstrapped: true, mfaEnabled: true, totpEnabled: false, username: 'admin',
       passwordPolicy: 'strong',
