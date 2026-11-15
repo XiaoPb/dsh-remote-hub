@@ -260,7 +260,19 @@ export interface RemoteTransport {
   /** 把页面出站状态写回磁盘（返回写入后的 mtime）。 */
   carrierWrite(mode: Record<string, unknown>): Promise<number>
   listOutboundTargets(): Promise<readonly OutboundTargetView[]>
-  saveOutboundTarget(target: { origin: string; token: string; deviceLabel?: string; deviceId?: string; role?: string; pairedAt?: number; lastConnectedAt?: number }): Promise<OutboundTargetView>
+  saveOutboundTarget(target: {
+    origin: string
+    /** 旧版 bearer（账号模式不需要）。 */
+    token?: string
+    /** 账号认证模式的目标：凭据在浏览器（私钥 + 租约），档案只留客户端 id。 */
+    account?: boolean
+    accountId?: string
+    deviceLabel?: string
+    deviceId?: string
+    role?: string
+    pairedAt?: number
+    lastConnectedAt?: number
+  }): Promise<OutboundTargetView>
   activateOutboundTarget(targetId: string): Promise<number>
   forgetOutboundTarget(targetId: string): Promise<boolean>
   /** 列出本机已配对设备（需要 pairIssueToken；仅回环页面可用）。 */

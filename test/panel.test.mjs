@@ -584,6 +584,26 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
     assert.ok(texts.some(t => t.includes('已撤销')), '已吊销行显示「已撤销」')
   })
 
+  it('账号认证模式：对端账号登录表单存在，空输入禁用，填写后可提交', async () => {
+    const { renderRemoteHubPage } = await loadPage()
+    const empty = renderRemoteHubPage(baseState(), noopActions)
+    assert.equal(collectByTestId(empty, 'account-user').length, 1)
+    assert.equal(collectByTestId(empty, 'account-password').length, 1)
+    assert.equal(collectByTestId(empty, 'account-code').length, 1)
+    assert.equal(collectByTestId(empty, 'account-role').length, 1)
+    assert.equal(collectByTestId(empty, 'account-connect')[0].props.disabled, true, '空草稿不可提交')
+
+    let calls = 0
+    const filled = renderRemoteHubPage(baseState({
+      originDraft: 'http://peer.test:8443',
+      accountDraft: { username: 'admin', password: 'Secret-Pass-1!', code: '123456', role: 'control' },
+    }), { ...noopActions, onAccountConnect() { calls += 1 } })
+    const button = collectByTestId(filled, 'account-connect')[0]
+    assert.equal(button.props.disabled, false, '填好后可提交')
+    button.props.onClick()
+    assert.equal(calls, 1)
+  })
+
   it('页头独立吸顶，卡片标题不参与跨卡片滚动', async () => {
     const { renderRemoteHubPage } = await loadPage()
     const tree = renderRemoteHubPage(baseState(), noopActions)

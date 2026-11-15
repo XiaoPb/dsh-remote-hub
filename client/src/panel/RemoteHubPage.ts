@@ -246,6 +246,8 @@ export interface RemoteHubPageState {
   /** 主控端：连接表单。 */
   originDraft: string
   secretDraft: string
+  /** 对端账号登录草稿（账号认证模式，跨源）。 */
+  accountDraft: { username: string; password: string; code: string; role: RoleName }
   /** ② 设备筛选。 */
   deviceFilter: 'all' | 'inbound'
   /** ③ 守卫运行指标（null = 宿主不支持/未加载）。 */
@@ -261,7 +263,7 @@ export interface RemoteHubPageState {
   /** ④ 最近一次保存结果（ok / error 文案）。 */
   configSavedAt: number | null
   /** 进行中的异步操作。 */
-  busy: null | 'connect' | 'issue' | 'revoke' | 'delete' | 'refresh' | 'detach'
+  busy: null | 'connect' | 'account' | 'issue' | 'revoke' | 'delete' | 'refresh' | 'detach'
   /** 错误信息。 */
   error: string | null
   /** 注入状态（诊断区展示；不含凭据本身）。 */
@@ -289,6 +291,10 @@ export interface RemoteHubPageActions {
   onSecretChange(value: string): void
   onScan(): void
   onConnect(): void
+  /** 修改对端账号草稿字段。 */
+  onAccountChange(field: 'username' | 'password' | 'code' | 'role', value: string): void
+  /** 用对端账号登录并信任本浏览器（跨源）。 */
+  onAccountConnect(): void
   onReconnect(target: OutboundTarget): void
   onDetach(): void
   onCopy(text: string): void
@@ -1196,6 +1202,9 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
       ? el('div', 'rh-unsup', { 'data-testid': 'config-unsupported' }, STRINGS.configUnsupported)
       : renderConfigBody(state, actions))
 
+  // 账号草稿：旧版调用方可能没有该字段，这里给一个安全的空草稿。
+  const accountDraft = state.accountDraft ?? { username: '', password: '', code: '', role: 'control' as RoleName }
+
   // 出站分组内容：当前指向 / 连接表单（主控端）——独立卡片供 ② 区引用
   const clientCard = el('section', 'rh-card', { 'data-testid': 'client-section' },
     el('div', 'rh-section-head', undefined,
@@ -1247,6 +1256,52 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
           || (classifyPairSecret(state.secretDraft) === null && parsePairLink(state.secretDraft) === null),
         onClick: () => actions.onConnect(),
       }, state.busy === 'connect' ? STRINGS.connecting : STRINGS.connect)),
+    // 账号认证模式：跨机接管不再依赖邀请码，直接登录对端账号。
+    el('div', 'rh-row', { 'data-testid': 'account-login-hint', style: { marginTop: 8 } },
+      el('span', 'rh-lbl', undefined, '或：用对端账号登录（账号认证模式，先登录再信任本浏览器）')),
+    el('div', 'rh-row', undefined,
+      el('input', 'rh-input', {
+        'data-testid': 'account-user',
+        'aria-label': '对端账号',
+        type: 'text',
+        autocomplete: 'username',
+        placeholder: '对端账号',
+        value: accountDraft.username,
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('username', event.currentTarget.value),
+      }),
+      el('input', 'rh-input', {
+        'data-testid': 'account-password',
+        'aria-label': '对端口令',
+        type: 'password',
+        autocomplete: 'current-password',
+        placeholder: '对端口令',
+        value: accountDraft.password,
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('password', event.currentTarget.value),
+      }),
+      el('input', 'rh-input', {
+        'data-testid': 'account-code',
+        'aria-label': '两步验证码',
+        type: 'text',
+        inputMode: 'numeric',
+        autocomplete: 'one-time-code',
+        placeholder: '6 位验证码（已启用 2FA 时必填）',
+        value: accountDraft.code,
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('code', event.currentTarget.value),
+      })),
+    el('div', 'rh-row', undefined,
+      el('select', 'rh-select', {
+        'data-testid': 'account-role',
+        value: accountDraft.role,
+        onChange: (event: React.ChangeEvent<HTMLSelectElement>) => actions.onAccountChange('role', event.currentTarget.value),
+      }, ROLES.map(candidate => el('option', { key: candidate, value: candidate }, ROLE_LABEL[candidate]))),
+      el('button', 'rh-btn primary', {
+        type: 'button', 'data-testid': 'account-connect',
+        disabled: state.busy !== null
+          || normalizeOrigin(state.originDraft) === undefined
+          || accountDraft.username.trim() === ''
+          || accountDraft.password === '',
+        onClick: () => actions.onAccountConnect(),
+      }, state.busy === 'account' ? '登录中…' : '登录并信任')),
     state.secretDraft.trim() !== ''
       && classifyPairSecret(state.secretDraft) === null
       && parsePairLink(state.secretDraft) === null
@@ -2108,6 +2163,19 @@ export interface RemoteHubPageDeps {
   carrier?: () => Promise<{ mode: Record<string, unknown>; at: number }>
   carrierWrite?: (mode: Record<string, unknown>) => Promise<number>
   listOutboundTargets?: () => Promise<readonly OutboundTarget[]>
+  /**
+   * 用**对端账号**登录并信任本浏览器（账号认证模式）。
+   *
+   * 内部完成：跨源 `/remote-auth/*`（头会话）→ 登录/二次验证 → 登记客户端公钥
+   * → 保存按 origin 的绑定 → 写入出站档案（account 目标）。页面只负责切 carrier。
+   */
+  connectWithAccount?: (input: {
+    origin: string
+    username: string
+    password: string
+    code: string
+    role: RoleName
+  }) => Promise<{ clientId: string; deviceLabel?: string; role?: string }>
   saveOutboundTarget?: (target: Omit<OutboundTarget, 'id'> & { token: string }) => Promise<OutboundTarget>
   activateOutboundTarget?: (targetId: string) => Promise<number>
   forgetDevice?: (deviceId: string) => Promise<boolean>
@@ -2174,7 +2242,10 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
       () => (mode.mode === 'cloud' ? (mode.origin ?? '') : ''),
     )
     const [secretDraft, setSecretDraft] = React.useState<string>('')
-    const [busy, setBusy] = React.useState<null | 'connect' | 'issue' | 'revoke' | 'delete' | 'refresh' | 'detach'>(null)
+    const [accountDraft, setAccountDraft] = React.useState<{ username: string; password: string; code: string; role: RoleName }>(
+      () => ({ username: 'admin', password: '', code: '', role: 'control' }),
+    )
+    const [busy, setBusy] = React.useState<null | 'connect' | 'account' | 'issue' | 'revoke' | 'delete' | 'refresh' | 'detach'>(null)
     const [error, setError] = React.useState<string | null>(null)
     const [now, setNow] = React.useState<number>(() => clock())
     const [scannerOpen, setScannerOpen] = React.useState(false)
@@ -2664,6 +2735,65 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
         const link = parsePairLink(secretDraft)
         connectWith(normalizeOrigin(link?.origin ?? originDraft), link?.secret ?? secretDraft.trim())
       },
+      onAccountChange(field, value) {
+        setAccountDraft(current => ({
+          ...current,
+          ...(field === 'role'
+            ? { role: (configuredDefaultRole(value)) }
+            : { [field]: value }),
+        }))
+      },
+      onAccountConnect() {
+        const target = normalizeOrigin(originDraft)
+        if (target === undefined) {
+          setError('目标地址格式不正确。')
+          return
+        }
+        if (deps.connectWithAccount === undefined) {
+          setError('当前宿主不支持跨机账号登录；请升级插件。')
+          return
+        }
+        const { username, password, code, role: accountRole } = accountDraft
+        if (username.trim() === '' || password === '') {
+          setError('请填写对端账号与口令。')
+          return
+        }
+        setBusy('account')
+        setError(null)
+        void deps.connectWithAccount({
+          origin: target,
+          username: username.trim(),
+          password,
+          code: code.trim(),
+          role: accountRole,
+        })
+          .then(async result => {
+            if (deps.carrierWrite === undefined) {
+              setError('宿主不支持安全保存连接状态；账号已信任，但未切换。')
+              return
+            }
+            const label = result.deviceLabel ?? result.clientId
+            const at = await deps.carrierWrite({
+              mode: 'cloud',
+              origin: target,
+              account: true,
+              ...(label === undefined ? {} : { deviceLabel: label }),
+            })
+            writeCarrierMode({
+              mode: 'cloud',
+              origin: target,
+              account: true,
+              ...(label === undefined ? {} : { deviceLabel: label }),
+            }, storage)
+            lastCarrierAtRef.current = at
+            setAccountDraft(current => ({ ...current, password: '', code: '' }))
+            reload()
+          })
+          .catch((cause: unknown) => {
+            setError(`登录失败：${cause instanceof Error ? cause.message : String(cause)}`)
+          })
+          .finally(() => { setBusy(null) })
+      },
     }
 
     /**
@@ -2791,6 +2921,7 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
       autoReissue,
       originDraft,
       secretDraft,
+      accountDraft,
       deviceFilter,
       stats,
       statsError,

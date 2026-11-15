@@ -21,6 +21,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 
 import { readCarrierMode } from '@core/carrier-contract.js'
+import type { RoleName } from '@core/roles.js'
 
 import type { RemoteTransport, TransportOptions, AdminRequestDiagnostic, HubLogEntry } from './transport.js'
 import { createTransport, RemoteHubError, HUB_LOG_LIMIT } from './transport.js'
@@ -30,6 +31,8 @@ import { createRemoteHubPageComponent, classifyPairSecret } from './panel/Remote
 import type { CloudDeviceRow } from './panel/RemoteHubPage.js'
 import { RemoteHubNavIcon } from './panel/NavIcon.js'
 import { createAccountPageComponent } from './auth/mount.js'
+import { createAuthApi } from './auth/api.js'
+import { createKeyring } from './auth/keyring.js'
 import { mountLocalPluginsPanel } from './local-plugin-manager/panel.js'
 import { watchTakeover } from './local-plugin-manager/lifecycle.js'
 
@@ -163,8 +166,56 @@ const AccountPage = createAccountPageComponent({
   },
 })
 
+/**
+ * 用对端账号登录并信任本浏览器（账号认证模式）。
+ *
+ * 跨源：目标守卫上的 `/remote-auth/*` 用头会话（`Authorization: Bearer`），
+ * 不依赖 SameSite Cookie。成功后把「私钥 + 租约」按 origin 存进 IndexedDB，
+ * 并在出站档案里留一条 `account: true`（**不含**任何 bearer）。
+ */
+async function connectWithAccount(input: {
+  origin: string
+  username: string
+  password: string
+  code: string
+  role: RoleName
+}): Promise<{ clientId: string; deviceLabel?: string; role?: string }> {
+  const api = createAuthApi({ origin: input.origin, headerSession: true })
+  const login = await api.login({ username: input.username, password: input.password })
+  if (login.mfaRequired) {
+    if (input.code.trim() === '') throw new Error('对端已启用两步验证，请填写 6 位验证码')
+    await api.mfa({ mfaToken: login.mfaToken, code: input.code.trim() })
+  }
+  const keyring = createKeyring()
+  const { identity } = await keyring.loadOrCreate()
+  const enrolled = await api.enroll({
+    label: `controller ${globalThis.location?.host ?? ''}`.trim(),
+    clientType: 'browser',
+    publicKey: identity.publicKey,
+    roleCeiling: input.role,
+  })
+  await keyring.saveBinding({
+    clientId: enrolled.client.clientId,
+    keyId: enrolled.client.keyId,
+    lease: enrolled.lease.lease,
+    generation: enrolled.lease.generation,
+    expiresAt: enrolled.lease.expiresAt,
+  }, input.origin)
+  const deviceLabel = `${input.origin} · ${enrolled.client.label}`
+  await createAdminTransport().saveOutboundTarget({
+    origin: input.origin,
+    account: true,
+    accountId: enrolled.client.clientId,
+    deviceLabel,
+    role: input.role,
+    lastConnectedAt: Date.now(),
+  })
+  return { clientId: enrolled.client.clientId, deviceLabel, role: input.role }
+}
+
 const RemoteHubPage = createRemoteHubPageComponent({
   injected: () => hubGlobal(),
+  connectWithAccount,
   /** 守卫诊断：最近一次管理请求（transport 写回模块级变量）。 */
   diagnostic: () => lastDiagnostic,
   /** 用户可见日志时间线。 */

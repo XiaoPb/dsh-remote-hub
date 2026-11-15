@@ -35,6 +35,13 @@ export interface AuthApiOptions {
   /** 认证面所在的 origin；缺省用页面自身 origin。 */
   origin?: string
   fetchImpl?: typeof fetch
+  /**
+   * 跨源模式：会话用 `Authorization: Bearer <sessionToken>` 传递。
+   *
+   * 控制端页面与目标守卫不同源，`SameSite=Strict` 的 Cookie 不会过去；
+   * 守卫上的认证面因此额外在响应体里返回 `sessionToken`，这里负责保存与回填。
+   */
+  headerSession?: boolean
 }
 
 /** 认证 API。 */
@@ -95,13 +102,27 @@ export function createAuthApi(options: AuthApiOptions = {}): AuthApi {
   const base = (options.origin
     ?? (globalThis.location as { origin?: string } | undefined)?.origin
     ?? '').replace(/\/+$/u, '')
+  const headerSession = options.headerSession === true
+  let sessionToken: string | undefined
+
+  /** 头会话请求头（Cookie 模式为空）。 */
+  function sessionHeaders(): Record<string, string> {
+    return sessionToken === undefined ? {} : { authorization: `Bearer ${sessionToken}` }
+  }
+
+  /** 从响应体里接住守卫返回的会话令牌（仅头模式）。 */
+  function capture<T>(body: T): T {
+    const token = (body as { sessionToken?: unknown } | null)?.sessionToken
+    if (headerSession && typeof token === 'string' && token !== '') sessionToken = token
+    return body
+  }
 
   async function post(path: string, body: unknown): Promise<Response> {
     const response = await fetchImpl(`${base}${path}`, {
       method: 'POST',
-      // 会话 Cookie 只发给同源认证面。
-      credentials: 'same-origin',
-      headers: { 'content-type': 'application/json' },
+      // 会话 Cookie 只发给同源认证面；跨源用显式头。
+      credentials: headerSession ? 'omit' : 'same-origin',
+      headers: { 'content-type': 'application/json', ...sessionHeaders() },
       body: JSON.stringify(body ?? {}),
     })
     return response
@@ -109,15 +130,15 @@ export function createAuthApi(options: AuthApiOptions = {}): AuthApi {
 
   async function readJson<T>(response: Response): Promise<T> {
     if (!response.ok) throw await failure(response)
-    return await response.json() as T
+    return capture(await response.json() as T)
   }
 
   return {
     async status() {
       const response = await fetchImpl(`${base}${AUTH_ROUTES.status}`, {
         method: 'GET',
-        credentials: 'same-origin',
-        headers: { accept: 'application/json' },
+        credentials: headerSession ? 'omit' : 'same-origin',
+        headers: { accept: 'application/json', ...sessionHeaders() },
       })
       return readJson<AuthStatusResponse>(response)
     },
@@ -131,8 +152,12 @@ export function createAuthApi(options: AuthApiOptions = {}): AuthApi {
       return readJson(await post(AUTH_ROUTES.mfa, input))
     },
     async logout() {
-      const response = await post(AUTH_ROUTES.logout, {})
-      if (!response.ok) throw await failure(response)
+      try {
+        const response = await post(AUTH_ROUTES.logout, {})
+        if (!response.ok) throw await failure(response)
+      } finally {
+        sessionToken = undefined
+      }
     },
     async changePassword(input) {
       const response = await post(AUTH_ROUTES.password, input)
