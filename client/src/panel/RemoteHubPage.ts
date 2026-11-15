@@ -2721,7 +2721,8 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
       onConfigSave() {
         if (deps.patchConfig === undefined || configDraft === null) return
         const patch: Record<string, unknown> = {}
-        for (const key of ['singleController', 'bridgeApprovals', 'defaultRole', 'maxPairAttempts']) {
+        // 热项 + 冷项（端口/网络）：冷项也需要提交，否则页面能改却永远存不进去。
+        for (const key of ['singleController', 'bridgeApprovals', 'defaultRole', 'maxPairAttempts', 'guardPort', 'network']) {
           if (Object.hasOwn(configDraft, key)) patch[key] = configDraft[key]
         }
         setConfigSaving(true)
