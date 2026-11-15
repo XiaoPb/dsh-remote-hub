@@ -22,13 +22,15 @@
  *
  * @module dsh-remote-hub/host/guard
  */
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { networkInterfaces } from 'node:os'
 
 import {
   AUTH_HEADER,
+  AUTH_HEADERS,
+  AUTH_ROUTES,
   BEARER_SCHEME,
   ERROR_CODES,
   GUARD_ROUTES,
@@ -36,8 +38,9 @@ import {
   LIMITS,
   PROTOCOL_VERSION,
   STREAM_BUDGET,
+  type HubAuthPort,
 } from '@core/index.js'
-import { isRoleName } from '@core/roles.js'
+import { isRoleName, type RoleName } from '@core/roles.js'
 
 import type { Config } from './config.js'
 import { assertBindableHost, isPrivateAddress } from './config.js'
@@ -127,7 +130,18 @@ export interface GuardDeps {
     admit: (request: IncomingMessage, device: { deviceId: string; role: string }) =>
       { peer: unknown; release: () => Promise<void> } | { rejection: unknown }
   }
+  /**
+   * 账号认证端口（认证插件 `provide('remoteHubAuth')`）。
+   *
+   * 给出时：RPC 与 WS 一律走「租约 + 客户端签名 / 一次性升级票据」，
+   * **不再**接受长期 bearer 设备令牌（旧令牌不会静默升级为受信客户端）。
+   * 缺省时维持旧的设备令牌路径（兼容已有部署与测试）。
+   */
+  auth?: HubAuthPort
 }
+
+/** 一次性 WS 升级票据的 TTL（秒级短窗：只能换一次握手）。 */
+export const WS_TICKET_TTL_MS = 30_000
 
 /**
  * 配置存取（config 路由依赖；由 plugin.ts 提供，测试可注入桩）。
@@ -149,6 +163,21 @@ interface GuardError {
 
 function failure(code: string, status: number, message: string): GuardError {
   return { code, status, message }
+}
+
+/** 请求体 sha256（十六进制小写）——与客户端签名覆盖的摘要口径一致。 */
+function sha256Hex(buffer: Buffer): string {
+  return createHash('sha256').update(buffer).digest('hex')
+}
+
+/** 只取认证相关请求头（其余头不参与签名判定）。 */
+function proofHeadersOf(req: IncomingMessage): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {}
+  for (const name of Object.values(AUTH_HEADERS)) {
+    const value = req.headers[name]
+    out[name] = typeof value === 'string' ? value : undefined
+  }
+  return out
 }
 
 /**
@@ -318,6 +347,33 @@ export function primaryLanAddress(): string | undefined {
  */
 export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
   const config = deps.config
+
+  /**
+   * 一次性 WS 升级票据表：`ticket → { identity, expiresAt }`。
+   *
+   * 只在内存里（守卫重启即清空，符合「一次握手」语义）；消费即删除，重放无效。
+   * 这样长期租约不会出现在 URL / 代理日志里。
+   */
+  const wsTickets = new Map<string, { deviceId: string; role: RoleName; expiresAt: number }>()
+
+  function issueWsTicket(identity: { deviceId: string; role: RoleName }): { ticket: string; expiresAt: number } {
+    const now = Date.now()
+    for (const [key, value] of wsTickets) {
+      if (value.expiresAt <= now) wsTickets.delete(key)
+    }
+    const ticket = randomBytes(32).toString('base64url')
+    const expiresAt = now + WS_TICKET_TTL_MS
+    wsTickets.set(ticket, { ...identity, expiresAt })
+    return { ticket, expiresAt }
+  }
+
+  function consumeWsTicket(ticket: string): { deviceId: string; role: RoleName } | null {
+    const entry = wsTickets.get(ticket)
+    if (entry === undefined) return null
+    wsTickets.delete(ticket)
+    if (entry.expiresAt <= Date.now()) return null
+    return { deviceId: entry.deviceId, role: entry.role }
+  }
   assertBindableHost(config.guardHost, config.network)
   const protocolHeader = String(PROTOCOL_VERSION)
   // 进程内随机，只注入本机 index 页。隧道拿不到它，所以即便隧道在本机终止、
@@ -711,6 +767,51 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
         return
       }
 
+      // ── ws-ticket：认证模式下换取一次性 WS 升级票据 ──────────────────────
+      //
+      // 浏览器原生 WebSocket 不能带自定义头，所以签名只能在 HTTP 上做：
+      // 客户端先对本请求签名，服务端返回一个 30 秒、**只能消费一次**的票据，
+      // 再把它放进 `?token=` 完成升级。长期租约永远不进入 URL。
+      if (path === GUARD_ROUTES.wsTicket) {
+        if (method !== 'POST') {
+          reject(res, rpcId, failure(ERROR_CODES.notFound, 404, 'not found'))
+          return
+        }
+        if (deps.auth === undefined) {
+          reject(res, rpcId, failure(ERROR_CODES.notFound, 404, 'account authentication is not enabled'))
+          return
+        }
+        const body = await readBody(req, LIMITS.maxRequestBodyBytes)
+        if (body === null) {
+          reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'body too large'))
+          return
+        }
+        const authorization = req.headers[AUTH_HEADER]
+        const authHeader = typeof authorization === 'string' ? authorization : ''
+        const verdict = await deps.auth.verifyHubRequest({
+          // 传**原始头**：认证服务自己解析 `Bearer <lease>`。
+          lease: authHeader,
+          method,
+          path,
+          audience: String(req.headers.host ?? '').toLowerCase(),
+          bodyDigest: sha256Hex(body),
+          headers: proofHeadersOf(req),
+        })
+        if (!verdict.ok) {
+          deps.metrics?.countAuthDenied()
+          audit('ws-ticket-rejected', { code: verdict.code })
+          reject(res, rpcId, failure(ERROR_CODES.unauthorized, 401, verdict.reason))
+          return
+        }
+        const grant = issueWsTicket({
+          deviceId: verdict.claims.clientId,
+          role: verdict.claims.activeRole,
+        })
+        deps.metrics?.countAuthAccepted()
+        sendJson(res, 200, { ok: true, ticket: grant.ticket, expiresAt: grant.expiresAt }, protocolHeader)
+        return
+      }
+
       // ── rpc：Bearer → 设备→Peer → 官方信封 → sharedFetch ────────────────
       if (path === GUARD_ROUTES.rpc) {
         if (method !== 'POST') {
@@ -734,17 +835,53 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
           return
         }
         const token = bearer.slice(BEARER_SCHEME.length + 1)
-        const identity = await deps.tokens.verify(token)
+
+        let identity: { deviceId: string; role: RoleName } | null
+        let body: Buffer | null = null
+
+        if (deps.auth !== undefined) {
+          // 账号认证模式：**租约 + 客户端签名**。必须读到正文才能核对摘要，
+          // 所以先做长度门控（`readBody` 已经按 maxRequestBodyBytes 截断），
+          // 验签失败时不进入任何业务解析。
+          body = await readBody(req, LIMITS.maxRequestBodyBytes)
+          if (body === null) {
+            reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'body too large'))
+            return
+          }
+          const verdict = await deps.auth.verifyHubRequest({
+            // 传**原始头**：认证服务自己解析 `Bearer <lease>`。
+            lease: typeof authorization === 'string' ? authorization : '',
+            method,
+            path,
+            audience: String(req.headers.host ?? '').toLowerCase(),
+            bodyDigest: sha256Hex(body),
+            headers: proofHeadersOf(req),
+          })
+          if (!verdict.ok) {
+            deps.metrics?.countAuthDenied()
+            audit('auth-verdict', { path, code: verdict.code })
+            reject(res, rpcId, failure(ERROR_CODES.unauthorized, 401, verdict.reason))
+            return
+          }
+          identity = { deviceId: verdict.claims.clientId, role: verdict.claims.activeRole }
+        } else {
+          const legacy = await deps.tokens.verify(token)
+          identity = legacy === null
+            ? null
+            : { deviceId: legacy.deviceId, role: legacy.role as RoleName }
+        }
         if (identity === null) {
           deps.metrics?.countAuthDenied()
           reject(res, rpcId, failure(ERROR_CODES.unauthorized, 401, 'invalid or revoked token'))
           return
         }
         deps.metrics?.countAuthAccepted()
-        const body = await readBody(req, LIMITS.maxRequestBodyBytes)
         if (body === null) {
-          reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'body too large'))
-          return
+          body = await readBody(req, LIMITS.maxRequestBodyBytes)
+          if (body === null) {
+            reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'body too large'))
+            return
+          }
         }
         const envelope = parseJson(body.toString('utf8'))
         if (!isPlainObject(envelope)
@@ -828,6 +965,11 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
     const { route } = createGuardWsRoute({
       authenticate: async (token: string) => {
         try {
+          // 账号认证模式：`?token=` 是一次性升级票据（不是长期租约）。
+          if (deps.auth !== undefined) {
+            const ticket = consumeWsTicket(token)
+            return ticket === null ? null : { deviceId: ticket.deviceId, role: ticket.role }
+          }
           const verdict = await deps.tokens.verify(token)
           return verdict === null ? null : { deviceId: verdict.deviceId, role: verdict.role }
         } catch {

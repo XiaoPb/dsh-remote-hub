@@ -102,6 +102,16 @@ export interface Config {
   network: 'loopback' | 'lan'
   /** 隧道。 */
   tunnel: TunnelConfig
+  /**
+   * 账号认证（第二个 Cordis 行 `@xiaopb/dsh-remote-hub/auth`）。
+   *
+   * `enabled: true` 时 Hub **只**接受「租约 + 客户端签名」，长期 bearer 设备
+   * 令牌不再被接受（旧令牌不会被静默升级成受信客户端）。认证插件缺失或
+   * 未就绪时守卫保持关闭（fail-closed，零暴露）。
+   */
+  accountAuth: {
+    enabled: boolean
+  }
 }
 
 /**
@@ -258,6 +268,13 @@ export const Config: z<Config> = z.object({
     args: z.array(z.string()),
     restart: z.union([z.const('never'), z.const('on-failure')]).default('on-failure'),
   }),
+  accountAuth: z.object({
+    /**
+     * 默认关闭：升级到本版本的既有部署继续用设备令牌，直到显式启用。
+     * `cordis.patch.yml` 的新装默认把它打开（见该文件的行配置）。
+     */
+    enabled: z.boolean().default(false),
+  }).default({}),
 })
 
 /** 默认配置（`Config` 的 `.default()` 已经给出同一组值；此处是给测试与文档用的显式副本）。 */
@@ -284,6 +301,7 @@ export const DEFAULT_CONFIG: Config = {
   singleController: true,
   network: 'loopback',
   tunnel: { kind: 'none', restart: 'on-failure' },
+  accountAuth: { enabled: false },
 }
 
 /**

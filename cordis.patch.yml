@@ -21,6 +21,12 @@
 - insert:
     - id: remote-hub
       name: '@xiaopb/dsh-remote-hub'
+      # `accountAuth.enabled: true` 时 Hub **只**接受「租约 + 客户端签名」。
+      # 默认 false = 兼容既有设备令牌；完成可信客户端登记后再切换，
+      # 切换后旧令牌立即失效（不会静默升级成受信客户端）。
+      config:
+        accountAuth:
+          enabled: false
 
 - insert:
     - id: remote-hub-auth

@@ -27,7 +27,7 @@ import net from 'node:net'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import type { IncomingMessage } from 'node:http'
 
-import { GUARD_ROUTES, HUB_PROTOCOL_HEADER, PROTOCOL_VERSION, type RoleName } from '@core/index.js'
+import { GUARD_ROUTES, HUB_PROTOCOL_HEADER, PROTOCOL_VERSION, type HubAuthPort, type RoleName } from '@core/index.js'
 
 import { createApprovalBridge, deviceTargetsResolver, type ApprovalAuditRow } from './approval-bridge.js'
 import { Config, DEFAULT_CONFIG, validateConfig, type Config as ConfigType } from './config.js'
@@ -387,11 +387,25 @@ export function applyRemoteHub(ctx: Context, config: ConfigType = DEFAULT_CONFIG
   })
 
   // 服务就绪时再装配；宿主永不提供这些服务时回调不执行 → 插件安静地不装。
+  const deps: string[] = ['connection', 'typertGateway', 'remoteAccess']
+  // 账号认证开启时，再加一等公民依赖：认证插件 `provide('remoteHubAuth')`。
+  // 认证插件缺席/未就绪 → 回调不执行 → 守卫不监听（fail-closed，零暴露）。
+  if (config.accountAuth.enabled) deps.push('remoteHubAuth')
   ;(ctx as unknown as {
     inject(deps: readonly string[], callback: (scoped: Context) => void): { dispose?: () => unknown } | undefined
-  }).inject(['connection', 'typertGateway', 'remoteAccess'], scoped => {
-    writeStatus(config, { phase: 'services-ready' })
-    assembleRemoteHub(scoped, config)
+  }).inject(deps, scoped => {
+    writeStatus(config, { phase: 'services-ready', accountAuth: config.accountAuth.enabled })
+    const auth = config.accountAuth.enabled
+      ? (ctx as unknown as {
+        reflect?: { get?: (name: string, strict?: boolean) => unknown }
+      }).reflect?.get?.('remoteHubAuth', false) as HubAuthPort | undefined
+      : undefined
+    if (config.accountAuth.enabled && auth === undefined) {
+      // 声明了依赖却拿不到实现：宁可不开门。
+      writeStatus(config, { phase: 'failed', stage: 'auth-service', error: 'remoteHubAuth missing' })
+      return
+    }
+    assembleRemoteHub(scoped, config, auth)
   })
 
   // ── 本地插件管理直连通道：**独立的注入 fiber** ────────────────────────────────
@@ -563,7 +577,7 @@ function withHostOrigin(request: IncomingMessage, hostOrigin: string): IncomingM
 export type GuardWsInjection = NonNullable<GuardDeps['ws']>
 
 /** `ctx.inject` 回调里的真实装配（三个服务此时已就绪）。 */
-function assembleRemoteHub(ctx: Context, config: ConfigType): void {
+function assembleRemoteHub(ctx: Context, config: ConfigType, auth?: HubAuthPort): void {
   ctx.effect(async () => {
     const disposers: (() => void | Promise<void>)[] = []
     const push = (dispose: () => void | Promise<void>): void => { disposers.push(dispose) }
@@ -794,9 +808,17 @@ function assembleRemoteHub(ctx: Context, config: ConfigType): void {
         // 单控让位：只断连接（丢 Peer、断流、关 WS），**不**吊销令牌（设计 v0.3 §7）。
         onSessionDisplaced: deviceId => { dropDevice(deviceId, 'displaced') },
         ...(ws === undefined ? {} : { ws }),
+        ...(auth === undefined ? {} : { auth }),
       })
       at('guard:up')
       push(() => guard?.dispose())
+
+      // 账号认证模式：客户端被撤销 / 角色变化时，丢弃它**当前**的全部连接。
+      // 这是「撤销立即生效」的唯一出口——已建立的 socket 不会自己失效。
+      if (auth !== undefined) {
+        push(auth.onClientRevoked(clientId => { dropDevice(clientId, 'auth-client-revoked') }))
+        push(auth.onClientRoleChanged(clientId => { dropDevice(clientId, 'auth-role-changed') }))
+      }
 
       // 角色变化：既有 WS 里的 Peer 是握手时固定的 principal，必须断开重连，
       // 否则「降权」只对新请求生效（设计 v0.3 §7）。

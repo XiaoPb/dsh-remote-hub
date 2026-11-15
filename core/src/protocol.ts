@@ -78,6 +78,14 @@ export const GUARD_ROUTES = {
   stats: '/remote/stats',
   /** 配置快照（只读）与白名单子集写入。**双条件回环门控**。 */
   config: '/remote/config',
+  /**
+   * 一次性 WebSocket 升级票据（账号认证模式）。
+   *
+   * 浏览器原生 WS 不能带自定义签名头，所以客户端先对本 HTTP 请求签名，拿到
+   * 30 秒、只能消费一次的票据，再把它放进 `/remote/ws?token=<ticket>`。
+   * **长期租约永远不进入 URL**。
+   */
+  wsTicket: '/remote/ws-ticket',
 } as const
 
 export type GuardRouteName = keyof typeof GUARD_ROUTES
