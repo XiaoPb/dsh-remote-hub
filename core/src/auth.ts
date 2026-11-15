@@ -39,6 +39,8 @@ export const AUTH_ROUTES = {
   reauth: '/remote-auth/reauth',
   /** 两步验证绑定：start / confirm / disable。 */
   totp: '/remote-auth/totp',
+  /** 账号管理（admin）：list / create / setCeiling / disable / enable / delete。 */
+  accounts: '/remote-auth/accounts',
 } as const
 
 export type AuthRoutePath = (typeof AUTH_ROUTES)[keyof typeof AUTH_ROUTES]
@@ -98,6 +100,14 @@ export const AUTH_ERROR_CODES = {
   /** 认证服务不可用（Hub 侧 fail-closed）。 */
   unavailable: 'auth-unavailable',
   internal: 'auth-internal',
+  /** 账号已被管理员禁用。 */
+  accountDisabled: 'auth-account-disabled',
+  /** 子账号不存在。 */
+  accountNotFound: 'auth-account-not-found',
+  /** 不能禁用/删除最后一个管理员（或自己）。 */
+  lastAdmin: 'auth-last-admin',
+  /** 用户名已被占用。 */
+  accountExists: 'auth-account-exists',
 } as const
 
 export type AuthErrorCode = (typeof AUTH_ERROR_CODES)[keyof typeof AUTH_ERROR_CODES]
@@ -167,6 +177,17 @@ export interface AuthSessionView {
   expiresAt: number
   /** 最近一次完成 2FA 的时间（用于「信任新客户端」的时效判定）。 */
   lastMfaAt: number | null
+}
+
+/** 账号视图（多账号管理面）。 */
+export interface AccountView {
+  accountId: string
+  username: string
+  isAdmin: boolean
+  roleCeiling: 'read-only' | 'control' | 'full'
+  disabledAt: number | null
+  lastLoginAt: number | null
+  createdAt: number
 }
 
 /** `/remote-auth/status` 的响应体。 */

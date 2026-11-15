@@ -785,3 +785,63 @@ test('usernames are case-sensitive and sessions bind to their own account', { sk
     rmSync(env.dir, { recursive: true, force: true })
   }
 })
+
+test('admin can create, disable and delete sub-accounts', { skip: !dynamic }, async () => {
+  const env = await bootstrappedService('accounts-crud')
+  try {
+    const created = await env.service.createAccount(env.sessionCookie, {
+      username: 'secondary',
+      password: 'Second-Horse-9-Battery!',
+      roleCeiling: 'control',
+    })
+    assert.equal(created.account.username, 'secondary')
+    assert.equal(created.account.isAdmin, false)
+    assert.equal(created.account.roleCeiling, 'control')
+    assert.equal(created.initialPassword, undefined, '显式传口令时不应返回一次性口令')
+
+    const list = await env.service.listAccounts(env.sessionCookie)
+    assert.equal(list.length, 2)
+
+    const login = await env.service.login({ username: 'secondary', password: 'Second-Horse-9-Battery!' })
+    assert.equal(login.ok, true)
+    // 该子账号尚未绑定 TOTP：口令通过即拿到会话，但登记客户端会被 2FA 检查拦住。
+    assert.equal(login.response.mfaRequired, false)
+
+    await env.service.disableAccount(env.sessionCookie, created.account.accountId)
+    const blocked = await env.service.login({ username: 'secondary', password: 'Second-Horse-9-Battery!' })
+    assert.equal(blocked.ok, false)
+    assert.equal(blocked.code, 'auth-forbidden')
+
+    await env.service.enableAccount(env.sessionCookie, created.account.accountId)
+    const again = await env.service.login({ username: 'secondary', password: 'Second-Horse-9-Battery!' })
+    assert.equal(again.ok, true)
+
+    await env.service.deleteAccount(env.sessionCookie, created.account.accountId)
+    assert.equal((await env.service.listAccounts(env.sessionCookie)).length, 1)
+
+    await assert.rejects(
+      () => env.service.disableAccount(env.sessionCookie, 'acc_admin'),
+      /administrator/u,
+      '管理员不能被禁用',
+    )
+  } finally {
+    rmSync(env.dir, { recursive: true, force: true })
+  }
+})
+
+test('creating an account without a password returns a one-time password', { skip: !dynamic }, async () => {
+  const env = await bootstrappedService('accounts-generated')
+  try {
+    const created = await env.service.createAccount(env.sessionCookie, { username: 'guestish' })
+    assert.ok(typeof created.initialPassword === 'string' && created.initialPassword.length >= 12)
+    const login = await env.service.login({ username: 'guestish', password: created.initialPassword })
+    assert.equal(login.ok, true)
+    // 首次登录必须先改密，改完之前不能登记客户端。
+    await assert.rejects(
+      () => env.service.enroll(login.cookie, { label: 'x', clientType: 'browser', publicKey: { kty: 'EC' }, roleCeiling: 'control' }),
+      /change the initial password first|publicKey/u,
+    )
+  } finally {
+    rmSync(env.dir, { recursive: true, force: true })
+  }
+})

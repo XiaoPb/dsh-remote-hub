@@ -461,6 +461,11 @@ export async function writePrivateFile(path: string, body: string): Promise<void
   }
 }
 
+/** 生成一个 accountId。 */
+export function newAccountId(): string {
+  return `acc_${randomBytes(8).toString('hex')}` 
+}
+
 /** 生成一个 clientId。 */
 export function newClientId(): string {
   return `cli_${randomBytes(12).toString('hex')}`

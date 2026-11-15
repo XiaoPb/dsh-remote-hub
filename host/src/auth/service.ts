@@ -12,7 +12,10 @@
  *
  * @module dsh-remote-hub/host/auth/service
  */
+import { randomBytes } from 'node:crypto'
+
 import type {
+  AccountView,
   AuthClaims,
   AuthErrorCode,
   AuthSessionView,
@@ -56,8 +59,8 @@ import {
   verifyEcdsa,
   verifyPassword,
 } from './crypto.js'
-import type { AuthStore, ClientRecord, SessionRecord } from './store.js'
-import { newClientId, newKeyId, newSessionId } from './store.js'
+import type { AccountRecord, AuthStore, AuthStoreData, ClientRecord, SessionRecord } from './store.js'
+import { newAccountId, newClientId, newKeyId, newSessionId } from './store.js'
 import {
   generateBackupCodes,
   generateTotpSecret,
@@ -112,6 +115,25 @@ export interface AuthService extends HubAuthPort {
   passwordPolicy(): PasswordPolicy
   /** 切换口令策略（仅管理员会话；立即生效，无需重启）。 */
   setPasswordPolicy(sessionToken: string | undefined, policy: PasswordPolicy): Promise<PasswordPolicy>
+  /** 账号列表（admin）。 */
+  listAccounts(sessionToken: string | undefined): Promise<AccountView[]>
+  /**
+   * 创建子账号（admin；要求新鲜 2FA）。
+   *
+   * 未提供口令时生成一次性初始口令，返回一次；该账号首次登录必须改密。
+   */
+  createAccount(
+    sessionToken: string | undefined,
+    input: { username: string; password?: string; roleCeiling?: RoleName },
+  ): Promise<{ account: AccountView; initialPassword?: string }>
+  /** 调整账号上限（admin；抬高要求新鲜 2FA）。 */
+  setAccountCeiling(sessionToken: string | undefined, accountId: string, role: RoleName): Promise<AccountView>
+  /** 禁用子账号：会话失效、名下客户端全部撤销。 */
+  disableAccount(sessionToken: string | undefined, accountId: string): Promise<AccountView>
+  /** 重新启用子账号。 */
+  enableAccount(sessionToken: string | undefined, accountId: string): Promise<AccountView>
+  /** 删除子账号（连同其客户端与会话）。 */
+  deleteAccount(sessionToken: string | undefined, accountId: string): Promise<void>
   /** 首次启动：无账号时用默认口令创建一个「必须先改密」的账号。 */
   seedDefaultAccount(input: { username: string; password: string }): Promise<boolean>
   /** 账号是否仍在等待初始改密（无账号 / 已完成 → false）。 */
@@ -589,7 +611,10 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     clientType: ClientType
     publicKey: ClientPublicKeyJwk
     roleCeiling: RoleName
-  }): Promise<EnrollClientResponse> {
+  }, accountId: string = 'acc_admin'): Promise<EnrollClientResponse> {
+    // 角色不得超过账号上限：子账号不能借注册客户端绕过自己的天花板。
+    const accountCap = findAccountById(store, accountId)?.roleCeiling ?? 'full'
+    const requestedRole = roleAtMost(input.roleCeiling, accountCap) ? input.roleCeiling : accountCap
     if (!isClientPublicKeyJwk(input.publicKey)) {
       throw Object.assign(new Error('publicKey must be an ECDSA P-256 JWK'), { code: AUTH_ERROR_CODES.badRequest })
     }
@@ -606,7 +631,8 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
     const at = now()
     const keyId = newKeyId(input.publicKey)
-    const existing = store.data.clients.find(row => row.revokedAt === null && row.keyId === keyId)
+    const existing = store.data.clients.find(row => row.revokedAt === null && row.keyId === keyId
+      && (row.accountId ?? 'acc_admin') === accountId)
     if (existing !== undefined) {
       const lease = await rotateLease(existing)
       return { ok: true, client: clientView(existing), lease }
@@ -616,14 +642,15 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     const secret = randomToken()
     const expiresAt = at + LEASE_TTL_MS
     const record: ClientRecord = {
+      accountId,
       clientId,
       keyId,
       label,
       clientType: input.clientType,
       publicKey: input.publicKey,
       fingerprint: publicKeyFingerprint(input.publicKey),
-      roleCeiling: input.roleCeiling,
-      activeRole: input.roleCeiling,
+      roleCeiling: requestedRole,
+      activeRole: requestedRole,
       leaseHash: sha256Hex(secret),
       leaseGeneration: 1,
       leaseExpiresAt: expiresAt,
@@ -675,6 +702,59 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
         code: AUTH_ERROR_CODES.mfaRequired,
       })
     }
+  }
+
+  /** 管理员会话（账号管理的唯一入口）。 */
+  async function requireAdmin(token: string | undefined): Promise<{ record: SessionRecord; view: AuthSessionView }> {
+    const session = await requireReadySession(token)
+    const account = accountForSession(store, session.record)
+    if (account === null || account.isAdmin === false) {
+      throw Object.assign(new Error('administrator only'), { code: AUTH_ERROR_CODES.forbidden })
+    }
+    return session
+  }
+
+  /** 一次性初始口令（满足 strong 策略：大小写 + 数字 + 符号，≥12 位）。 */
+  function generateInitialPassword(): string {
+    return `Dsh-${randomBytes(10).toString('hex')}-A9!`
+  }
+
+  /** 账号视图。 */
+  function accountViewOf(account: AccountRecord): AccountView {
+    return {
+      accountId: account.accountId ?? 'acc_admin',
+      username: account.username,
+      isAdmin: account.isAdmin !== false,
+      roleCeiling: account.roleCeiling ?? 'full',
+      disabledAt: account.disabledAt ?? null,
+      lastLoginAt: account.lastLoginAt ?? null,
+      createdAt: account.createdAt,
+    }
+  }
+
+  /** 审计事件（失败不影响认证主流程）。 */
+  function audit(
+    kind: string,
+    detail: Record<string, unknown>,
+    ids: { accountId?: string | null; clientId?: string | null } = {},
+  ): void {
+    try {
+      store.appendAudit?.({
+        at: now(),
+        kind,
+        accountId: ids.accountId ?? null,
+        clientId: ids.clientId ?? null,
+        detail: JSON.stringify(detail),
+      })
+    } catch {
+      // 审计只是旁路：写失败不能拒绝登录/管理操作。
+    }
+  }
+
+  /** 账号表内的查找（在 mutate 回调里用，避免读到旧快照）。 */
+  function findIn(data: AuthStoreData, accountId: string) {
+    const list = data.accounts ?? (data.account === null ? [] : [data.account])
+    return list.find(item => (item.accountId ?? 'acc_admin') === accountId)
   }
 
   const service: AuthService = {
@@ -979,7 +1059,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
           code: AUTH_ERROR_CODES.forbidden,
         })
       }
-      return registerClient(input)
+      return registerClient(input, account.accountId ?? 'acc_admin')
     },
 
     async listClients(sessionToken) {
@@ -989,6 +1069,146 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
     listTrustedClients() {
       return store.data.clients.map(clientView)
+    },
+
+    async listAccounts(sessionToken) {
+      await requireAdmin(sessionToken)
+      return accountsOf(store).map(accountViewOf)
+    },
+
+    async createAccount(sessionToken, input) {
+      const session = await requireAdmin(sessionToken)
+      requireFreshMfa(session)
+      const username = String(input.username ?? '').trim()
+      if (username.length < 3 || username.length > 32) {
+        throw Object.assign(new Error('username must be 3-32 characters'), { code: AUTH_ERROR_CODES.badRequest })
+      }
+      if (findAccountByName(store, username) !== null) {
+        throw Object.assign(new Error('username already taken'), { code: AUTH_ERROR_CODES.accountExists })
+      }
+      const roleCeiling = input.roleCeiling ?? 'control'
+      if (!isRoleName(roleCeiling)) {
+        throw Object.assign(new Error('invalid roleCeiling'), { code: AUTH_ERROR_CODES.badRequest })
+      }
+      const generated = input.password === undefined || String(input.password) === ''
+      const password = generated ? generateInitialPassword() : String(input.password)
+      assertPasswordAcceptable(password, username)
+      const at = now()
+      const account: AccountRecord = {
+        accountId: newAccountId(),
+        username,
+        passwordHash: await hashPassword(password),
+        roleCeiling,
+        isAdmin: false,
+        disabledAt: null,
+        mustChangePassword: true,
+        createdAt: at,
+        updatedAt: at,
+        lastLoginAt: null,
+      }
+      await store.mutate((data) => {
+        if (data.accounts === undefined) data.accounts = data.account === null ? [] : [data.account]
+        data.accounts.push(account)
+      })
+      audit('account-create', { username, roleCeiling }, { accountId: account.accountId })
+      return { account: accountViewOf(account), ...(generated ? { initialPassword: password } : {}) }
+    },
+
+    async setAccountCeiling(sessionToken, accountId, role) {
+      const session = await requireAdmin(sessionToken)
+      const target = findAccountById(store, accountId)
+      if (target === null) {
+        throw Object.assign(new Error('account not found'), { code: AUTH_ERROR_CODES.accountNotFound })
+      }
+      if (!isRoleName(role)) {
+        throw Object.assign(new Error('invalid role'), { code: AUTH_ERROR_CODES.badRequest })
+      }
+      if (target.isAdmin !== false && role !== ROLE_FULL) {
+        throw Object.assign(new Error('the administrator ceiling cannot be lowered'), { code: AUTH_ERROR_CODES.badRequest })
+      }
+      const raising = !roleAtMost(role, target.roleCeiling ?? 'control')
+      if (raising) requireFreshMfa(session)
+      await store.mutate((data) => {
+        const row = findIn(data, accountId)
+        if (row === undefined) return
+        row.roleCeiling = role
+        row.updatedAt = now()
+        // 账号上限降低时，名下客户端的上限/当前角色一并收敛。
+        for (const client of data.clients) {
+          if ((client.accountId ?? 'acc_admin') !== accountId) continue
+          if (!roleAtMost(client.roleCeiling, role)) client.roleCeiling = role
+          if (!roleAtMost(client.activeRole, role)) client.activeRole = role
+        }
+      })
+      audit('ceiling-change', { accountId, role }, { accountId })
+      return accountViewOf(findAccountById(store, accountId)!)
+    },
+
+    async disableAccount(sessionToken, accountId) {
+      const session = await requireAdmin(sessionToken)
+      const target = findAccountById(store, accountId)
+      if (target === null) {
+        throw Object.assign(new Error('account not found'), { code: AUTH_ERROR_CODES.accountNotFound })
+      }
+      if (target.isAdmin !== false) {
+        throw Object.assign(new Error('the administrator cannot be disabled'), { code: AUTH_ERROR_CODES.lastAdmin })
+      }
+      requireFreshMfa(session)
+      const at = now()
+      await store.mutate((data) => {
+        const row = findIn(data, accountId)
+        if (row !== undefined) {
+          row.disabledAt = at
+          row.updatedAt = at
+        }
+        // 级联：会话失效 + 客户端撤销（租约立即作废）。
+        for (const row2 of data.sessions) {
+          if ((row2.accountId ?? 'acc_admin') === accountId) row2.revokedAt = at
+        }
+        for (const client of data.clients) {
+          if ((client.accountId ?? 'acc_admin') !== accountId) continue
+          client.revokedAt = at
+          client.leaseHash = null
+        }
+      })
+      audit('account-disable', { accountId }, { accountId })
+      return accountViewOf(findAccountById(store, accountId)!)
+    },
+
+    async enableAccount(sessionToken, accountId) {
+      const session = await requireAdmin(sessionToken)
+      if (findAccountById(store, accountId) === null) {
+        throw Object.assign(new Error('account not found'), { code: AUTH_ERROR_CODES.accountNotFound })
+      }
+      requireFreshMfa(session)
+      await store.mutate((data) => {
+        const row = findIn(data, accountId)
+        if (row !== undefined) {
+          row.disabledAt = null
+          row.updatedAt = now()
+        }
+      })
+      audit('account-enable', { accountId }, { accountId })
+      return accountViewOf(findAccountById(store, accountId)!)
+    },
+
+    async deleteAccount(sessionToken, accountId) {
+      const session = await requireAdmin(sessionToken)
+      const target = findAccountById(store, accountId)
+      if (target === null) {
+        throw Object.assign(new Error('account not found'), { code: AUTH_ERROR_CODES.accountNotFound })
+      }
+      if (target.isAdmin !== false) {
+        throw Object.assign(new Error('the administrator cannot be deleted'), { code: AUTH_ERROR_CODES.lastAdmin })
+      }
+      requireFreshMfa(session)
+      await store.mutate((data) => {
+        data.accounts = (data.accounts ?? []).filter(item => (item.accountId ?? 'acc_admin') !== accountId)
+        data.clients = data.clients.filter(client => (client.accountId ?? 'acc_admin') !== accountId)
+        data.sessions = data.sessions.filter(row => (row.accountId ?? 'acc_admin') !== accountId)
+        data.challenges = data.challenges.filter(row => (row.accountId ?? 'acc_admin') !== accountId)
+      })
+      audit('account-delete', { accountId }, { accountId })
     },
 
     async enrollFromInvite(input) {

@@ -157,7 +157,13 @@ function statusFor(code: string): number {
     case AUTH_ERROR_CODES.bootstrapClosed:
     case AUTH_ERROR_CODES.roleExceeded:
     case AUTH_ERROR_CODES.passwordChangeRequired:
+    case AUTH_ERROR_CODES.accountDisabled:
       return 403
+    case AUTH_ERROR_CODES.accountNotFound:
+      return 404
+    case AUTH_ERROR_CODES.accountExists:
+    case AUTH_ERROR_CODES.lastAdmin:
+      return 409
     case AUTH_ERROR_CODES.rateLimited:
       return 429
     case AUTH_ERROR_CODES.clientInvalid:
@@ -609,6 +615,73 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
           return
         }
         sendJson(res, 200, { ok: true, lease: grant.lease, generation: grant.generation, expiresAt: grant.expiresAt })
+        return
+      }
+
+      // ── 账号管理（admin）：list / create / setCeiling / disable / enable / delete ──
+      if (path === AUTH_ROUTES.accounts) {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'method not allowed' })
+          return
+        }
+        if (!originFenceOk()) {
+          sendJson(res, 403, { ok: false, code: AUTH_ERROR_CODES.forbidden, message: 'cross-origin request refused' })
+          return
+        }
+        if (token === undefined) {
+          sendJson(res, 401, { ok: false, code: AUTH_ERROR_CODES.unauthorized, message: 'session required' })
+          return
+        }
+        const body = await readJson(req)
+        if (body === undefined) {
+          sendJson(res, 400, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'invalid body' })
+          return
+        }
+        const action = String(body.action ?? '')
+        if (action === 'list') {
+          sendJson(res, 200, { ok: true, accounts: await service.listAccounts(token) })
+          return
+        }
+        if (action === 'create') {
+          const created = await service.createAccount(token, {
+            username: String(body.username ?? ''),
+            ...(typeof body.password === 'string' ? { password: body.password } : {}),
+            ...(isRoleName(body.roleCeiling) ? { roleCeiling: body.roleCeiling } : {}),
+          })
+          sendJson(res, 200, { ok: true, ...created })
+          return
+        }
+        if (action === 'setCeiling') {
+          if (!isRoleName(body.role)) {
+            sendJson(res, 400, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'invalid role' })
+            return
+          }
+          sendJson(res, 200, {
+            ok: true,
+            account: await service.setAccountCeiling(token, String(body.accountId ?? ''), body.role),
+          })
+          return
+        }
+        if (action === 'disable') {
+          sendJson(res, 200, {
+            ok: true,
+            account: await service.disableAccount(token, String(body.accountId ?? '')),
+          })
+          return
+        }
+        if (action === 'enable') {
+          sendJson(res, 200, {
+            ok: true,
+            account: await service.enableAccount(token, String(body.accountId ?? '')),
+          })
+          return
+        }
+        if (action === 'delete') {
+          await service.deleteAccount(token, String(body.accountId ?? ''))
+          sendJson(res, 200, { ok: true })
+          return
+        }
+        sendJson(res, 400, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'unknown action' })
         return
       }
 
