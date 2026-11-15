@@ -49,15 +49,6 @@ describe('浏览器跨源：CORS 预检与回环 Origin', () => {
     }
     const devices = await mod.createDeviceStore(config.deviceTablePath)
     const tokens = mod.createTokenService({ devices })
-    const pairing = mod.createPairingService({
-      config: {
-        pairQrTtlMs: config.pairQrTtlMs,
-        pairCodeTtlMs: config.pairCodeTtlMs,
-        maxPairAttempts: config.maxPairAttempts,
-        defaultRole: config.defaultRole,
-      },
-      tokens,
-    })
     const metrics = mod.createMetricsCollector()
     const configStore = mod.createRuntimeConfigStore({
       path: join(dir, 'overrides.json'),
@@ -76,7 +67,6 @@ describe('浏览器跨源：CORS 预检与回环 Origin', () => {
     guard = await mod.startGuard({
       config,
       tokens,
-      pairing,
       dispatcher: dispatcherStub,
       devices,
       metrics,
@@ -176,13 +166,4 @@ describe('浏览器跨源：CORS 预检与回环 Origin', () => {
     assert.equal(response.status, 403)
   })
 
-  it('回环 origin 访问 /remote/pair（公网兑换端）仍按严格围栏 → 403', async () => {
-    // pair 端允许非回环调用方，但 Origin 与 Host 不同 authority 时必须拒绝。
-    const response = await fetch(`${base}/remote/pair`, {
-      method: 'POST',
-      headers: { origin: PAGE_ORIGIN, 'x-hub-protocol': '1', 'content-type': 'application/json' },
-      body: JSON.stringify({ code: 'ABCD2345', clientLabel: 'x' }),
-    })
-    assert.equal(response.status, 403)
-  })
 })
