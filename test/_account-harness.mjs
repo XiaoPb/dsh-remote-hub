@@ -93,7 +93,7 @@ export async function bootstrappedAccount(tag = 'harness') {
       const payload = auth.buildProofPayload({
         method: options.method ?? 'POST',
         path,
-        audience,
+        audience: options.audience ?? audience,
         timestamp,
         nonce,
         clientId: enrolled.client.clientId,
@@ -121,7 +121,7 @@ export async function bootstrappedAccount(tag = 'harness') {
         lease: `Bearer ${enrolled.lease.lease}`,
         method: options.method ?? 'POST',
         path: options.path ?? '/remote/rpc',
-        audience,
+        audience: options.audience ?? audience,
         bodyDigest,
         headers,
       })
