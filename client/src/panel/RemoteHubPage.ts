@@ -697,23 +697,23 @@ const STRINGS = {
   refresh: '刷新状态',
   refreshingBtn: '刷新中…',
   singleCtrl: '单控策略：',
-  singleOn: '已启用（新设备配对会挤掉旧设备）',
+  singleOn: '已启用（新客户端连接会挤掉旧客户端）',
   singleOff: '已关闭（允许多设备同时控制）',
-  paired: '已配对',
+  paired: '已信任',
   role: '授权角色：',
-  issueTicket: '生成二维码',
+  issueTicket: '生成邀请二维码',
   issuing: '生成中…',
-  issueCode: '生成短码',
-  ticketHint: '每 15 秒自动轮换 · 配对成功即下发长期设备令牌',
+  issueCode: '生成邀请短码',
+  ticketHint: '每 15 秒自动轮换 · 邀请只用于发现，权限与撤销在设置页管理',
   pairUnavailable: '未检测到本机签发凭据：本机未启用被控端，或页面不是从本机 127.0.0.1 打开。',
-  devicesTitle: '已配对设备',
+  devicesTitle: '可信客户端',
   devicesEmptyLoading: '正在读取…',
-  devicesEmpty: '还没有设备配对到本机。上方生成二维码，用另一台设备连接即可。',
-  revoked: ' · 已清除',
+  devicesEmpty: '还没有可信客户端。用上方「邀请」让另一台设备完成首次信任（账号 + 2FA）后即可出现。',
+  revoked: ' · 已撤销',
   never: ' · 从未连接',
   recent: ' · 最近 ',
-  revoke: '清除配对',
-  revokeAll: '清除全部配对',
+  revoke: '撤销客户端',
+  revokeAll: '撤销全部客户端',
   lead: '让其他设备连接并控制这台机器，或把整机切换到其它设备。',
   guardOrigin: '守卫地址',
   guardProtocol: '协议版本',
@@ -722,29 +722,30 @@ const STRINGS = {
   netLoopback: '仅本机',
   singleOnShort: '单控已启用',
   singleOffShort: '单控已关闭',
-  issueTitle: '连接令牌',
+  issueTitle: '邀请新设备',
   issuedKind: '凭据类型',
   issuedRole: '授权角色',
-  issuedTicket: '二维码票据',
-  issuedCodeLabel: '配对短码',
-  issuedLinkLabel: '配对链接',
+  issuedTicket: '邀请二维码',
+  issuedCodeLabel: '邀请短码',
+  issuedLinkLabel: '邀请链接',
   issuedNone: '尚未签发',
   qrPending: '尚未生成二维码',
   codePending: '点击右侧生成短码',
   linkPending: '点击右侧生成二维码以获取链接',
   countdownLabel: '有效期倒计时',
   scanHint: '用另一台设备扫码，或在下方主控端粘贴链接。',
-  revokedShort: '已清除',
+  revokedShort: '已撤销',
   neverShort: '从未连接',
   notConnectedShort: '未连接',
-  devicesEmptyTitle: '暂无设备配对到本机',
+  devicesEmptyTitle: '暂无可信客户端',
   // ② 设备区
   devicesZoneTitle: '已连接设备',
   filterAll: '全部',
   filterInbound: '连接本机',
   filterOutbound: '本机连接',
-  groupInbound: '连接本机的设备',
-  groupInboundHint: '其它设备正在控制本机（被控端入站）',
+  groupInbound: '可信客户端（在线 / 离线）',
+  groupInboundHint: '已信任的客户端。权限上限与撤销在「设置 → 登录与账号」管理',
+  manageInSettings: '权限与撤销：设置 → 登录与账号',
   groupOutbound: '本机连接的设备',
   groupOutboundHint: '本机作为主控端主动连接',
   statusOnline: '在线',
@@ -752,9 +753,9 @@ const STRINGS = {
   statusOffline: '离线',
   // 三态（2026-11-12）：已连接 / 已配对 / 配对失效
   statusConnected: '已连接',
-  statusPaired: '已配对',
-  statusInvalid: '配对失效',
-  devCreatedAt: '配对于',
+  statusPaired: '已信任（离线）',
+  statusInvalid: '已撤销',
+  devCreatedAt: '信任于',
   devRole: '角色',
   devLastSeen: '最近活跃',
   // ③ 统计区
@@ -762,12 +763,12 @@ const STRINGS = {
   statsScope: '本次运行',
   statUptime: '运行时长',
   statActive: '活跃设备',
-  statPaired: '累计配对',
+  statPaired: '累计邀请兑换',
   statRejected: '拒绝尝试',
   statActiveStreams: '活跃连接',
   chartActivity: '连接活动（24h）',
   chartActivitySub: '每小时认证通过数',
-  chartPairing: '配对成功（7d）',
+  chartPairing: '邀请兑换（7d）',
   chartPairingSub: '每日兑换成功数',
   chartHeat: '活跃度热力',
   chartHeatSub: '颜色越深表示该时段连接越密集',
@@ -784,7 +785,7 @@ const STRINGS = {
   cfgBridge: '审批桥接',
   cfgBridgeDesc: '远程操作审批走桌面原生卡片',
   cfgRole: '默认授权角色',
-  cfgRoleDesc: '保存后同步顶部配对权限，并重新生成二维码与短码；不会改变已配对设备的权限',
+  cfgRoleDesc: '保存后同步顶部邀请权限，并重新生成邀请二维码与短码；不会改变已信任客户端的权限（那些在设置页管理）',
   cfgAttempts: '短码最大尝试次数',
   cfgAttemptsDesc: '超过次数短码立即作废（1–100）',
   cfgColdNote: '以下参数需重启后生效',
@@ -1147,14 +1148,7 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
       ? el('div', 'rh-group', undefined,
         el('div', 'rh-group-head', undefined,
           el('span', 'rh-gtitle', undefined, STRINGS.groupInbound),
-          el('span', 'rh-ghint', undefined, STRINGS.groupInboundHint),
-          activeDevices.length > 0
-            ? el('button', 'rh-btn small danger', {
-              type: 'button', 'data-testid': 'revoke-all', style: { marginLeft: 'auto' },
-              disabled: state.busy !== null,
-              onClick: () => actions.onRevokeAll(),
-            }, STRINGS.revokeAll)
-            : null),
+          el('span', 'rh-ghint', undefined, STRINGS.groupInboundHint)),
         state.devices.length === 0
           ? el('div', 'rh-empty', { 'data-testid': 'devices-empty', style: { border: '1px dashed var(--rh-border-strong)', borderRadius: 'var(--rh-radius-sm)' } },
             el('div', 'rh-ic', undefined, '📭'),
@@ -1576,25 +1570,23 @@ function renderDeviceCard(
         el('div', 'rh-v', undefined, new Date(device.createdAt).toLocaleDateString()))
       : null),
   // 状态由右上角三态标签表达，不再额外堆叠文字说明。
+  // 权限上限与撤销属于**身份管理**：统一在「设置 → 登录与账号」里做，
+  // 运行页只保留状态与连接事实，避免两处都能改权限而语义漂移。
   el('div', 'rh-dev-foot', undefined,
-    !invalid ? el('button', 'rh-btn small danger', {
-      type: 'button', 'data-testid': 'revoke', disabled: state.busy !== null,
-      onClick: () => actions.onRevoke(device.deviceId),
-    }, STRINGS.revoke) : null,
-    actions.onForgetDevice ? el('button', 'rh-btn small danger', {
-      type: 'button', 'data-testid': 'device-delete', disabled: state.busy !== null,
-      onClick: () => actions.onForgetDevice?.(device.deviceId),
-    }, '删除记录 / Delete') : null))
+    el('span', {
+      'data-testid': 'manage-in-settings',
+      style: { fontSize: 11.5, color: 'var(--rh-text-2)' },
+    }, STRINGS.manageInSettings)))
 }
 
-/** Display only recorded pairing facts; legacy missing metadata remains unknown. */
+/** Display only recorded trust facts; legacy missing metadata remains unknown. */
 function renderOutboundFacts(target?: OutboundTarget): React.ReactNode {
-  const time = (value?: number): string => value === undefined ? '未知（旧配对未记录）' : new Date(value).toLocaleString()
+  const time = (value?: number): string => value === undefined ? '未知（旧记录未保存）' : new Date(value).toLocaleString()
   return el('div', 'rh-minirow', { 'data-testid': 'outbound-facts' },
-    React.createElement('div', null, '授权角色：', target?.role ? (ROLE_LABEL[target.role as RoleName] ?? target.role) : '未知（需重新配对确认）'),
-    React.createElement('div', null, '配对时间：', time(target?.pairedAt)),
+    React.createElement('div', null, '授权角色：', target?.role ? (ROLE_LABEL[target.role as RoleName] ?? target.role) : '未知（需重新信任确认）'),
+    React.createElement('div', null, '信任时间：', time(target?.pairedAt)),
     React.createElement('div', null, '最近连接：', time(target?.lastConnectedAt)),
-    React.createElement('div', null, '配对标识：', target?.deviceId ?? target?.id?.slice(0, 12) ?? '未知'))
+    React.createElement('div', null, '客户端标识：', target?.deviceId ?? target?.id?.slice(0, 12) ?? '未知'))
 }
 
 /** 出站分组内容卡（本机指向；不伪造设备列表）。 */

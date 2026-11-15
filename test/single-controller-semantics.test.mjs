@@ -134,8 +134,8 @@ describe('状态只用标签表达（不堆叠文字说明）', () => {
 
     const texts = collectText(tree)
     assert.ok(texts.includes('已连接'))
-    assert.ok(texts.includes('已配对'))
-    assert.ok(texts.includes('配对失效'))
+    assert.ok(texts.includes('已信任（离线）'))
+    assert.ok(texts.includes('已撤销'))
 
     // 不应出现任何解释性长文案
     const all = texts.join('')

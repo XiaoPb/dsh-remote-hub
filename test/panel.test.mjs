@@ -453,12 +453,12 @@ describe('四区结构（参考文档 ①令牌 ②设备 ③统计 ④配置）
     const pills = collectByTestId(tree, 'device-status')
     const byStatus = new Map(pills.map(pill => [pill.props['data-status'], pill]))
     assert.ok(byStatus.has('connected'), '必须渲染「已连接」')
-    assert.ok(byStatus.has('paired'), '必须渲染「已配对」')
-    assert.ok(byStatus.has('invalid'), '必须渲染「配对失效」')
+    assert.ok(byStatus.has('paired'), '必须渲染「已信任（离线）」')
+    assert.ok(byStatus.has('invalid'), '必须渲染「已撤销」')
     const texts = collectText(tree)
     assert.ok(texts.includes('已连接'))
-    assert.ok(texts.includes('已配对'))
-    assert.ok(texts.includes('配对失效'))
+    assert.ok(texts.includes('已信任（离线）'))
+    assert.ok(texts.includes('已撤销'))
   })
 
   it('① 过期自动重签开关存在且默认勾选', async () => {
@@ -564,7 +564,7 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
     assert.equal(texts.some(t => t.includes('127.0.0.1:8443#dshrh=')), false, '不得用回环地址')
   })
 
-  it('已配对设备：每行有「清除配对」，顶部有「清除全部」', async () => {
+  it('可信客户端：运行页只显示状态，权限与撤销指向设置页', async () => {
     const { renderRemoteHubPage } = await loadPage()
     const tree = renderRemoteHubPage(baseState({
       devices: [
@@ -572,12 +572,14 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
         { deviceId: 'd2', label: 'Old', role: 'full', lastSeenAt: null, revokedAt: '2026-01-01T00:00:00Z' },
       ],
     }), noopActions)
-    const revokes = collectByTestId(tree, 'revoke')
-    assert.equal(revokes.length, 1, '只有未吊销设备有清除按钮')
-    assert.equal(collectByTestId(tree, 'revoke-all').length, 1)
+    // 运行页不再提供撤销/删除：身份管理统一在设置页，避免两处都能改权限。
+    assert.equal(collectByTestId(tree, 'revoke').length, 0)
+    assert.equal(collectByTestId(tree, 'revoke-all').length, 0)
+    assert.equal(collectByTestId(tree, 'device-delete').length, 0)
+    assert.ok(collectByTestId(tree, 'manage-in-settings').length >= 1, '每张卡都指向设置页')
     const texts = collectText(tree)
     assert.ok(texts.some(t => t.includes('Pixel 9')))
-    assert.ok(texts.some(t => t.includes('配对失效')), '已吊销行显示「配对失效」')
+    assert.ok(texts.some(t => t.includes('已撤销')), '已吊销行显示「已撤销」')
   })
 
   it('页头独立吸顶，卡片标题不参与跨卡片滚动', async () => {
@@ -590,14 +592,14 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
     assert.equal(collectByTestId(tree, 'devices-section')[0].props['data-sticky-header'], undefined)
   })
 
-  it('清除全部只进入既有动作的一次确认流程', async () => {
+  it('运行页不提供批量撤销（撤销在设置页逐个进行）', async () => {
     const { renderRemoteHubPage } = await loadPage()
-    let called = 0
     const tree = renderRemoteHubPage(baseState({ devices: [
       { deviceId: 'd1', label: 'Pixel', revokedAt: null },
-    ] }), { ...noopActions, onRevokeAll() { called += 1 } })
-    collectByTestId(tree, 'revoke-all')[0].props.onClick()
-    assert.equal(called, 1)
+    ] }), noopActions)
+    assert.equal(collectByTestId(tree, 'revoke-all').length, 0)
+    // 提示文案指向设置页的账号管理。
+    assert.ok(collectText(tree).some(t => t.includes('登录与账号')))
   })
 
   it('已配对目标卡的连接为主操作，删除与其分开', async () => {
@@ -610,13 +612,13 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
     assert.match(collectByTestId(card, 'outbound-delete')[0].props.className, /danger/)
   })
 
-  it('已配对设备都提供删除入口，确认后由 Host 撤销并移除设备记录', async () => {
+  it('运行页不再提供设备删除入口（撤销与删除记录统一在设置页）', async () => {
     const { renderRemoteHubPage } = await loadPage()
     const tree = renderRemoteHubPage(baseState({ devices: [
       { deviceId: 'd1', label: 'Active', role: 'control', revokedAt: null, lastSeenAt: new Date().toISOString() },
       { deviceId: 'd2', label: 'Stale', role: 'full', revokedAt: '2026-01-01T00:00:00Z', lastSeenAt: null },
     ] }), noopActions)
-    assert.equal(collectByTestId(tree, 'device-delete').length, 2)
+    assert.equal(collectByTestId(tree, 'device-delete').length, 0)
   })
 
   it('守卫诊断使用可换行的响应式网格容器', async () => {
