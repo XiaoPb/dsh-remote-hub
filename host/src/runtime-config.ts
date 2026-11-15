@@ -38,27 +38,36 @@ export const CONFIG_WRITABLE_KEYS = [
 
 export type ConfigWritableKey = (typeof CONFIG_WRITABLE_KEYS)[number]
 
+/**
+ * 页面可改、但**必须重启**才生效的字段。
+ *
+ * 为什么不做热改：守卫的端口在装配时一次性 bind，换端口必须重建监听并丢弃
+ * 全部在途连接（还会连带隧道与配对链接）；自动热切等于「点一下保存就断线」，
+ * 风险高于收益。这里只持久化覆盖值，并在快照里标记 `restartPending`。
+ */
+export const CONFIG_COLD_WRITABLE_KEYS = ['guardPort', 'network'] as const
+
+export type ConfigColdKey = (typeof CONFIG_COLD_WRITABLE_KEYS)[number]
+
 /** 页面可展示（只读）的字段：含热项 + 冷项（冷项标注「重启后生效」）。 */
 export const CONFIG_READONLY_KEYS = [
-  'network',
-  'guardPort',
   'pairQrTtlMs',
   'pairCodeTtlMs',
   'tunnelKind',
 ] as const
 
-export type ConfigReadableKey = ConfigWritableKey | (typeof CONFIG_READONLY_KEYS)[number]
+export type ConfigReadableKey = ConfigWritableKey | ConfigColdKey | (typeof CONFIG_READONLY_KEYS)[number]
 
-export type ConfigSnapshot = Partial<Record<ConfigReadableKey, unknown>>
+export type ConfigSnapshot = Partial<Record<ConfigReadableKey | 'restartPending', unknown>>
 
 /** 运行时配置存取接口（guard ConfigStore 的实现）。 */
 export interface RuntimeConfigStore {
   get(): Promise<ConfigSnapshot>
   patch(input: Record<string, unknown>): Promise<ConfigSnapshot>
-  /** 覆盖值（装配时 merge 进 Config；键与 CONFIG_WRITABLE_KEYS 同）。 */
-  overrides(): Promise<Partial<Record<ConfigWritableKey, unknown>>>
+  /** 覆盖值（装配时 merge 进 Config；热项与冷项都在这里）。 */
+  overrides(): Promise<Partial<Record<ConfigWritableKey | ConfigColdKey, unknown>>>
   /** patch 事件订阅（plugin.ts 用于刷新守卫内存态）。 */
-  onPatched(listener: (overrides: Partial<Record<ConfigWritableKey, unknown>>) => void): () => void
+  onPatched(listener: (overrides: Partial<Record<ConfigWritableKey | ConfigColdKey, unknown>>) => void): () => void
 }
 
 /** `createRuntimeConfigStore` 依赖。 */
@@ -71,16 +80,32 @@ export interface RuntimeConfigDeps {
   now?: () => Date
 }
 
-const BOOLEAN_KEYS: readonly ConfigWritableKey[] = ['singleController', 'bridgeApprovals']
+const BOOLEAN_KEYS: readonly string[] = ['singleController', 'bridgeApprovals']
 
-/** 校验并收敛一个白名单字段；非法抛错。 */
-function coerce(key: ConfigWritableKey, value: unknown): unknown {
+/** 全部可写键（热 + 冷）。 */
+const ALL_WRITABLE: readonly string[] = [...CONFIG_WRITABLE_KEYS, ...CONFIG_COLD_WRITABLE_KEYS]
+
+/** 冷键集合（写入后需重启）。 */
+const COLD_SET: ReadonlySet<string> = new Set(CONFIG_COLD_WRITABLE_KEYS)
+
+/** 校验并收敛一个可写字段；非法抛错。 */
+function coerce(key: string, value: unknown): unknown {
   if (BOOLEAN_KEYS.includes(key)) {
     if (typeof value !== 'boolean') throw new Error(`config: ${key} must be boolean`)
     return value
   }
   if (key === 'defaultRole') {
     if (!isRoleName(value as RoleName)) throw new Error(`config: ${key} must be a known role`)
+    return value
+  }
+  if (key === 'guardPort') {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 65_535) {
+      throw new Error('config: guardPort must be an integer 1..65535')
+    }
+    return value
+  }
+  if (key === 'network') {
+    if (value !== 'loopback' && value !== 'lan') throw new Error('config: network must be loopback or lan')
     return value
   }
   // maxPairAttempts
@@ -95,18 +120,18 @@ function coerce(key: ConfigWritableKey, value: unknown): unknown {
  * @param deps - 路径、当前配置读取器、时钟。
  */
 export function createRuntimeConfigStore(deps: RuntimeConfigDeps): RuntimeConfigStore {
-  const listeners = new Set<(overrides: Partial<Record<ConfigWritableKey, unknown>>) => void>()
-  let cache: Partial<Record<ConfigWritableKey, unknown>> | undefined
+  const listeners = new Set<(overrides: Partial<Record<ConfigWritableKey | ConfigColdKey, unknown>>) => void>()
+  let cache: Partial<Record<ConfigWritableKey | ConfigColdKey, unknown>> | undefined
 
-  async function load(): Promise<Partial<Record<ConfigWritableKey, unknown>>> {
+  async function load(): Promise<Partial<Record<ConfigWritableKey | ConfigColdKey, unknown>>> {
     if (cache !== undefined) return cache
     try {
       const raw = await readFile(expandHome(deps.path), 'utf8')
       const parsed: unknown = JSON.parse(raw)
-      const clean: Partial<Record<ConfigWritableKey, unknown>> = {}
+      const clean: Partial<Record<ConfigWritableKey | ConfigColdKey, unknown>> = {}
       if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-        for (const key of CONFIG_WRITABLE_KEYS) {
-          if (Object.hasOwn(parsed, key)) clean[key] = coerce(key, (parsed as Record<string, unknown>)[key])
+        for (const key of ALL_WRITABLE) {
+          if (Object.hasOwn(parsed, key)) clean[key as ConfigWritableKey | ConfigColdKey] = coerce(key, (parsed as Record<string, unknown>)[key])
         }
       }
       cache = clean
@@ -120,16 +145,19 @@ export function createRuntimeConfigStore(deps: RuntimeConfigDeps): RuntimeConfig
   return {
     async get() {
       const [overrides, current] = await Promise.all([load(), Promise.resolve(deps.current())])
-      return { ...current, ...overrides }
+      // 冷项与运行值不同 = 有待重启才生效的修改。
+      const restartPending = [...COLD_SET].some(key =>
+        Object.hasOwn(overrides, key) && overrides[key as ConfigColdKey] !== current[key as ConfigReadableKey])
+      return { ...current, ...overrides, restartPending }
     },
     async patch(input) {
       const overrides = await load()
-      const next: Partial<Record<ConfigWritableKey, unknown>> = { ...overrides }
+      const next: Partial<Record<ConfigWritableKey | ConfigColdKey, unknown>> = { ...overrides }
       for (const [key, value] of Object.entries(input)) {
-        if (!(CONFIG_WRITABLE_KEYS as readonly string[]).includes(key)) {
-          throw new Error(`config: ${key} is read-only or unknown (restart required for cold fields)`)
+        if (!ALL_WRITABLE.includes(key)) {
+          throw new Error(`config: ${key} is read-only or unknown`)
         }
-        next[key as ConfigWritableKey] = coerce(key as ConfigWritableKey, value)
+        next[key as ConfigWritableKey | ConfigColdKey] = coerce(key, value)
       }
       await withFileLock(expandHome(deps.path), async () => {
         await writeFileAtomic(expandHome(deps.path), `${JSON.stringify(next, null, 2)}\n`, {
@@ -147,6 +175,5 @@ export function createRuntimeConfigStore(deps: RuntimeConfigDeps): RuntimeConfig
     onPatched(listener) {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
-    },
-  }
+    },  }
 }

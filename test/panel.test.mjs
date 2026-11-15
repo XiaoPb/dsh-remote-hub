@@ -394,6 +394,8 @@ describe('四区结构（参考文档 ①令牌 ②设备 ③统计 ④配置）
     assert.equal(collectByTestId(tree, 'cfg-bridge').length, 1, '审批桥开关')
     assert.equal(collectByTestId(tree, 'cfg-role').length, 1, '角色下拉')
     assert.equal(collectByTestId(tree, 'cfg-attempts').length, 1, '尝试次数输入')
+    assert.equal(collectByTestId(tree, 'cfg-port').length, 1, '端口可编辑')
+    assert.equal(collectByTestId(tree, 'cfg-network').length, 1, '网络模式可编辑')
     assert.equal(collectByTestId(tree, 'config-save').length, 1, '保存按钮')
     const texts = collectText(tree)
     assert.ok(texts.some(t => t.includes('重启后生效')), '冷项标注')

@@ -615,7 +615,29 @@ function assembleRemoteHub(
     }
 
     try {
-      // 0. 端口解析：首选配置端口，被占就顺延 +1 直到可用（用户可再改回固定端口）。
+      // 0. 运行时配置覆盖（页面可改）：
+      //    热项在下方 onPatched 里即时生效；冷项（端口/网络）必须在这里合并，
+      //    因为它们决定 bind 的地址与端口。
+      at('cold-config')
+      const runtimeConfig = createRuntimeConfigStore({
+        path: expandHome(config.deviceTablePath.replace(/devices\.json$/u, 'overrides.json')),
+        current: () => ({
+          singleController: config.singleController,
+          bridgeApprovals: config.bridgeApprovals,
+          defaultRole: config.defaultRole,
+          maxPairAttempts: config.maxPairAttempts,
+          network: config.network,
+          guardPort: config.guardPort,
+          pairQrTtlMs: config.pairQrTtlMs,
+          pairCodeTtlMs: config.pairCodeTtlMs,
+          tunnelKind: config.tunnel.kind,
+        }),
+      })
+      const cold = await runtimeConfig.overrides()
+      if (typeof cold.guardPort === 'number') config.guardPort = cold.guardPort
+      if (cold.network === 'lan' || cold.network === 'loopback') config.network = cold.network
+
+      // 0.1 端口解析：首选配置端口，被占就顺延 +1 直到可用（用户可再改回固定端口）。
       //    隧道与配对链接都用 guard.origin（**实际**端口），所以漂移不会指错。
       at('port-check')
       const requestedPort = config.guardPort
@@ -745,23 +767,10 @@ function assembleRemoteHub(
         audit('device-connections-dropped', { deviceId, reason, ws: closedWs })
       }
 
-      // 7.5 运行指标 + 运行时配置 + 守卫信息（管理面与 guard 共用；
+      // 7.5 运行指标 + 守卫信息（管理面与 guard 共用；
       //     必须先于 registerRemoteServices：管理面服务要把它们注册进去）。
+      //     运行时配置在装配最前面创建（端口/网络要在 bind 之前合并冷覆盖）。
       const metrics = createMetricsCollector()
-      const runtimeConfig = createRuntimeConfigStore({
-        path: expandHome(config.deviceTablePath.replace(/devices\.json$/u, 'overrides.json')),
-        current: () => ({
-          singleController: config.singleController,
-          bridgeApprovals: config.bridgeApprovals,
-          defaultRole: config.defaultRole,
-          maxPairAttempts: config.maxPairAttempts,
-          network: config.network,
-          guardPort: config.guardPort,
-          pairQrTtlMs: config.pairQrTtlMs,
-          pairCodeTtlMs: config.pairCodeTtlMs,
-          tunnelKind: config.tunnel.kind,
-        }),
-      })
       const offPatched = runtimeConfig.onPatched(overrides => {
         if (Object.hasOwn(overrides, 'singleController')) {
           config.singleController = overrides.singleController as boolean

@@ -788,9 +788,11 @@ const STRINGS = {
   cfgRoleDesc: '保存后同步顶部邀请权限，并重新生成邀请二维码与短码；不会改变已信任客户端的权限（那些在设置页管理）',
   cfgAttempts: '短码最大尝试次数',
   cfgAttemptsDesc: '超过次数短码立即作废（1–100）',
-  cfgColdNote: '以下参数需重启后生效',
-  cfgNetwork: '网络模式',
+  cfgColdNote: '以下参数可修改，保存后写入本机配置；需重启 dsh web，重启后生效',
+  cfgRestartPending: '有修改待重启生效',
   cfgPort: '监听端口',
+  cfgPortDesc: '守卫绑定端口（1–65535）。被占用时启动会自动顺延 +1，并在诊断里标注实际端口',
+  cfgNetworkDesc: 'loopback 仅本机可连；lan 允许同网段直连（公网仍需隧道）',
   cfgQrTtl: '票据有效期',
   cfgCodeTtl: '短码有效期',
   cfgTunnel: '隧道类型',
@@ -1837,15 +1839,41 @@ function renderConfigBody(state: RemoteHubPageState, actions: RemoteHubPageActio
               if (!Number.isNaN(parsed)) actions.onConfigChange('maxPairAttempts', parsed)
             },
           })))),
-    // 冷项（只读展示 + 需重启标注）
-    el('div', 'rh-cold', undefined, STRINGS.cfgColdNote),
+    // 冷项（可改，但需重启 dsh web 生效）
+    el('div', 'rh-cold', undefined,
+      // 注意：`el` 的第二个参数是 className；纯文本节点必须带一个类名，
+      // 否则文本会被当成 className（2026-11-15 实测）。
+      el('span', 'rh-coldnote', STRINGS.cfgColdNote),
+      value('restartPending') === true
+        ? el('span', 'rh-pill small danger', { 'data-testid': 'restart-pending' }, STRINGS.cfgRestartPending)
+        : null),
+    el('div', 'rh-crow', undefined,
+      el('div', 'rh-cl', undefined,
+        el('div', 'rh-ct1', undefined, '网络模式'),
+        el('div', 'rh-cd', undefined, STRINGS.cfgNetworkDesc)),
+      el('div', 'rh-cc', undefined,
+        el('select', 'rh-select', {
+          'data-testid': 'cfg-network',
+          value: String(value('network') ?? 'loopback'),
+          onChange: (event: React.ChangeEvent<HTMLSelectElement>) =>
+            actions.onConfigChange('network', event.currentTarget.value),
+        },
+        el('option', { value: 'loopback' }, STRINGS.netLoopback),
+        el('option', { value: 'lan' }, STRINGS.netLan)))),
+    el('div', 'rh-crow', undefined,
+      el('div', 'rh-cl', undefined,
+        el('div', 'rh-ct1', undefined, STRINGS.cfgPort),
+        el('div', 'rh-cd', undefined, STRINGS.cfgPortDesc)),
+      el('div', 'rh-cc', undefined,
+        el('input', 'rh-num', {
+          type: 'number', min: 1, max: 65_535, 'data-testid': 'cfg-port',
+          value: String(value('guardPort') ?? ''),
+          onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+            const parsed = Number.parseInt(event.currentTarget.value, 10)
+            if (!Number.isNaN(parsed)) actions.onConfigChange('guardPort', parsed)
+          },
+        }))),
     el('div', 'rh-minirow', { style: { marginTop: 8 } },
-      el('div', undefined,
-        el('div', 'rh-k', undefined, STRINGS.cfgNetwork),
-        el('div', 'rh-v', undefined, value('network') === 'lan' ? STRINGS.netLan : STRINGS.netLoopback)),
-      el('div', undefined,
-        el('div', 'rh-k', undefined, STRINGS.cfgPort),
-        el('div', 'rh-v', undefined, String(value('guardPort') ?? '—'))),
       el('div', undefined,
         el('div', 'rh-k', undefined, STRINGS.cfgQrTtl),
         el('div', 'rh-v', undefined, `${Math.round(Number(value('pairQrTtlMs') ?? 0) / 1000)}s`)),

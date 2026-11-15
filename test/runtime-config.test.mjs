@@ -46,22 +46,37 @@ describe('runtime-config 白名单', () => {
     }
   })
 
-  it('越界字段（冷项/未知）拒绝并给出可读原因', async () => {
+  it('未知字段拒绝；冷项可写但标记需重启', async () => {
     const dir = tempDir()
     try {
       const store = createRuntimeConfigStore({ path: join(dir, 'overrides.json'), current: () => BASE })
       await assert.rejects(
-        () => store.patch({ guardPort: 9999 }),
-        /read-only or unknown/,
-      )
-      await assert.rejects(
         () => store.patch({ hackerField: 1 }),
         /read-only or unknown/,
       )
+      // 冷项（端口/网络）现在可写：写在 overrides 里，但运行值不变，直到重启。
+      const patched = await store.patch({ guardPort: 9443, network: 'lan' })
+      assert.equal(patched.guardPort, 9443, '快照展示的是待生效值')
+      assert.equal(patched.restartPending, true, '必须显式标记「重启后生效」')
       // 白名单内但类型非法同样拒绝。
       await assert.rejects(() => store.patch({ singleController: 'yes' }), /must be boolean/)
       await assert.rejects(() => store.patch({ defaultRole: 'root' }), /known role/)
       await assert.rejects(() => store.patch({ maxPairAttempts: 0 }), /1\.\.100/)
+      await assert.rejects(() => store.patch({ guardPort: 70_000 }), /1\.\.65535/)
+      await assert.rejects(() => store.patch({ network: 'public' }), /loopback or lan/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('冷项覆盖与运行值一致时不再提示重启', async () => {
+    const dir = tempDir()
+    try {
+      const store = createRuntimeConfigStore({ path: join(dir, 'overrides.json'), current: () => BASE })
+      await store.patch({ guardPort: BASE.guardPort })
+      assert.equal((await store.get()).restartPending, false)
+      await store.patch({ guardPort: 9443 })
+      assert.equal((await store.get()).restartPending, true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

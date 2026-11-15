@@ -12,7 +12,6 @@
 之后按客户端公钥证明身份，7 天租约在后台静默轮换。
 
 ### 默认行为变更
-
 - **`accountAuth.enabled` 默认 `true`**：Hub 不再接受长期设备令牌。
 - **首次启动自动创建默认账号 `admin`**（仅当账号库为空）。初始口令**安装时随机生成**，
   明文写入 `~/.dsh/remote-hub/initial-password`（0600 / 目录 0700）；**改密成功后文件即删除**，
@@ -28,6 +27,10 @@
 
 ### 新增
 
+- **端口 / 网络模式可在页面修改**：「本机配置」里的 `guardPort` 与 `network` 从只读变为可编辑，
+  保存即写入 `~/.dsh/remote-hub/overrides.json`（优先于 profile 配置）。它们属于**冷配置**——
+  守卫的监听在装配时建立，换端口必须重建监听并丢弃全部在途连接（还连带隧道与邀请链接），
+  因此不做热切换：页面显示「有修改待重启生效」，重启 `dsh web` 后生效。
 - **独立认证插件行**：`@xiaopb/dsh-remote-hub/auth`，`provide('remoteHubAuth')`；
   Hub 行按 `accountAuth.enabled` 注入它，服务缺失时守卫保持关闭（fail-closed）。
 - **账号与 MFA**：首个管理员仅回环创建；口令走 scrypt（拒绝明文历史值）；TOTP
