@@ -85,11 +85,33 @@ const noopActions = {
   onConfigSave() {},
 }
 
+/**
+ * 遍历一棵 React 元素树。
+ *
+ * 阶段 A 之后 `Section` / `Field` 会把**组件元素**（`Pill` / `Button` …）放在 props 里，
+ * 真正展开发生在 React 渲染期；这些测试不挂载 React。于是遍历器在 `children`
+ * 之外也下钻其它 props（跳过 `key` / `ref`）——组件元素的 props 本身就是它的输入，
+ * 页面的标题/操作区/选项 testid 都在那里。
+ * @param node - 元素或任意子树值。
+ * @param visit - 访问函数。
+ */
+function walkProps(node, visit) {
+  if (node === null || node === undefined || typeof node !== 'object') return
+  if (Array.isArray(node)) { for (const child of node) walkProps(child, visit); return }
+  if (node.$$typeof !== undefined && (node.props === null || node.props === undefined)) return
+  const props = node.$$typeof === undefined ? node : node.props
+  if (props === null || props === undefined || typeof props !== 'object') return
+  for (const [key, value] of Object.entries(props)) {
+    if (key === 'key' || key === 'ref' || value === undefined) continue
+    visit(value)
+  }
+}
+
 function collectText(node, out = []) {
   if (node === null || node === undefined || node === false) return out
   if (typeof node === 'string' || typeof node === 'number') { out.push(String(node)); return out }
   if (Array.isArray(node)) { for (const child of node) collectText(child, out); return out }
-  if (node.props && node.props.children !== undefined) collectText(node.props.children, out)
+  walkProps(node, value => collectText(value, out))
   return out
 }
 
@@ -97,7 +119,7 @@ function collectByTestId(node, testid, out = []) {
   if (node === null || node === undefined || node === false) return out
   if (Array.isArray(node)) { for (const child of node) collectByTestId(child, testid, out); return out }
   if (node.props?.['data-testid'] === testid) out.push(node)
-  if (node.props?.children !== undefined) collectByTestId(node.props.children, testid, out)
+  walkProps(node, value => collectByTestId(value, testid, out))
   return out
 }
 
@@ -303,29 +325,36 @@ describe('槽位注册契约（官方 inject 包装）', () => {
 
 describe('主题 token（语义化样式，外部可换肤）', () => {
   const PAGE_SRC = read(`${PATHS.clientSrc}/panel/RemoteHubPage.ts`)
+  const TOKENS_SRC = read(`${PATHS.clientSrc}/rhui/tokens.ts`)
 
-  it('样式只经 --rh-* 语义 token 引用，除二维码白底黑模块与 token 定义外无硬编码色值', () => {
-    // 允许：① THEME_CSS 常量内的 token 默认定义（唯一合法的字面色值位置）；
-    // ② QR 的 #fff/#000（扫码可用性要求）。其余十六进制色一律禁止。
-    const stripped = PAGE_SRC
-      .replace(/const THEME_CSS = `[\s\S]*?`/u, '')
-      .replace(/#fff\b/g, '').replace(/#000\b/g, '')
+  it('页面样式只经 --rh-* 语义 token 引用，无硬编码色值', () => {
+    // A 阶段起 token 定义整体迁到 `client/src/rhui/tokens.ts`（唯一允许字面色值的位置），
+    // 页面只剩 `var(--rh-*)` 引用；二维码白底黑模块仍留在页面里（扫码可用性要求）。
+    const stripped = PAGE_SRC.replace(/#fff\b/g, '').replace(/#000\b/g, '')
     assert.doesNotMatch(stripped, /#[0-9a-fA-F]{3,8}\b/, '发现硬编码色值，请改用 var(--rh-*)')
-    assert.match(PAGE_SRC, /const THEME_CSS = `[\s\S]*--rh-accent[\s\S]*?`/u, '缺 token 定义块')
+    assert.match(TOKENS_SRC, /--rh-accent:/u, 'tokens.ts 缺 token 定义块')
+    assert.match(PAGE_SRC, /ThemeStyle\(RH_CSS\)/u, '页面必须注入设计系统样式表')
   })
 
   it('注入主题样式：token 定义 + 明暗两套（data-theme 强制 + 系统偏好自动）', async () => {
     const { renderRemoteHubPage } = await loadPage()
     const tree = renderRemoteHubPage(baseState(), noopActions)
-    const styleNodes = collectByTestId(tree, 'remote-hub-page')[0].props.children
-      .filter(child => child?.props?.['data-rh-theme'] !== undefined)
+    const styleNodes = []
+    const scan = (node) => {
+      if (node === null || node === undefined || typeof node !== 'object') return
+      if (Array.isArray(node)) { for (const child of node) scan(child); return }
+      if (node.props?.['data-rh-theme'] !== undefined) styleNodes.push(node)
+      walkProps(node, scan)
+    }
+    scan(tree)
     assert.equal(styleNodes.length, 1, '主题 <style> 必须随页面注入')
     const css = String(styleNodes[0].props.children)
     assert.ok(css.includes('--rh-accent'), '缺核心 token 定义')
     assert.ok(css.includes('data-theme="dark"'), '缺 data-theme 暗色强制覆盖')
     assert.ok(css.includes('prefers-color-scheme: dark'), '缺系统暗色偏好自适应')
-    assert.ok(css.includes('@media (max-width: 639px)'), '缺手机断点')
-    assert.ok(css.includes('@media (max-width: 1023px)'), '缺平板断点')
+    // design-system §5 的三档断点：平板 <900、手机 <480。
+    assert.ok(css.includes('@media (max-width: 899px)'), '缺平板断点')
+    assert.ok(css.includes('@media (max-width: 479px)'), '缺手机断点')
   })
 })
 
@@ -439,8 +468,12 @@ describe('四区结构（参考文档 ①令牌 ②设备 ③统计 ④配置）
 
     const tree = renderRemoteHubPage(baseState(), noopActions)
     assert.equal(collectByTestId(tree, 'device-filter').length, 1)
-    const filters = collectByTestId(tree, 'filter')
-    assert.ok(filters.length >= 2, '全部/连接本机两个筛选')
+    // `Segmented` 是组件元素：选项 testid 在它的 props.options 里（渲染后才是按钮）。
+    const group = collectByTestId(tree, 'device-filter')[0]
+    const optionIds = group.type?.name === 'Segmented'
+      ? group.props.options.map(option => option.testId)
+      : collectByTestId(tree, 'filter').map(node => node.props['data-testid'])
+    assert.ok(optionIds.filter(id => id === 'filter').length >= 2, '全部/连接本机两个筛选')
   })
 
   it('② 三态文案与离线置灰', async () => {
@@ -506,8 +539,18 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
   it('签发区：角色选择 + 生成二维码/短码', async () => {
     const { renderRemoteHubPage } = await loadPage()
     const tree = renderRemoteHubPage(baseState(), noopActions)
-    const roles = collectByTestId(tree, 'role')
-    assert.equal(roles.length, 3)
+    // `role` 是 `Segmented` 的选项 testid（渲染后才是按钮，元素树上在 props.options 里）。
+    const groups = []
+    const scan = (node) => {
+      if (node === null || node === undefined || typeof node !== 'object') return
+      if (Array.isArray(node)) { for (const child of node) scan(child); return }
+      if (node.type?.name === 'Segmented') groups.push(node.props)
+      walkProps(node, scan)
+    }
+    scan(tree)
+    const roleGroup = groups.find(props => props.options?.some(option => option.testId === 'role'))
+    assert.ok(roleGroup, '角色选择用 segmented 控件')
+    assert.equal(roleGroup.options.length, 3)
     assert.equal(collectByTestId(tree, 'issue-ticket').length, 1)
     assert.equal(collectByTestId(tree, 'issue-code').length, 1)
   })
@@ -609,7 +652,8 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
     const tree = renderRemoteHubPage(baseState(), noopActions)
     const title = collectByTestId(tree, 'page-title')[0]
     assert.equal(collectByTestId(tree, 'remote-hub-page')[0].props.style, undefined)
-    assert.equal(title.props.className, 'rh-page-title')
+    // A 阶段起 `<h1>` 同时带设计系统字号类（`rh-h1`），页面自己的标识类仍保留。
+    assert.match(String(title.props.className), /\brh-page-title\b/u)
     assert.equal(collectByTestId(tree, 'host-section')[0].props['data-sticky-header'], undefined)
     assert.equal(collectByTestId(tree, 'devices-section')[0].props['data-sticky-header'], undefined)
   })
@@ -677,7 +721,9 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
     const tree = renderRemoteHubPage(baseState(), noopActions)
     const scan = collectByTestId(tree, 'scan')
     assert.equal(scan.length, 1, 'scan button rendered')
-    assert.ok(String(scan[0].props['aria-label']).includes('摄像头'))
+    // A 阶段起按钮是组件元素：无障碍名称在 props 的 `ariaLabel` / `title` 上。
+    const label = String(scan[0].props['aria-label'] ?? scan[0].props.ariaLabel ?? scan[0].props.title ?? '')
+    assert.ok(label.includes('摄像头'), `扫码按钮需要无障碍名称，实际：${label}`)
   })
 
   it('地址栏粘贴完整配对链接时拆分为地址和票据', async () => {

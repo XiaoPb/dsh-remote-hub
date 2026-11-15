@@ -79,15 +79,24 @@ export function Section({
   children,
   ...rest
 }: SectionProps): React.ReactElement {
+  // 标题 / 描述 / 操作区里经常直接塞组件元素（`Pill` / `Button` / `Segmented`）。
+  // 用 Fragment 包住即可在**渲染树**里原地展开，页面渲染函数仍是纯函数
+  // （不实例化子组件），测试也能按 `data-testid` 直接找到它们。
   const head = React.createElement('div', { className: 'rh-section-head' },
-    React.createElement('h2', { className: 'rh-section-title' }, title),
+    React.createElement('h2', { className: 'rh-section-title' },
+      React.createElement(React.Fragment, null, title)),
     actions === undefined || actions === null
       ? null
-      : React.createElement('div', { className: 'rh-section-actions' }, actions))
+      : React.createElement('div', { className: 'rh-section-actions' },
+        React.createElement(React.Fragment, null, actions)))
   const body = React.createElement(React.Fragment, null,
     head,
-    desc === undefined || desc === null ? null : React.createElement('p', { className: 'rh-section-desc' }, desc),
-    children === undefined || children === null ? null : React.createElement('div', { className: 'rh-section-body' }, children))
+    desc === undefined || desc === null
+      ? null
+      : React.createElement('p', { className: 'rh-section-desc' }, React.createElement(React.Fragment, null, desc)),
+    children === undefined || children === null
+      ? null
+      : React.createElement('div', { className: 'rh-section-body' }, React.createElement(React.Fragment, null, children)))
   return React.createElement(card ? 'section' : 'div', {
     ...rest,
     className: cx('rh-section', card && 'is-card', card && 'rh-card', tone === 'danger' && 'is-danger', className),
@@ -110,6 +119,10 @@ export interface ButtonProps extends Testable {
   selected?: boolean
   type?: 'button' | 'submit'
   title?: string
+  /** 无障碍名称（图标按钮必填，design-system §10.7）。 */
+  ariaLabel?: string
+  /** 布局微调（只允许 `margin*` / `width` 这类不涉及色值字号的项）。 */
+  style?: React.CSSProperties
   /** 焦点管理用（确认框默认焦点落在「取消」）。 */
   ref?: React.Ref<HTMLButtonElement>
   onClick?: (event: React.MouseEvent<HTMLButtonElement>) => void
@@ -138,6 +151,9 @@ export function Button({
   selected = false,
   type = 'button',
   title,
+  ariaLabel,
+  style,
+  ref,
   onClick,
   children,
   ...rest
@@ -158,7 +174,10 @@ export function Button({
       selected && 'is-selected',
     ),
     type,
+    ...(ref === undefined || ref === null ? {} : { ref }),
     ...(title === undefined ? {} : { title }),
+    ...(ariaLabel === undefined ? {} : { 'aria-label': ariaLabel }),
+    ...(style === undefined ? {} : { style }),
     ...(onClick === undefined ? {} : { onClick }),
   },
   loading
@@ -188,14 +207,15 @@ export interface FieldProps {
  */
 export function Field({ label, hint, error, htmlFor, children, className }: FieldProps): React.ReactElement {
   return React.createElement('div', { className: cx('rh-field', className) },
-    React.createElement('label', htmlFor === undefined ? { className: 'rh-field-label' } : { className: 'rh-field-label', htmlFor }, label),
-    children,
+    React.createElement('label', htmlFor === undefined ? { className: 'rh-field-label' } : { className: 'rh-field-label', htmlFor },
+      React.createElement(React.Fragment, null, label)),
+    React.createElement(React.Fragment, null, children),
     error === undefined || error === null || error === false
       ? null
-      : React.createElement('span', { className: 'rh-field-error', role: 'alert' }, error),
+      : React.createElement('span', { className: 'rh-field-error', role: 'alert' }, React.createElement(React.Fragment, null, error)),
     hint === undefined || hint === null || hint === false
       ? null
-      : React.createElement('span', { className: 'rh-field-hint' }, hint))
+      : React.createElement('span', { className: 'rh-field-hint' }, React.createElement(React.Fragment, null, hint)))
 }
 
 /** 输入框属性。 */
@@ -475,10 +495,12 @@ export function Segmented<T extends string>({
     className: 'rh-seg',
     role: 'group',
     ...(ariaLabel === undefined ? {} : { 'aria-label': ariaLabel }),
-  }, options.map(option => {
+  }, options.map((option, index) => {
     const active = option.value === value
+    // 同一组里多个选项共享一个 testid 时（如设备筛选的 `filter`），
+    // 既要有共同 testid，也要让选项本身可分辨 → 共同 testid 之外带 `data-index`。
     return React.createElement('button', {
-      key: option.value,
+      key: option.value ?? index,
       type: 'button',
       className: 'rh-seg-btn',
       // 顺序有意固定：测试按 `data-testid="policy-strong" data-selected="true"` 的
