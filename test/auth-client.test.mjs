@@ -691,6 +691,32 @@ test('settings separates the local account from peer accounts', async () => {
   assert.match(withPeer, /家里的机器/u)
   assert.match(withPeer, /data-testid="forget-peer"/u)
   assert.doesNotMatch(withPeer, /data-testid="peers-empty"/u)
+
+  // 对端账号过多时同样只显示前 3 个，其余收进「显示全部」。
+  const manyPeers = Array.from({ length: 5 }, (_, index) => ({
+    id: String(index).padStart(64, 'a'),
+    origin: `http://192.168.1.${20 + index}:8443`,
+    label: `机器 ${index}`,
+    role: 'control',
+    lastConnectedAt: Date.now() - index * 60_000,
+  }))
+  // 卡片默认收起：断言列表内容前必须显式展开。
+  const preview = await renderMarkup(accountPage.renderAccountPage(
+    { ...base, peers: manyPeers, expanded: { 'peer-accounts': true } },
+    noopActions(), accountPage.initialDraft(), () => {},
+  ))
+  assert.equal((preview.match(/data-testid="peer-account"/gu) ?? []).length, 3, '默认只展示 3 个')
+  assert.match(preview, /还有 2 个未显示/u)
+  assert.match(preview, /data-testid="peers-show-all"/u)
+  // 最近连接的排在最前。
+  assert.match(preview, /机器 0/u)
+
+  const all = await renderMarkup(accountPage.renderAccountPage(
+    { ...base, peers: manyPeers, expanded: { 'peer-accounts': true, 'peers-show-all': true } },
+    noopActions(), accountPage.initialDraft(), () => {},
+  ))
+  assert.equal((all.match(/data-testid="peer-account"/gu) ?? []).length, 5, '显示全部后列出所有对端')
+  assert.doesNotMatch(all, /data-testid="peers-show-all"/u)
 })
 
 

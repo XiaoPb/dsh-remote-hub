@@ -147,7 +147,10 @@ ${DARK_TOKENS}
 
 /* ===== 设置页：自带滚动容器 + 吸顶页头/步骤条 =====
  * 宿主（DSH Settings 弹窗）高度不可控、内容又很长，页面必须自己滚：
- * .rh-root.rh-settings 是唯一滚动容器，页头与步骤条一起吸顶。 */
+ * .rh-root.rh-settings 是唯一滚动容器，页头与步骤条一起吸顶。
+ *
+ * 横向留白只有一层：容器 24px。标题、步骤条、卡片全部落在同一条竖线上，
+ * 吸顶块的背景与分隔线横跨内容区（两侧各留 16px），不会压到面板边缘。 */
 .rh-root.rh-settings {
   height: 100%;
   max-height: 100vh;
@@ -155,15 +158,15 @@ ${DARK_TOKENS}
   overflow-x: hidden;
   box-sizing: border-box;
   padding: 24px 24px 56px;
-  scroll-padding-top: 96px;
+  scroll-padding-top: 130px;
   overscroll-behavior: contain;
 }
 .rh-root.rh-settings > .rh-shell { padding: 0; }
 .rh-page-sticky {
   position: sticky; top: -24px; z-index: 20;
   background: var(--rh-bg);
-  padding: 24px 0 10px;
-  margin-bottom: 8px;
+  padding: 20px 0 10px;
+  margin: 0 0 12px;
   border-bottom: 1px solid var(--rh-border);
 }
 .rh-page-sticky .rh-page-head { margin: 0 0 12px; }

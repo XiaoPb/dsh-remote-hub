@@ -239,6 +239,9 @@ const CLIENTS_PREVIEW = 3
 /** `state.expanded` 里表示「客户端列表已全部展开」的键。 */
 const CLIENTS_SHOW_ALL_KEY = 'clients-show-all'
 
+/** `state.expanded` 里表示「对端账号列表已全部展开」的键。 */
+const PEERS_SHOW_ALL_KEY = 'peers-show-all'
+
 /**
  * 页头：`account-title` 始终存在（`plan-settings.md §5`）。
  *
@@ -916,6 +919,17 @@ export function renderAccountPage(
   // 列表过长时默认只显示前若干台，其余折叠到「显示全部」。
   const showAllClients = (state.expanded ?? {})[CLIENTS_SHOW_ALL_KEY] === true
   const visibleClients = showAllClients ? active : active.slice(0, CLIENTS_PREVIEW)
+
+  // 对端账号同样折叠：最近连接的在前，其余收进「显示全部」。
+  const peers = state.peers ?? []
+  const sortedPeers = peers.slice().sort((a, b) => {
+    const aAt = a.lastConnectedAt === undefined ? 0 : a.lastConnectedAt
+    const bAt = b.lastConnectedAt === undefined ? 0 : b.lastConnectedAt
+    if (aAt !== bAt) return bAt - aAt
+    return (a.label ?? a.origin).localeCompare(b.label ?? b.origin, 'zh-Hans-CN')
+  })
+  const showAllPeers = (state.expanded ?? {})[PEERS_SHOW_ALL_KEY] === true
+  const visiblePeers = showAllPeers ? sortedPeers : sortedPeers.slice(0, CLIENTS_PREVIEW)
   const totpEnabled = status?.totpEnabled === true
   const totp = state.totp ?? null
   const totpDraft = state.totpDraft ?? { code: '', password: '' }
@@ -1176,7 +1190,7 @@ export function renderAccountPage(
       ? React.createElement('p', { 'data-testid': 'peers-empty', className: 'rh-muted', style: { margin: 0 } },
         '还没有对端账号。在「云端设备 → 连接其他设备」里用对端账号登录并信任本机会出现在这里。')
       : React.createElement('div', null,
-        state.peers.map(peer => React.createElement('div', {
+        visiblePeers.map(peer => React.createElement('div', {
           key: peer.id,
           'data-testid': 'peer-account',
           'data-origin': peer.origin,
@@ -1200,7 +1214,19 @@ export function renderAccountPage(
             title: `移除对端信任 ${peer.label ?? peer.origin}`,
             children: '移除信任',
             onClick: () => actions.onForgetPeer(peer.id),
-          }))))),
+          })))),
+        visiblePeers.length < sortedPeers.length
+          ? React.createElement('div', { className: 'rh-list-more' },
+            React.createElement('span', { className: 'rh-muted' },
+              `还有 ${sortedPeers.length - visiblePeers.length} 个未显示`),
+            React.createElement(Button, {
+              'data-testid': 'peers-show-all',
+              variant: 'ghost',
+              size: 'small',
+              children: '显示全部',
+              onClick: () => actions.onToggleSection?.(PEERS_SHOW_ALL_KEY),
+            }))
+          : null),
   })
 
   // ── 区块 G：子账号（admin only，plan-optimization §3）─────────────────────
