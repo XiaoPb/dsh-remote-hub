@@ -204,8 +204,16 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
       ? authorization.slice('Bearer '.length).trim()
       : undefined
     const token = headerToken ?? cookieToken
-    /** 无环境凭据（头）时才需要 CSRF 同源围栏。 */
-    const originFenceOk = (): boolean => headerToken !== undefined || sameOriginOk(req)
+    /**
+     * CSRF 同源围栏。
+     *
+     * 同源 Cookie 面必须校验（浏览器会自动带上 Cookie）；守卫面（`allowHeaderSession`）
+     * 的请求已经过守卫自己的来源围栏（回环 / allowedOrigins / 私网判定），
+     * 且不使用环境凭据，因此不再重复要求 Origin===Host——否则**跨源登录**
+     * 永远无法开始（登录时还没有会话头）。
+     */
+    const originFenceOk = (): boolean =>
+      deps.allowHeaderSession === true || headerToken !== undefined || sameOriginOk(req)
 
     try {
       // ── 状态（无鉴权）──────────────────────────────────────────────────────

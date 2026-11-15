@@ -266,6 +266,20 @@ describe('守卫：账号认证模式', () => {
     assert.ok(grant.expiresAt > Date.now())
   })
 
+  it('accepts a cross-origin login on the guard surface (no session needed yet)', async () => {
+    const response = await fetch(`${base}/remote-auth/login`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        // 控制端页面与守卫不同源：登录时还没有会话头，围栏不能把它挡在门外。
+        origin: 'http://127.0.0.1:3091',
+      },
+      body: JSON.stringify({ username: 'owner', password: 'Correct-Horse-9-Battery!' }),
+    })
+    assert.equal(response.status, 200)
+    const body = await response.json()
+    assert.equal(body.mfaRequired, true, '口令步骤应当通过，进入第二步')
+  })
   it('serves the account surface on the guard for cross-origin clients', async () => {
     // 不要求 x-hub-protocol：这是给控制端浏览器用的标准 JSON API。
     const status = await fetch(`${base}/remote-auth/status`)
