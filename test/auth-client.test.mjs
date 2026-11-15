@@ -26,7 +26,10 @@ const CORE_FILES = ['index', 'protocol', 'auth', 'roles', 'device', 'capabilitie
  */
 async function loadBuiltClientModule(relativeFile) {
   const source = await readFile(new URL(`../.build/client/client/src/${relativeFile}`, import.meta.url), 'utf8')
-  const directory = await mkdtemp(join(tmpdir(), 'hub-auth-client-'))
+  // 临时目录放在仓库内（`.build/`），这样模块里的 `react` 等裸导入能按仓库
+  // node_modules 解析；放在系统 tmp 下会 ERR_MODULE_NOT_FOUND。
+  const stagingRoot = new URL('../.build/', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/u, '$1')
+  const directory = await mkdtemp(join(stagingRoot, 'tmp-auth-client-'))
   const coreDir = join(directory, 'core', 'src')
   await mkdir(coreDir, { recursive: true })
   for (const name of CORE_FILES) {
@@ -57,14 +60,36 @@ async function loadBuiltClientModule(relativeFile) {
   await writeFile(target, rewritten, 'utf8')
   try {
     return await import(pathToFileURL(target).href)
-  } finally {
-    // 模块已进缓存；目录留给进程结束由 OS 清理（避免删掉正在使用的模块）。
-    void rm(directory, { recursive: true, force: true }).catch(() => {})
+  } catch (error) {
+    // 保留目录便于复现；`.build/` 已在 .gitignore 内。
+    throw error
   }
 }
 
 const keyring = await loadBuiltClientModule('auth/keyring.js')
 const session = await loadBuiltClientModule('auth/session.js')
+const accountPage = await loadBuiltClientModule('auth/AccountPage.js')
+
+/** 把 React 树渲染成静态 HTML（不依赖浏览器）。 */
+async function renderMarkup(node) {
+  const { renderToStaticMarkup } = await import('react-dom/server')
+  return renderToStaticMarkup(node)
+}
+
+/** 空动作集（渲染测试不触发副作用）。 */
+function noopActions() {
+  return {
+    onSubmitBootstrap() {},
+    onSubmitLogin() {},
+    onSubmitMfa() {},
+    onTrustClient() {},
+    onRevokeClient() {},
+    onSetRole() {},
+    onSetCeiling() {},
+    onLogout() {},
+    onRefresh() {},
+  }
+}
 
 test('WebCrypto keyring produces a non-extractable ECDSA P-256 key', async () => {
   const identity = await keyring.generateClientIdentity()
@@ -199,4 +224,124 @@ test('ws ticket request carries a signature and returns the one-time ticket', as
   assert.match(seen.headers.authorization, /^Bearer cli_/u)
   assert.ok(seen.headers['x-hub-signature'])
   assert.ok(seen.headers['x-hub-nonce'])
+})
+
+test('account page asks for bootstrap when no account exists', async () => {
+  const markup = await renderMarkup(accountPage.renderAccountPage(
+    {
+      phase: 'bootstrap',
+      status: { ready: true, bootstrapped: false, mfaEnabled: true, session: null, username: null },
+      binding: null,
+      enrollment: null,
+      notice: null,
+      busy: false,
+      mfaToken: null,
+    },
+    noopActions(),
+    accountPage.initialDraft(),
+    () => {},
+  ))
+  assert.match(markup, /data-testid="bootstrap-username"/u)
+  assert.match(markup, /data-testid="bootstrap-password"/u)
+  assert.match(markup, /loopback|本机/u)
+  assert.doesNotMatch(markup, /data-testid="trust-submit"/u)
+})
+
+test('account page gates on MFA and never renders a session while pending', async () => {
+  const markup = await renderMarkup(accountPage.renderAccountPage(
+    {
+      phase: 'mfa',
+      status: { ready: true, bootstrapped: true, mfaEnabled: true, session: null, username: 'owner' },
+      binding: null,
+      enrollment: null,
+      notice: null,
+      busy: false,
+      mfaToken: 'challenge',
+    },
+    noopActions(),
+    accountPage.initialDraft(),
+    () => {},
+  ))
+  assert.match(markup, /data-testid="mfa-code"/u)
+  assert.doesNotMatch(markup, /data-testid="clients-list"/u)
+})
+
+test('ready page lists trusted clients with role controls and offers trust', async () => {
+  const client = {
+    clientId: 'cli_0123456789abcdef01234567',
+    keyId: 'key_abc',
+    label: '本浏览器',
+    clientType: 'browser',
+    fingerprint: '0123456789abcdef',
+    roleCeiling: 'control',
+    activeRole: 'read-only',
+    createdAt: new Date().toISOString(),
+    lastSeenAt: null,
+    leaseExpiresAt: Date.now() + 1000,
+    leaseGeneration: 2,
+    revokedAt: null,
+  }
+  const markup = await renderMarkup(accountPage.renderAccountPage(
+    {
+      phase: 'ready',
+      status: {
+        ready: true,
+        bootstrapped: true,
+        mfaEnabled: true,
+        session: {
+          accountId: 'owner', username: 'owner', role: 'admin',
+          createdAt: new Date().toISOString(), expiresAt: Date.now() + 1000, lastMfaAt: Date.now(),
+        },
+        username: 'owner',
+        clients: [client],
+      },
+      binding: null,
+      enrollment: null,
+      notice: null,
+      busy: false,
+      mfaToken: null,
+    },
+    noopActions(),
+    accountPage.initialDraft(),
+    () => {},
+  ))
+  assert.match(markup, /data-testid="trusted-client"/u)
+  assert.match(markup, /data-testid="client-role-select"/u)
+  assert.match(markup, /data-testid="revoke-client"/u)
+  assert.match(markup, /data-testid="trust-submit"/u, 'untrusted browser must be offered trust')
+  assert.match(markup, /0123456789abcdef/u, 'fingerprint is shown for human recognition')
+})
+
+test('a revoked client is rendered disabled', async () => {
+  const markup = await renderMarkup(accountPage.renderAccountPage(
+    {
+      phase: 'ready',
+      status: {
+        ready: true,
+        bootstrapped: true,
+        mfaEnabled: true,
+        session: {
+          accountId: 'owner', username: 'owner', role: 'admin',
+          createdAt: new Date().toISOString(), expiresAt: Date.now() + 1000, lastMfaAt: Date.now(),
+        },
+        username: 'owner',
+        clients: [{
+          clientId: 'cli_ffffffffffffffffffffffff', keyId: 'k', label: '旧手机', clientType: 'app',
+          fingerprint: 'ffffffffffffffff', roleCeiling: 'full', activeRole: 'full',
+          createdAt: new Date().toISOString(), lastSeenAt: null, leaseExpiresAt: null,
+          leaseGeneration: 1, revokedAt: new Date().toISOString(),
+        }],
+      },
+      binding: null,
+      enrollment: null,
+      notice: null,
+      busy: false,
+      mfaToken: null,
+    },
+    noopActions(),
+    accountPage.initialDraft(),
+    () => {},
+  ))
+  assert.match(markup, /已撤销/u)
+  assert.match(markup, /data-revoked="true"/u)
 })

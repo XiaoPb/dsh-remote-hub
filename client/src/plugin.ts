@@ -29,6 +29,8 @@ import { mountRemote } from './mount.js'
 import { createRemoteHubPageComponent, classifyPairSecret } from './panel/RemoteHubPage.js'
 import type { CloudDeviceRow } from './panel/RemoteHubPage.js'
 import { RemoteHubNavIcon } from './panel/NavIcon.js'
+import { createAccountPageComponent } from './auth/mount.js'
+import { AccountNavIcon } from './auth/NavIcon.js'
 import { mountLocalPluginsPanel } from './local-plugin-manager/panel.js'
 import { watchTakeover } from './local-plugin-manager/lifecycle.js'
 
@@ -145,6 +147,9 @@ function hubGlobal(): HubGlobal {
  * 的 transport —— 后者的 origin 在页面加载时就固定了，而连接动作恰恰是要换
  * origin。
  */
+/** 「登录与账号」页：账号引导 / 口令 + MFA / 可信客户端管理。 */
+const AccountPage = createAccountPageComponent()
+
 const RemoteHubPage = createRemoteHubPageComponent({
   injected: () => hubGlobal(),
   /** 守卫诊断：最近一次管理请求（transport 写回模块级变量）。 */
@@ -403,6 +408,21 @@ export function applyRemoteHubClient(ctx: Context, options: ClientAssemblyOption
         disposersNav.push(slots.register(
           { name: 'main', key: 'remote-hub' },
           RemoteHubPage,
+        ))
+      })
+
+      // 账号与信任：独立一页（与运行面分开，避免把登录表单塞进配对表单）。
+      // 认证面缺席时页面自己显示错误态，不阻断 Hub 面板。
+      declare('sidebar.panellist', () => {
+        disposersNav.push(slots.register(
+          { name: 'sidebar.panellist', id: 'remote-hub-auth', order: 61, label: '登录与账号' },
+          AccountNavIcon,
+        ))
+      })
+      declare('main', () => {
+        disposersNav.push(slots.register(
+          { name: 'main', key: 'remote-hub-auth' },
+          AccountPage,
         ))
       })
       return () => { for (const dispose of [...disposersNav].reverse()) dispose() }

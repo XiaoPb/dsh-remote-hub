@@ -22,6 +22,15 @@ export interface ClientIdentity {
   publicKey: ClientPublicKeyJwk
 }
 
+/** 一次租约绑定（与客户端密钥一起保存；单独泄露不可用）。 */
+export interface ClientBinding {
+  clientId: string
+  keyId: string
+  lease: string
+  generation: number
+  expiresAt: number
+}
+
 /** 持久化后端。 */
 export interface KeyringBackend {
   load(): Promise<ClientIdentity | null>
@@ -32,6 +41,7 @@ export interface KeyringBackend {
 const DB_NAME = 'dsh-remote-hub-auth'
 const STORE_NAME = 'client-keys'
 const RECORD_KEY = 'primary'
+const BINDING_KEY = 'binding'
 
 /** 是否支持 IndexedDB（Node / 隐私模式没有）。 */
 function indexedDbAvailable(): boolean {
@@ -194,8 +204,44 @@ export function createKeyring(backend?: KeyringBackend): {
   load(): Promise<ClientIdentity | null>
   loadOrCreate(): Promise<{ identity: ClientIdentity; created: boolean }>
   clear(): Promise<void>
+  loadBinding(): Promise<ClientBinding | null>
+  saveBinding(binding: ClientBinding): Promise<void>
+  clearBinding(): Promise<void>
 } {
   const store = backend ?? (indexedDbAvailable() ? indexedDbBackend() : memoryBackend())
+  let memoryBinding: ClientBinding | null = null
+
+  async function readBinding(): Promise<ClientBinding | null> {
+    if (!indexedDbAvailable()) return memoryBinding
+    const db = await openDatabase()
+    try {
+      const transaction = db.transaction(STORE_NAME, 'readonly')
+      const record = await requestToPromise(transaction.objectStore(STORE_NAME).get(BINDING_KEY)) as
+        | ClientBinding
+        | undefined
+      return record ?? null
+    } catch {
+      return null
+    } finally {
+      db.close()
+    }
+  }
+
+  async function writeBinding(binding: ClientBinding | null): Promise<void> {
+    // 内存后端没有 IDB：始终镜像一份，保证同一会话内可用。
+    memoryBinding = binding
+    if (!indexedDbAvailable()) return
+    const db = await openDatabase()
+    try {
+      const transaction = db.transaction(STORE_NAME, 'readwrite')
+      const objectStore = transaction.objectStore(STORE_NAME)
+      if (binding === null) await requestToPromise(objectStore.delete(BINDING_KEY))
+      else await requestToPromise(objectStore.put(binding, BINDING_KEY))
+    } finally {
+      db.close()
+    }
+  }
+
   return {
     load: () => store.load(),
     async loadOrCreate() {
@@ -205,6 +251,14 @@ export function createKeyring(backend?: KeyringBackend): {
       await store.save(identity)
       return { identity, created: true }
     },
-    clear: () => store.clear(),
+    async clear() {
+      await store.clear()
+      await writeBinding(null)
+    },
+    loadBinding: readBinding,
+    saveBinding: writeBinding,
+    async clearBinding() {
+      await writeBinding(null)
+    },
   }
 }

@@ -573,8 +573,10 @@ report.check(
       && !contractText.includes('REMOTE_METHODS')
       && !contractText.includes('HUB_METHODS')
       // 7 条基础路由（health/pairTicket/pairCode/pair/rpc/devices/devicesRevoke）
-      // + 2 条管理端点（stats/config；2026-11-11 四区改造新增）= 9。
-      && Object.keys(guardRoutes).length === 9
+      // + 2 条管理端点（stats/config；2026-11-11 四区改造新增）
+      // + 1 条账号认证模式的一次性 WS 票据端点（wsTicket）
+      // = 10。
+      && Object.keys(guardRoutes).length === 10
       && Object.keys(streamBudget).length === 6
   },
   'out/contract.json must have exactly six keys and no method-name vocabulary',
