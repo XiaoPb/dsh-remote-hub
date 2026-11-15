@@ -589,6 +589,24 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
           reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'provide exactly one of ticket or code'))
           return
         }
+        // 账号认证模式下守卫只收「租约 + 客户端签名」：旧的「兑换长期令牌」流程
+        // 会发一个紧接着就会被拒绝的 bearer，因此在这里显式拒绝并给出原因，
+        // 而不是让控制端拿到一个用不了的令牌。
+        if (deps.auth !== undefined) {
+          audit('pair-rejected', { reason: 'account-auth-enabled' })
+          deps.metrics?.countPairRejected()
+          reject(
+            res,
+            rpcId,
+            failure(
+              ERROR_CODES.authAccountRequired,
+              403,
+              'account authentication is enabled on this host: sign in from the target Settings → 登录与账号, '
+              + 'or enroll a client key instead of redeeming a legacy device token',
+            ),
+          )
+          return
+        }
         const result = ticket !== undefined
           ? await deps.pairing.redeemTicket(ticket, clientLabel)
           : await deps.pairing.redeemCode(code as string, clientLabel)

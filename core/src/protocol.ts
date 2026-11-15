@@ -268,6 +268,13 @@ export const ERROR_CODES = {
   notFound: 'not-found',
   /** 守卫未预期错误。 */
   internal: 'internal',
+  /**
+   * 账号认证已启用，旧的「邀请兑换长期令牌」不再可用。
+   *
+   * 邀请仍然可以签发，但兑换必须改为登记客户端公钥；在客户端侧完成该流程前，
+   * 兑换端会明确返回这个码，而不是发一个用不了的令牌。
+   */
+  authAccountRequired: 'auth-account-required',
 } as const
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES]

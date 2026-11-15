@@ -485,8 +485,68 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     for (const listener of [...revokedListeners]) listener(clientId)
   }
 
-  async function requireSession(token: string | undefined): Promise<{ record: SessionRecord; view: AuthSessionView }> {
-    const session = await readSessionInternal(token)
+  /**
+   * 校验并登记一个可信客户端（会话登记与邀请兑换共用）。
+   *
+   * 同一把公钥重复登记时**复用记录并轮换租约**（页面刷新 / 重连场景），
+   * 不会堆出多个只差密钥的记录。
+   */
+  async function registerClient(input: {
+    label: string
+    clientType: ClientType
+    publicKey: ClientPublicKeyJwk
+    roleCeiling: RoleName
+  }): Promise<EnrollClientResponse> {
+    if (!isClientPublicKeyJwk(input.publicKey)) {
+      throw Object.assign(new Error('publicKey must be an ECDSA P-256 JWK'), { code: AUTH_ERROR_CODES.badRequest })
+    }
+    if (input.clientType !== 'browser' && input.clientType !== 'app' && input.clientType !== 'dsh') {
+      throw Object.assign(new Error('invalid clientType'), { code: AUTH_ERROR_CODES.badRequest })
+    }
+    if (!isRoleName(input.roleCeiling)) {
+      throw Object.assign(new Error('invalid roleCeiling'), { code: AUTH_ERROR_CODES.badRequest })
+    }
+    const label = String(input.label ?? '').trim().slice(0, 80)
+    if (label === '') {
+      throw Object.assign(new Error('label required'), { code: AUTH_ERROR_CODES.badRequest })
+    }
+
+    const at = now()
+    const keyId = newKeyId(input.publicKey)
+    const existing = store.data.clients.find(row => row.revokedAt === null && row.keyId === keyId)
+    if (existing !== undefined) {
+      const lease = await rotateLease(existing)
+      return { ok: true, client: clientView(existing), lease }
+    }
+
+    const clientId = newClientId()
+    const secret = randomToken()
+    const expiresAt = at + LEASE_TTL_MS
+    const record: ClientRecord = {
+      clientId,
+      keyId,
+      label,
+      clientType: input.clientType,
+      publicKey: input.publicKey,
+      fingerprint: publicKeyFingerprint(input.publicKey),
+      roleCeiling: input.roleCeiling,
+      activeRole: input.roleCeiling,
+      leaseHash: sha256Hex(secret),
+      leaseGeneration: 1,
+      leaseExpiresAt: expiresAt,
+      createdAt: at,
+      lastSeenAt: at,
+      revokedAt: null,
+    }
+    await store.mutate((data) => { data.clients.push(record) })
+    return {
+      ok: true,
+      client: clientView(record),
+      lease: { lease: `${clientId}.1.${secret}`, generation: 1, expiresAt },
+    }
+  }
+
+  async function requireSession(token: string | undefined): Promise<{ record: SessionRecord; view: AuthSessionView }> {    const session = await readSessionInternal(token)
     if (session === null) {
       throw Object.assign(new Error('session required'), { code: AUTH_ERROR_CODES.unauthorized })
     }
@@ -787,54 +847,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
           code: AUTH_ERROR_CODES.forbidden,
         })
       }
-      if (!isClientPublicKeyJwk(input.publicKey)) {
-        throw Object.assign(new Error('publicKey must be an ECDSA P-256 JWK'), { code: AUTH_ERROR_CODES.badRequest })
-      }
-      if (input.clientType !== 'browser' && input.clientType !== 'app' && input.clientType !== 'dsh') {
-        throw Object.assign(new Error('invalid clientType'), { code: AUTH_ERROR_CODES.badRequest })
-      }
-      if (!isRoleName(input.roleCeiling)) {
-        throw Object.assign(new Error('invalid roleCeiling'), { code: AUTH_ERROR_CODES.badRequest })
-      }
-      const label = String(input.label ?? '').trim().slice(0, 80)
-      if (label === '') {
-        throw Object.assign(new Error('label required'), { code: AUTH_ERROR_CODES.badRequest })
-      }
-
-      const at = now()
-      const keyId = newKeyId(input.publicKey)
-      const existing = store.data.clients.find(row => row.revokedAt === null && row.keyId === keyId)
-      if (existing !== undefined) {
-        // 同一把公钥重复注册：复用记录并轮换租约（页面刷新场景）。
-        const lease = await rotateLease(existing)
-        return { ok: true, client: clientView(existing), lease }
-      }
-
-      const clientId = newClientId()
-      const secret = randomToken()
-      const expiresAt = at + LEASE_TTL_MS
-      const record: ClientRecord = {
-        clientId,
-        keyId,
-        label,
-        clientType: input.clientType as ClientType,
-        publicKey: input.publicKey,
-        fingerprint: publicKeyFingerprint(input.publicKey),
-        roleCeiling: input.roleCeiling,
-        activeRole: input.roleCeiling,
-        leaseHash: sha256Hex(secret),
-        leaseGeneration: 1,
-        leaseExpiresAt: expiresAt,
-        createdAt: at,
-        lastSeenAt: at,
-        revokedAt: null,
-      }
-      await store.mutate((data) => { data.clients.push(record) })
-      return {
-        ok: true,
-        client: clientView(record),
-        lease: { lease: `${clientId}.1.${secret}`, generation: 1, expiresAt },
-      }
+      return registerClient(input)
     },
 
     async listClients(sessionToken) {

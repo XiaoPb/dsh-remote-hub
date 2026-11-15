@@ -253,6 +253,18 @@ describe('守卫：账号认证模式', () => {
     assert.ok(grant.expiresAt > Date.now())
   })
 
+  it('refuses legacy invitation redemption while account auth is enabled', async () => {
+    // 旧流程会签发一个紧接着就被守卫拒绝的 bearer —— 必须显式报错而不是发无效令牌。
+    const response = await fetch(`${base}/remote/pair`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-hub-protocol': '1' },
+      body: JSON.stringify({ code: 'ABCD1234', clientLabel: 'legacy' }),
+    })
+    assert.equal(response.status, 403)
+    const body = await response.json()
+    assert.equal(body.result.error.code, 'auth-account-required')
+  })
+
   it('rejects requests whose body does not match the signed digest', async () => {
     const signedBody = JSON.stringify({
       type: 'client-request', rpcId: 'r4', method: 'session/list', payload: { args: {} },
