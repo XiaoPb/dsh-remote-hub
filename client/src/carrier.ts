@@ -568,6 +568,9 @@ export function installCarrierResolvingMode(
             mode: 'cloud',
             ...(fromDisk.origin === undefined ? {} : { origin: fromDisk.origin }),
             ...(fromDisk.targetId === undefined ? {} : { targetId: fromDisk.targetId }),
+            // 账号模式没有 token：漏掉 account 会被判成「不可用的 cloud」，
+            // 传输层就不安装了（实测表现为启动后 __DSH_TRANSPORT__ 缺失）。
+            ...(fromDisk.account === true ? { account: true } : {}),
             ...(fromDisk.token === undefined ? {} : { token: fromDisk.token }),
             ...(fromDisk.deviceLabel === undefined ? {} : { deviceLabel: fromDisk.deviceLabel }),
           }
