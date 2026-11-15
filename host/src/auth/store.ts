@@ -16,13 +16,13 @@
 import { mkdir, readFile, rename, chmod, writeFile } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
-import { homedir } from 'node:os'
 
 import type { ClientType, ClientPublicKeyJwk } from '@core/auth.js'
 import { AUTH_STORE_VERSION } from '@core/auth.js'
 import type { RoleName } from '@core/roles.js'
 import { isRoleName } from '@core/roles.js'
 
+import { dshHome } from '../devices.js'
 import { isClientPublicKeyJwk, sha256Hex } from './crypto.js'
 
 /** 账号记录。 */
@@ -117,9 +117,17 @@ export function emptyAuthStore(): AuthStoreData {
   }
 }
 
-/** 默认存储路径。 */
+/**
+ * 默认存储路径。
+ *
+ * 必须走 `dshHome()`（尊重 `DSH_HOME`），不能直接拼 `homedir()`：
+ * dsh-box / 沙箱实例靠 `DSH_HOME` 隔离档案柜，拼死家目录会把 `auth.json`
+ * 写进用户真实 `~/.dsh`——既污染主环境，也让隔离测试测不到隔离语义
+ * （2026-11-15 沙箱实测复现）。
+ * @returns 绝对路径。
+ */
 export function defaultAuthStorePath(): string {
-  return join(homedir(), '.dsh', 'remote-hub', 'auth.json')
+  return join(dshHome(), 'remote-hub', 'auth.json')
 }
 
 /** 存储句柄。 */

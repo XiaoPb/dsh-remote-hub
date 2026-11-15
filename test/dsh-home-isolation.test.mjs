@@ -63,6 +63,13 @@ describe('DSH_HOME 隔离', () => {
       process.env.DSH_HOME = sandboxHome
     }
   })
+
+  it('认证存储同样落在 DSH_HOME 内（2026-11-15 沙箱实测：曾写进真实家目录）', async () => {
+    const auth = await import('../lib/auth.js')
+    const path = auth.defaultAuthStorePath()
+    assert.ok(path.startsWith(sandboxHome), `必须落在沙箱内，实际 ${path}`)
+    assert.ok(!path.includes(`${sep}.dsh${sep}remote-hub${sep}auth.json`), '不得再拼出 .dsh 子目录')
+  })
 })
 
 describe('策略重复注册：配置冲突时 fail-closed', () => {
