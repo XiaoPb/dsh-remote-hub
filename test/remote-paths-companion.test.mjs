@@ -36,6 +36,8 @@ test('cloud path mounting waits for host services', () => {
 
 test('cloud path transport is allow-listed and only active when the carrier is', () => {
   assert.match(context, /directoryPicker\/list', 'directoryPicker\/createDirectory', 'workspaceFiles\/list'/)
-  assert.match(context, /carrier\?\.active !== true/)
+  // 载体分支要求 active === true 且传输完整；否则不会走控制端那条路。
+  assert.match(context, /carrier\?\.active === true/)
+  assert.match(context, /typeof transport\?\.fetch === 'function'/)
   assert.match(context, /remote-access\/denied/)
 })
