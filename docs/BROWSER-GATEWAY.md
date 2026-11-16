@@ -27,6 +27,8 @@
 - 反向代理 / 隧道背后运行（见 §6）。
 - 浏览器内**浏览远程目录**：新建工作区时弹出的是**服务器**的目录树。
 
+  ![浏览器内的远程目录选择器](images/workspace-picker.png)
+
 ### ❌ 不支持
 
 - **`/api/directoryPicker/pick`（系统原生选择器）** —— 这条红线保留。
@@ -103,6 +105,18 @@ cat ~/.dsh/remote-hub/pending-admin.json
 http://<服务器>:<guardPort>/
 ```
 
+会自动跳到登录页：
+
+![未登录时自动跳转登录页](images/login-page.png)
+
+登录后就是完整界面：
+
+![登录后的守卫界面](images/guard-home.png)
+
+```
+http://<服务器>:<guardPort>/
+```
+
 会自动跳到登录页。登录后就是完整界面。
 
 ## 4. 配置
@@ -133,6 +147,15 @@ http://<服务器>:<guardPort>/
 > `directory-picker-auto` 只在 `connection.allowsRemoteAuthorities` 为真时
 > 才挂 `browse`，否则挂 `native`。`native` 在无桌面 / 浏览器场景下
 > 会让「新建工作区」去拉**浏览器本地**的文件夹对话框，或干脆没反应。
+
+### 4.1 账号页在哪
+
+所有与登录相关的操作都在 **设置 → 登录与账号**：
+
+![设置里的登录与账号页](images/account-page.png)
+
+> 注意：**不要**点账号菜单里的「登录」。那个入口依赖弹出新窗口，
+> 无图形界面的环境会一直停在「等待登录」。
 
 ## 5. 安全模型
 

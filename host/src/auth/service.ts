@@ -96,6 +96,16 @@ export interface AuthService extends HubAuthPort {
   >
   verifyMfa(input: MfaRequest): Promise<IssuedSession | { error: AuthErrorCode; reason: string }>
   logout(sessionToken?: string): Promise<void>
+  /**
+   * 该账号是不是管理员（同步，供运行时快速判定）。
+   *
+   * `role` 字段只在**会话**里给出；守卫给浏览器身份映射角色时手里只有
+   * `accountId`，因此需要这个同步查询。
+   *
+   * @param accountId - 账号 id。
+   * @returns 是管理员时为 true；账号不存在时为 false。
+   */
+  isAdminAccount(accountId: string): boolean
   /** 读取会话（同时节流更新 lastSeenAt）。 */
   readSession(sessionToken?: string): Promise<{ record: SessionRecord; view: AuthSessionView } | null>
   /** 注册可信客户端（需要已认证会话 + 最近 2FA）。 */
@@ -934,6 +944,12 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
   const service: AuthService = {
     serviceName: 'remoteHubAuth',
+
+    isAdminAccount(accountId) {
+      const account = findAccountById(store, accountId)
+      // 账号不存在视为非管理员（fail-closed），不退化成「默认是管理员」。
+      return account !== null && account !== undefined && account.isAdmin !== false
+    },
 
     async status(sessionToken) {
       pruneNonces()

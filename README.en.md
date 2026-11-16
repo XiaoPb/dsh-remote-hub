@@ -68,6 +68,49 @@ The complete per-endpoint matrix is in [API permission matrix](docs/API-MATRIX.m
 
 ---
 
+## Two ways to use it
+
+| | Desktop / client | Browser-direct (0.5.0+) |
+|---|---|---|
+| How | Install the DSH desktop app, pair from "Cloud devices" | Open `http://<host>:<guardPort>/ ` in any browser |
+| Identity | Client keypair, signed per request | HttpOnly session cookie |
+| Auth | Account + 2FA once at trust time; leases rotate silently for 7 days | **Every visit** needs account, password and a 6-digit code |
+| Best for | Your own workstation | Phones, tablets, borrowed machines, no-client environments |
+| Requires | The desktop client | Just a browser |
+
+Both coexist. The full guide is **[docs/BROWSER-GATEWAY.md](docs/BROWSER-GATEWAY.md)**.
+
+### Quick start: browser-direct
+
+**Prerequisite**: the account already has 2FA bound. The browser entry point
+refuses accounts without it, because TOTP can only be bound inside the
+first-login wizard.
+
+1. In the Host's `cordis.patch.yml`, enable `accountAuth.enabled: true` and add
+   `trustedHosts` to the `connection` row (it must contain a non-loopback
+   authority, otherwise "add workspace" opens the **browser's own** folder
+   dialog). See the guide, §4.
+2. Open `http://<host>:<guardPort>/` — you are redirected to the sign-in page.
+3. Enter account, password and the 6-digit code.
+
+![Sign-in page](docs/images/login-page.png)
+
+![Guard UI after sign-in](docs/images/guard-home.png)
+
+**Headless server?** The first-time setup must go through the local web UI over
+an SSH tunnel, because TOTP binding only exists in the first-login wizard. Full
+steps: [docs/BROWSER-GATEWAY.md §3](docs/BROWSER-GATEWAY.md).
+
+### Reverse proxy
+
+The guard is plain HTTP + WebSocket and can sit behind nginx or Caddy. The
+critical requirement is **forwarding the WebSocket upgrade** (`/api/remote.mux`
+is a long-lived connection that client services such as the permission catalog
+depend on), plus preserving the original `Host` header. Ready-to-paste configs:
+[docs/BROWSER-GATEWAY.md §6](docs/BROWSER-GATEWAY.md).
+
+---
+
 ## Features
 
 - **Pair by QR or short code**: a QR ticket and an 8-character Crockford code, both with a **15-second TTL**; a successful pair issues a persistent device token. Headless hosts get a CLI: `dsh-remote-hub-pair`.
@@ -226,11 +269,27 @@ CI runs exactly these. Releases go through CI/CD only — **no manual local `npm
 
 ---
 
+### Browser-direct limits
+
+- **The native directory picker (`directoryPicker/pick`) is never exposed**:
+  a browser must not make the server pop up an OS file dialog. Browsers use
+  "browse the remote directory" instead, which is a different allowlisted call.
+- **Accounts without 2FA cannot sign in from a browser** (`auth-totp-required`).
+- **Headless servers** cannot perform first-time setup steps that need an OS
+  dialog — there is no window to open.
+- **Do not expose the guard directly to the internet.** `network: lan` accepts
+  private addresses only; for public access use a VPN, or a reverse proxy plus
+  an extra layer of access control.
+- **Always use https.** Passwords and codes are POSTed in clear text; only after
+  the proxy terminates TLS will the cookie carry `Secure`.
+
 ## Documentation
+
 
 | Document | Contents |
 | --- | --- |
 | [README.md](README.md) | 中文版 |
+| [docs/BROWSER-GATEWAY.md](docs/BROWSER-GATEWAY.md) | **Browser-direct**: supported/unsupported, security model, headless first-time setup, reverse proxy |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | Deployment, configuration, tunnel choice, health checks, troubleshooting |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Data paths, identity, authorization, persistence |
 | [docs/DESIGN.md](docs/DESIGN.md) | Role semantics, state ownership, supported boundaries |

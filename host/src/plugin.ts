@@ -918,8 +918,17 @@ function assembleRemoteHub(
       // 浏览器登录面：与 API 客户端共用同一个认证服务，只是把凭据换成 HttpOnly Cookie。
       // `AuthService extends HubAuthPort`，运行时是同一个对象。
       // 浏览器会话的角色：管理员 full，其余退到最小权限（fail-closed）。
-      const browserAuthRoleOf = (accountId: string): RoleName =>
-        accountId === 'acc_admin' ? 'full' : 'read-only'
+      // 浏览器身份的映射角色。
+      //
+      // 原来写死 `accountId === 'acc_admin'`，导致**任何非内置账号**（子账号、
+      // 自建管理员）都退化成 `read-only`：`full` 专属的能力（`directoryPicker/list`
+      // 等）全部被 policy 以 `no-allow` 拒绝。改为按账号自身的管理员标记判定，
+      // 与 `AuthSessionView.role` 用同一依据。
+      const browserAuthRoleOf = (accountId: string): RoleName => {
+        const authWithAdmin = auth as { isAdminAccount?: (id: string) => boolean } | undefined
+        const admin = authWithAdmin?.isAdminAccount?.(accountId) ?? accountId === 'acc_admin'
+        return admin ? 'full' : 'read-only'
+      }
       const webSession = auth === undefined ? undefined : createWebSession({
         service: auth as unknown as AuthService,
         // 与客户端租约同寿命：退出登录 / 撤销客户端时两边一起失效。
