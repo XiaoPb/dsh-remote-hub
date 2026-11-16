@@ -12,7 +12,7 @@
  *
  * @module dsh-remote-hub/host/auth/service
  */
-import { randomBytes } from 'node:crypto'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 
 import type {
   AccountView,
@@ -135,6 +135,14 @@ export interface AuthService extends HubAuthPort {
   enableAccount(sessionToken: string | undefined, accountId: string): Promise<AccountView>
   /** 删除子账号（连同其客户端与会话）。 */
   deleteAccount(sessionToken: string | undefined, accountId: string): Promise<void>
+  /**
+   * 修改账号名（**仅**管理员第一次登录后的那一次机会）。
+   *
+   * 用于把默认的 `admin` 改成自己的名字：老名字是公开的默认值，早点换掉更安全。
+   * 一旦用过（`renameUsed`）或该账号已经登录过（`lastLoginAt` 非空），一律拒绝，
+   * 之后不再提供改名入口。账号 id 不变，名下客户端与会话不受影响。
+   */
+  renameAccount(sessionToken: string | undefined, accountId: string, username: string): Promise<AccountView>
   /** 首次启动：无账号时用默认口令创建一个「必须先改密」的账号。 */
   seedDefaultAccount(input: { username: string; password: string }): Promise<boolean>
   /** 账号是否仍在等待初始改密（无账号 / 已完成 → false）。 */
@@ -218,6 +226,28 @@ export interface AuthServiceDeps {
    * 插件用它删除初始口令文件（明文只活到这一刻）。
    */
   onForcedPasswordChanged?: () => void | Promise<void>
+  /**
+   * 读取「尚未落库的默认管理员凭据」。
+   *
+   * 安装时写入的明文文件（`pending-admin.json`）；强制改密完成前账号不在账号库里，
+   * 登录时用它校验。缺省 = 该部署不走「延迟落库」路径（凭据已在库里）。
+   */
+  readPendingAdmin?: () => Promise<{ username: string; password: string } | null>
+  /** 强制改密成功、账号已落库后调用：删除明文凭据文件。 */
+  onPendingAdminCommitted?: () => void | Promise<void>
+  /**
+   * 写入安装时的明文凭据（默认管理员**不落库**）。
+   *
+   * 缺省时退回到旧行为：`seedDefaultAccount` 直接把账号写进库。
+   */
+  onSeedPendingAdmin?: (input: { username: string; password: string }) => void | Promise<void>
+  /**
+   * 明文凭据是否还在（同步判断）。
+   *
+   * `initialPasswordPending()` 是同步接口，但读文件是异步的，所以插件提供一个
+   * 同步判据（例如缓存的存在标记）。缺省时只看账号库里的 `mustChangePassword`。
+   */
+  pendingAdminExists?: () => boolean
   /** 默认口令策略（存储里没有设置时使用；默认 strong）。 */
   defaultPasswordPolicy?: PasswordPolicy
 }
@@ -306,6 +336,76 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
   const requireMfa = deps.requireMfa ?? true
   const maxLoginAttempts = deps.maxLoginAttempts ?? DEFAULT_MAX_LOGIN_ATTEMPTS
   const loginWindowMs = deps.loginWindowMs ?? DEFAULT_LOGIN_WINDOW_MS
+
+  /**
+   * 取「还没落库的默认管理员」（安装时的明文凭据）。
+   *
+   * 存在即表示该管理员**尚未完成首次登录 + 强制改密**：它的用户名与明文口令只在
+   * `pending-admin.json` 里，账号库里没有它，所以库里没有可被篡改的口令哈希。
+   * @returns 凭据；不存在（已落库或没有该路径）时为 null。
+   */
+  async function pendingAdmin(): Promise<{ username: string; password: string } | null> {
+    if (deps.readPendingAdmin === undefined) return null
+    // 已经落库就不再有「待首次登录」的管理员。
+    if (accountsOf(store).length > 0) return null
+    try {
+      const value = await deps.readPendingAdmin()
+      if (value === null) return null
+      const username = String(value.username ?? '').trim()
+      const password = String(value.password ?? '')
+      if (username === '' || password === '') return null
+      return { username, password }
+    } catch {
+      // 读失败按「没有待处理管理员」处理：退回到要求 bootstrap。
+      return null
+    }
+  }
+
+  /** 待落库管理员的登录校验（明文口令按定长比较，避免时序泄露）。 */
+  function pendingPasswordMatches(pending: { password: string }, input: string): boolean {
+    const expected = Buffer.from(pending.password, 'utf8')
+    const actual = Buffer.from(String(input ?? ''), 'utf8')
+    if (expected.length !== actual.length) return false
+    try {
+      // node:crypto 的时序安全比较。
+      return timingSafeEqual(expected, actual)
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * 把「首次登录成功」的默认管理员落库。
+   *
+   * 落库即打上强制改密标记（`mustChangePassword`），所以登录后仍必须先改密；
+   * 改密成功后由 `changePassword` 清除标记并删除明文文件。
+   * @param pending - 已校验通过的明文凭据。
+   */
+  async function commitPendingAdmin(pending: { username: string; password: string }): Promise<void> {
+    const at = now()
+    const passwordHash = await hashPassword(pending.password)
+    await store.mutate((data) => {
+      data.account = {
+        accountId: 'acc_admin',
+        isAdmin: true,
+        roleCeiling: 'full',
+        username: pending.username,
+        passwordHash,
+        createdAt: at,
+        updatedAt: at,
+        lastLoginAt: null,
+        mustChangePassword: true,
+      }
+    })
+    // 账号已进库：明文文件只是安装期的临时载体，落库后立即删除。
+    // 改密阶段用库里的哈希校验；这里删掉不影响登录（会话已建立）。
+    try {
+      await deps.onPendingAdminCommitted?.()
+    } catch {
+      // 删除失败不算登录失败；下次启动会重建/清理。
+    }
+    audit('account-commit', { username: pending.username }, { accountId: 'acc_admin' })
+  }
   const onForcedPasswordChanged = deps.onForcedPasswordChanged
   const fallbackPolicy: PasswordPolicy = deps.defaultPasswordPolicy ?? DEFAULT_PASSWORD_POLICY
 
@@ -722,9 +822,28 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
    */
   async function requireReadySession(token: string | undefined): Promise<{ record: SessionRecord; view: AuthSessionView }> {
     const session = await requireSession(token)
-    if (accountForSession(store, session.record)?.mustChangePassword === true) {
+    const account = accountForSession(store, session.record)
+    if (account?.mustChangePassword === true) {
       throw Object.assign(new Error('change the initial password first'), {
         code: AUTH_ERROR_CODES.passwordChangeRequired,
+      })
+    }
+    return session
+  }
+
+  /**
+   * 管理员首次登录必须先把两步验证绑好，之后才允许进入设置面与 Hub。
+   *
+   * 与 `requireReadySession` 分开是有意的：绑定 TOTP 本身、以及「读状态 / 改密 /
+   * 改名」都必须放行，否则用户会卡在无法绑定的死循环里。会话已经是管理员且
+   * `requireMfa` 关闭时不拦。
+   */
+  async function requireEnrolledSession(token: string | undefined): Promise<{ record: SessionRecord; view: AuthSessionView }> {
+    const session = await requireReadySession(token)
+    const account = accountForSession(store, session.record)
+    if (requireMfa && account?.isAdmin !== false && account?.totp?.verified !== true) {
+      throw Object.assign(new Error('enroll two-factor authentication first'), {
+        code: AUTH_ERROR_CODES.totpRequired,
       })
     }
     return session
@@ -747,7 +866,8 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
   /** 管理员会话（账号管理的唯一入口）。 */
   async function requireAdmin(token: string | undefined): Promise<{ record: SessionRecord; view: AuthSessionView }> {
-    const session = await requireReadySession(token)
+    // 管理员面一律要求「已完成首次登录」：改密完成，且两步验证已绑定。
+    const session = await requireEnrolledSession(token)
     const account = accountForSession(store, session.record)
     if (account === null || account.isAdmin === false) {
       throw Object.assign(new Error('administrator only'), { code: AUTH_ERROR_CODES.forbidden })
@@ -771,6 +891,20 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       lastLoginAt: account.lastLoginAt ?? null,
       createdAt: account.createdAt,
     }
+  }
+
+  /**
+   * 这个账号现在是否还能改一次名。
+   *
+   * 条件：管理员 + 还没用过这次机会（`renameUsed`）。改名成功后服务端把它置 true，
+   * 所以整个生命周期只会成立一次——正是「管理员第一次登录时改一次」的语义。
+   * @param account - 账号记录（可能为缺省）。
+   * @returns 允许改名则为 true。
+   */
+  function renameAllowedFor(account: AccountRecord | null | undefined): boolean {
+    if (account === null || account === undefined) return false
+    if (account.isAdmin === false) return false
+    return account.renameUsed !== true
   }
 
   /** 审计事件（失败不影响认证主流程）。 */
@@ -805,9 +939,11 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       pruneNonces()
       const session = await readSessionInternal(sessionToken)
       const account = session === null ? accountOf(store) : accountForSession(store, session.record)
+      // 还没落库的默认管理员也算「已安装」：页面应显示登录表单，而不是引导页。
+      const pending = account === null ? await pendingAdmin() : null
       const base: AuthStatusResponse = {
         ready: true,
-        bootstrapped: account !== null,
+        bootstrapped: account !== null || pending !== null,
         mfaEnabled: requireMfa,
         totpEnabled: account?.totp?.verified === true,
         session: session?.view ?? null,
@@ -826,6 +962,13 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       // 强制改密标记只对**已登录**会话有意义（匿名请求不需要知道）。
       if (session !== null) {
         base.passwordChangeRequired = account?.mustChangePassword === true
+        // 改名机会同样只对已登录会话公布：管理员第一次登录才有。
+        base.usernameRenameAllowed = renameAllowedFor(account)
+        // 管理员首次登录必须先绑定两步验证（改密之后）。
+        base.totpEnrollmentRequired = requireMfa
+          && account !== null
+          && account.isAdmin !== false
+          && account.totp?.verified !== true
       }
       return base
     },
@@ -871,25 +1014,14 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
     async seedDefaultAccount(input) {
       if (accountsOf(store).length > 0) return false
+      // 已有待落库的默认管理员就不要再写一次（否则会覆盖安装时的凭据）。
+      if (await pendingAdmin() !== null) return false
       const username = String(input.username ?? '').trim()
       const password = String(input.password ?? '')
       if (username === '' || password === '') return false
-      const at = now()
-      const passwordHash = await hashPassword(password)
-      await store.mutate((data) => {
-        data.account = {
-          accountId: 'acc_admin',
-          isAdmin: true,
-          roleCeiling: 'full',
-          username,
-          passwordHash,
-          createdAt: at,
-          updatedAt: at,
-          lastLoginAt: null,
-          // 首次登录必须先改密（只强制一次）；改完之前也拿不到 2FA/客户端/租约。
-          mustChangePassword: true,
-        }
-      })
+      // 默认管理员**先不落库**：用户名与口令由 `pending-admin.json` 承载，
+      // 首次登录成功那一刻才写进账号库（见 `commitPendingAdmin`）。
+      await deps.onSeedPendingAdmin?.({ username, password })
       return true
     },
 
@@ -900,7 +1032,13 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     },
 
     initialPasswordPending() {
-      return accountOf(store)?.mustChangePassword === true
+      // 已落库但还没改密，或「还没落库、只挂着明文凭据」——两种都算初始口令未消费。
+      if (accountOf(store)?.mustChangePassword === true) return true
+      if (deps.readPendingAdmin !== undefined && accountsOf(store).length === 0) {
+        // 同步接口：用文件是否存在判断（插件侧实现为同步可判的状态）。
+        return deps.pendingAdminExists?.() === true
+      }
+      return false
     },
 
     passwordPolicy() {
@@ -909,7 +1047,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
 
     async setPasswordPolicy(sessionToken, policy) {
       // 策略属于安全配置：要求已通过强制改密的管理员会话。
-      await requireReadySession(sessionToken)
+      await requireEnrolledSession(sessionToken)
       if (!isPasswordPolicy(policy)) {
         throw Object.assign(new Error('unknown password policy'), { code: AUTH_ERROR_CODES.badRequest })
       }
@@ -965,7 +1103,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     async login(input) {
       const username = String(input.username ?? '')
       // 账号不存在与口令错误返回同一个错误码（不泄露账号是否存在）。
-      const account = findAccountByName(store, username)
+      let account = findAccountByName(store, username)
       const source = String(input.source ?? 'local')
       const rate = checkLoginRate(username, source)
       if (!rate.ok) {
@@ -977,15 +1115,31 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       }
       // 账号不存在与口令错误返回同一个错误码（不泄露账号是否存在）。
       if (account === null) {
-        recordLoginFailure(username, source)
-        return { ok: false, code: AUTH_ERROR_CODES.invalidCredentials, reason: 'invalid username or password' }
+        // 还没落库的默认管理员：用户名 + 明文口令只在校验这一刻从文件读出，
+        // 通过后**立刻**落库（哈希进数据库），之后明文文件被删除。
+        const pending = await pendingAdmin()
+        if (pending !== null && pending.username === username
+          && pendingPasswordMatches(pending, String(input.password ?? ''))) {
+          await commitPendingAdmin(pending)
+        } else {
+          recordLoginFailure(username, source)
+          return { ok: false, code: AUTH_ERROR_CODES.invalidCredentials, reason: 'invalid username or password' }
+        }
+      } else {
+        if ((account.disabledAt ?? null) !== null) {
+          recordLoginFailure(username, source)
+          return { ok: false, code: AUTH_ERROR_CODES.forbidden, reason: 'account disabled' }
+        }
+        const valid = await verifyPassword(String(input.password ?? ''), account.passwordHash)
+        if (!valid) {
+          recordLoginFailure(username, source)
+          return { ok: false, code: AUTH_ERROR_CODES.invalidCredentials, reason: 'invalid username or password' }
+        }
       }
-      if ((account.disabledAt ?? null) !== null) {
-        recordLoginFailure(username, source)
-        return { ok: false, code: AUTH_ERROR_CODES.forbidden, reason: 'account disabled' }
-      }
-      const valid = await verifyPassword(String(input.password ?? ''), account.passwordHash)
-      if (!valid) {
+
+      // 待落库的管理员在上一段里刚刚落库，这里重新取一次（此时必有值）。
+      account = account ?? findAccountByName(store, username)
+      if (account === null) {
         recordLoginFailure(username, source)
         return { ok: false, code: AUTH_ERROR_CODES.invalidCredentials, reason: 'invalid username or password' }
       }
@@ -1087,7 +1241,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     readSession: readSessionInternal,
 
     async enroll(sessionToken, input) {
-      const session = await requireReadySession(sessionToken)
+      const session = await requireEnrolledSession(sessionToken)
       const account = accountForSession(store, session.record)
       if (account?.totp?.verified !== true) {
         throw Object.assign(new Error('MFA must be enabled before trusting a client'), {
@@ -1104,7 +1258,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     },
 
     async listClients(sessionToken) {
-      await requireReadySession(sessionToken)
+      await requireEnrolledSession(sessionToken)
       // 已撤销的客户端立刻不再展示；记录本身保留一天（见 `isExpiredRevocation`）。
       return store.data.clients.filter(client => isListable(client)).map(clientView)
     },
@@ -1254,6 +1408,53 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       audit('account-delete', { accountId }, { accountId })
     },
 
+    async renameAccount(sessionToken, accountId, username) {
+      const session = await requireAdmin(sessionToken)
+      const target = findAccountById(store, accountId)
+      if (target === null) {
+        throw Object.assign(new Error('account not found'), { code: AUTH_ERROR_CODES.accountNotFound })
+      }
+      // 只允许管理员本人、且只有**第一次登录**后的那一次。
+      if (target.isAdmin === false) {
+        throw Object.assign(new Error('only the administrator can rename on first login'), {
+          code: AUTH_ERROR_CODES.forbidden,
+        })
+      }
+      // 这一次机会用掉就没有了（不提供常规改名入口）。
+      if (target.renameUsed === true) {
+        throw Object.assign(new Error('the account can only be renamed on its first login'), {
+          code: AUTH_ERROR_CODES.forbidden,
+        })
+      }
+      const next = String(username ?? '').trim()
+      if (next.length < 3 || next.length > 32) {
+        throw Object.assign(new Error('username must be 3-32 characters'), { code: AUTH_ERROR_CODES.badRequest })
+      }
+      const clash = findAccountByName(store, next)
+      if (clash !== null && (clash.accountId ?? 'acc_admin') !== accountId) {
+        throw Object.assign(new Error('username already taken'), { code: AUTH_ERROR_CODES.accountExists })
+      }
+      requireFreshMfa(session)
+      const at = now()
+      await store.mutate((data) => {
+        const apply = (row: AccountRecord): void => {
+          row.username = next
+          row.updatedAt = at
+          // 用掉唯一一次机会。
+          row.renameUsed = true
+        }
+        const row = data.accounts?.find(item => (item.accountId ?? 'acc_admin') === accountId)
+        if (row !== undefined) apply(row)
+        // v1 单账号存储：默认管理员存在 `data.account` 里。
+        if (data.account !== null && data.account !== undefined
+          && (data.account.accountId ?? 'acc_admin') === accountId) {
+          apply(data.account)
+        }
+      })
+      audit('account-rename', { accountId, username: next }, { accountId })
+      return accountViewOf(findAccountById(store, accountId)!)
+    },
+
     async enrollFromInvite(input) {
       // 邀请本身已由配对服务校验并 burn；这里只做公钥登记。
       return registerClient(input)
@@ -1279,12 +1480,12 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     },
 
     async revokeClient(sessionToken, clientId) {
-      await requireReadySession(sessionToken)
+      await requireEnrolledSession(sessionToken)
       await revokeByClientId(clientId)
     },
 
     async setActiveRole(sessionToken, clientId, role) {
-      await requireReadySession(sessionToken)
+      await requireEnrolledSession(sessionToken)
       const client = store.data.clients.find(row => row.clientId === clientId)
       if (client === undefined) {
         throw Object.assign(new Error('unknown client'), { code: AUTH_ERROR_CODES.clientInvalid })
@@ -1301,7 +1502,7 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     },
 
     async setRoleCeiling(sessionToken, clientId, role) {
-      const session = await requireReadySession(sessionToken)
+      const session = await requireEnrolledSession(sessionToken)
       const client = store.data.clients.find(row => row.clientId === clientId)
       if (client === undefined) {
         throw Object.assign(new Error('unknown client'), { code: AUTH_ERROR_CODES.clientInvalid })

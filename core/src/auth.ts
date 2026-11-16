@@ -39,7 +39,7 @@ export const AUTH_ROUTES = {
   reauth: '/remote-auth/reauth',
   /** 两步验证绑定：start / confirm / disable。 */
   totp: '/remote-auth/totp',
-  /** 账号管理（admin）：list / create / setCeiling / disable / enable / delete。 */
+  /** 账号管理（admin）：list / create / setCeiling / disable / enable / delete / rename。 */
   accounts: '/remote-auth/accounts',
 } as const
 
@@ -93,6 +93,8 @@ export const AUTH_ERROR_CODES = {
   roleExceeded: 'auth-role-exceeded',
   /** 必须先修改初始口令（默认账号首次登录）。 */
   passwordChangeRequired: 'auth-password-change-required',
+  /** 管理员首次登录必须先绑定两步验证（`requireMfa` 开启时强制）。 */
+  totpRequired: 'auth-totp-required',
   /** 修改口令时提供的当前口令不正确。 */
   currentPasswordInvalid: 'auth-current-password-invalid',
   /** 新口令不满足强度要求。 */
@@ -226,6 +228,20 @@ export interface AuthStatusResponse {
    * `auth-password-change-required`，因此拿不到租约、也进不了 Hub。
    */
   passwordChangeRequired?: boolean
+  /**
+   * 是否还可以改一次账号名。
+   *
+   * 只在**管理员第一次登录**后为 true：默认的 `admin` 是公开的默认值，此时允许改成
+   * 自己的名字。用过一次、或不是首次登录，就永久为 false（后续不提供改名）。
+   */
+  usernameRenameAllowed?: boolean
+  /**
+   * 是否必须先绑定两步验证才能继续。
+   *
+   * 管理员首次登录（`requireMfa` 开启时）为 true：改完初始口令 → （可选改名）
+   * → **绑定 TOTP** → 才进设置页与 Hub。绑定完成即永久为 false。
+   */
+  totpEnrollmentRequired?: boolean
   /** 当前生效的口令策略（仅已登录时返回；切换在设置页）。 */
   passwordPolicy?: PasswordPolicy
 }
@@ -457,8 +473,21 @@ export const DEFAULT_ACCOUNT = {
  *
  * 内容就是那一行口令，方便 `cat` / 复制；目录 0700、文件 0600。
  * **只在账号库为空时创建**；强制改密成功后删除，避免明文长期驻留。
+ *
+ * 注意：强制改密完成前，默认管理员**不在账号库里**——它的用户名与口令只存在于
+ * 这个明文文件里（安装时本就如此），首次登录把明文口令读出来校验，
+ * 改密成功时才把哈希写进数据库。因此首次登录之前库里没有任何口令哈希可被篡改。
  */
 export const INITIAL_PASSWORD_FILE = 'initial-password'
+
+/**
+ * 已安装但尚未完成首次登录的管理员凭据（相对 `~/.dsh/remote-hub/`）。
+ *
+ * JSON：`{ "username": "admin", "password": "<明文>" }`，目录 0700、文件 0600。
+ * 首次登录 + 强制改密成功后：账号连同口令哈希一次性落库，本文件删除。
+ * 子账号不走这条路径（创建即落库）。
+ */
+export const PENDING_ADMIN_FILE = 'pending-admin.json'
 
 /**
  * 认证面的 HTTP 处理器句柄（认证插件 `provide('remoteHubAuthHttp')`）。

@@ -34,6 +34,24 @@ function clientKeyPair() {
   }
 }
 
+/**
+ * 建一个把「默认管理员凭据」存在内存里的服务（模拟插件的 pending-admin.json）。
+ *
+ * 首次登录前账号**不在库里**；登录成功那一刻才落库，之后 pending 被清空。
+ * @returns { service, store, pending: () => 当前凭据 }
+ */
+function serviceWithPendingAdmin(clockRef) {
+  let pending = null
+  const service = (store) => auth.createAuthService({
+    store,
+    now: () => clockRef.value,
+    readPendingAdmin: async () => pending,
+    onSeedPendingAdmin: async (input) => { pending = { ...input } },
+    onPendingAdminCommitted: async () => { pending = null },
+  })
+  return { service, get pending() { return pending } }
+}
+
 /** 建一个已引导 + 已确认 MFA 的服务实例。 */
 async function bootstrappedService(tag) {
   const { dir, path } = tempStore(tag)
@@ -432,12 +450,18 @@ test('role ceiling is enforced server-side', { skip: !dynamic }, async () => {
 test('default account seeding forces exactly one password change before trust', { skip: !dynamic }, async () => {
   const { dir, path } = tempStore('seed')
   const store = await auth.createAuthStore(path)
-  const service = auth.createAuthService({ store, now: () => Date.now() })
+  const clock = { value: Date.now() }
+  const pending = serviceWithPendingAdmin(clock)
+  const service = pending.service(store)
   try {
     const created = await service.seedDefaultAccount({ username: 'admin', password: 'admin12345' })
     assert.equal(created, true)
-    // 已有账号时不再覆盖。
+    // 首次登录前：账号**不在库里**（只有明文凭据挂着），所以没有任何口令哈希可被篡改。
+    assert.deepEqual(pending.pending, { username: 'admin', password: 'admin12345' })
+    assert.equal(JSON.stringify(store.data).includes('admin'), false, 'nothing about the account is stored yet')
+    // 已有待落库凭据时不再覆盖。
     assert.equal(await service.seedDefaultAccount({ username: 'evil', password: 'whatever1' }), false)
+    assert.deepEqual(pending.pending, { username: 'admin', password: 'admin12345' }, 'seed must not overwrite the pending credential')
 
     const login = await service.login({ username: 'admin', password: 'admin12345' })
     assert.equal(login.ok, true)
@@ -517,7 +541,8 @@ test('password policy: strong by default, weak rejected, switchable in settings'
 
   const { dir, path } = tempStore('policy')
   const store = await auth.createAuthStore(path)
-  const service = auth.createAuthService({ store, now: () => Date.now() })
+  const clock = { value: Date.now() }
+  const service = serviceWithPendingAdmin(clock).service(store)
   try {
     assert.equal(service.passwordPolicy(), 'strong', 'default policy must be strong')
     await service.seedDefaultAccount({ username: 'admin', password: 'K7Qm-2xVt9-pLr4!sW' })
@@ -536,6 +561,14 @@ test('password policy: strong by default, weak rejected, switchable in settings'
     // 强口令通过；改密同时清掉强制标记。
     await service.changePassword(cookie, { currentPassword: 'K7Qm-2xVt9-pLr4!sW', newPassword: 'Strong-Pass-10!' })
     assert.equal(service.initialPasswordPending(), false)
+
+    // 管理员首次登录：绑好两步验证之前，设置面一律拒绝（含改口令策略）。
+    const gated = await service.setPasswordPolicy(cookie, 'basic').catch(error => error)
+    assert.equal(gated.code, 'auth-totp-required')
+
+    // 绑定 TOTP 后才能进设置面。
+    const setup = await service.startTotpSetup(cookie)
+    await service.confirmTotp(cookie, auth.totpCodeAt(setup.secret, Date.now()))
 
     // 设置页切到 basic：立即生效（无需重启）。
     assert.equal(await service.setPasswordPolicy(cookie, 'basic'), 'basic')
@@ -584,10 +617,15 @@ test('initial password is one-time: pending after seeding, cleared after the for
   const { dir, path } = tempStore('initial-password')
   const store = await auth.createAuthStore(path)
   const consumed = []
+  let pendingAdmin = null
   const service = auth.createAuthService({
     store,
     now: () => Date.now(),
     onForcedPasswordChanged: () => { consumed.push(true) },
+    readPendingAdmin: async () => pendingAdmin,
+    onSeedPendingAdmin: async (input) => { pendingAdmin = { ...input } },
+    onPendingAdminCommitted: async () => { pendingAdmin = null },
+    pendingAdminExists: () => pendingAdmin !== null,
   })
   try {
     assert.equal(service.initialPasswordPending(), false, 'no account yet')
@@ -1006,6 +1044,62 @@ test('a revoked client disappears from the lists and is pruned after a day', { s
     const rows = await env.service.listClients(session)
     assert.equal(hasLabel(rows, 'new-laptop'), true)
     assert.equal(hasLabel(rows, 'old-laptop'), false, '过期记录不得再出现')
+  } finally {
+    await env.service.dispose()
+    rmSync(env.dir, { recursive: true, force: true })
+  }
+})
+
+test('the administrator may rename exactly once, on first login', { skip: !dynamic }, async () => {
+  // bootstrappedService 内部已经登录过（lastLoginAt 非空），所以要自己引导一次，
+  // 用「引导后第一次登录」的会话验证改名机会。
+  const { dir, path } = tempStore('rename-once')
+  const store = await auth.createAuthStore(path)
+  let clock = Date.now()
+  const service = auth.createAuthService({ store, now: () => clock })
+  const env = { service, dir, advance: (ms) => { clock += ms } }
+  try {
+    const boot = await service.bootstrap({ username: 'admin', password: 'Correct-Horse-9-Battery!' })
+    const setup = await service.startTotpSetup(boot.cookie)
+    await service.confirmTotp(boot.cookie, auth.totpCodeAt(setup.secret, clock))
+    const login = await service.login({ username: 'admin', password: 'Correct-Horse-9-Battery!' })
+    const first = await service.verifyMfa({
+      mfaToken: login.response.mfaToken,
+      code: auth.totpCodeAt(setup.secret, clock),
+    })
+    const sessionCookie = first.cookie
+    // 首次登录后：允许改名。
+    assert.equal((await env.service.status(sessionCookie)).usernameRenameAllowed, true)
+
+    // 需要新鲜 2FA：不带验证会拿到通用拒绝（业务顺序由服务端保证）。
+    const renamed = await env.service.renameAccount(sessionCookie, 'acc_admin', 'zhang-san')
+    assert.equal(renamed.username, 'zhang-san')
+    assert.equal((await env.service.status(sessionCookie)).username, 'zhang-san')
+
+    // 用过一次之后永久关闭改名入口。
+    assert.equal((await env.service.status(sessionCookie)).usernameRenameAllowed, false)
+    await assert.rejects(
+      () => env.service.renameAccount(sessionCookie, 'acc_admin', 'li-si'),
+      (error) => error.code === 'auth-forbidden',
+    )
+  } finally {
+    await env.service.dispose()
+    rmSync(env.dir, { recursive: true, force: true })
+  }
+})
+
+test('rename stays closed for a normal (already used) administrator', { skip: !dynamic }, async () => {
+  const env = await bootstrappedService('rename-after-login')
+  try {
+    // 这个实例引导时已经登录过；改名机会仍在（一次机会与登录次数无关），
+    // 但用完之后就不能再改，且服务端即便收到请求也会拒绝。
+    await env.service.renameAccount(env.sessionCookie, 'acc_admin', 'renamed-once')
+    assert.equal((await env.service.status(env.sessionCookie)).username, 'renamed-once')
+    assert.equal((await env.service.status(env.sessionCookie)).usernameRenameAllowed, false)
+    await assert.rejects(
+      () => env.service.renameAccount(env.sessionCookie, 'acc_admin', 'renamed-twice'),
+      (error) => error.code === 'auth-forbidden',
+    )
   } finally {
     await env.service.dispose()
     rmSync(env.dir, { recursive: true, force: true })

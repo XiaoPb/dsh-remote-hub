@@ -157,6 +157,7 @@ function statusFor(code: string): number {
     case AUTH_ERROR_CODES.bootstrapClosed:
     case AUTH_ERROR_CODES.roleExceeded:
     case AUTH_ERROR_CODES.passwordChangeRequired:
+    case AUTH_ERROR_CODES.totpRequired:
     case AUTH_ERROR_CODES.accountDisabled:
       return 403
     case AUTH_ERROR_CODES.accountNotFound:
@@ -680,6 +681,13 @@ export function createAuthHandler(deps: AuthRouteDeps): (req: IncomingMessage, r
         if (action === 'delete') {
           await service.deleteAccount(token, String(body.accountId ?? ''))
           sendJson(res, 200, { ok: true })
+          return
+        }
+        if (action === 'rename') {
+          sendJson(res, 200, {
+            ok: true,
+            account: await service.renameAccount(token, String(body.accountId ?? ''), String(body.username ?? '')),
+          })
           return
         }
         sendJson(res, 400, { ok: false, code: AUTH_ERROR_CODES.badRequest, message: 'unknown action' })

@@ -51,6 +51,14 @@ export interface AccountRecord {
    * 改密成功后清除；缺省（旧存储）视为 false。
    */
   mustChangePassword?: boolean
+  /**
+   * 已经用过「首次登录改名」这一次机会。
+   *
+   * 命名只允许**管理员第一次登录**时做一次；改名成功后置 true，之后一律拒绝。
+   * 缺省（旧存储）视为「还没用过」，但只要该账号已经登录过（`lastLoginAt` 非空）
+   * 就不再算首次登录，服务端会直接关闭改名入口。
+   */
+  renameUsed?: boolean
 }
 
 /** 可信客户端记录。 */

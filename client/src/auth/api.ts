@@ -100,7 +100,8 @@ export interface AuthApi {
     | { action: 'setCeiling'; accountId: string; role: 'read-only' | 'control' | 'full' }
     | { action: 'disable'; accountId: string }
     | { action: 'enable'; accountId: string }
-    | { action: 'delete'; accountId: string },
+    | { action: 'delete'; accountId: string }
+    | { action: 'rename'; accountId: string; username: string },
   ): Promise<{
     accounts?: AccountView[]
     account?: AccountView

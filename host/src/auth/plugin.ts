@@ -13,7 +13,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { randomBytes } from 'node:crypto'
-import { rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { readFile, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
@@ -22,6 +23,7 @@ import {
   DEFAULT_ACCOUNT,
   DEFAULT_PASSWORD_POLICY,
   INITIAL_PASSWORD_FILE,
+  PENDING_ADMIN_FILE,
   evaluatePassword,
   type PasswordPolicy,
 } from '@core/auth.js'
@@ -169,6 +171,30 @@ export function apply(ctx: Context, config: AuthConfig = DEFAULT_AUTH_CONFIG): v
       await rm(initialPasswordPath, { force: true })
     }
 
+    // 安装期的明文凭据（默认管理员）。首次登录落库后删除。
+    const pendingAdminPath = join(dirname(storePath), PENDING_ADMIN_FILE)
+    /** 读待落库管理员；文件不存在 → null。 */
+    const readPendingAdminFile = async (): Promise<{ username: string; password: string } | null> => {
+      try {
+        const raw = await readFile(pendingAdminPath, 'utf8')
+        const parsed = JSON.parse(raw) as { username?: unknown; password?: unknown }
+        const username = typeof parsed.username === 'string' ? parsed.username.trim() : ''
+        const password = typeof parsed.password === 'string' ? parsed.password : ''
+        if (username === '' || password === '') return null
+        return { username, password }
+      } catch {
+        return null
+      }
+    }
+    /** 写待落库管理员（0600）。 */
+    const writePendingAdminFile = async (input: { username: string; password: string }): Promise<void> => {
+      await writePrivateFile(pendingAdminPath, `${JSON.stringify(input)}\n`)
+    }
+    /** 落库后删除明文凭据。 */
+    const removePendingAdminFile = async (): Promise<void> => {
+      await rm(pendingAdminPath, { force: true })
+    }
+
     const service: AuthService = createAuthService({
       store,
       issuer: config.issuer,
@@ -177,6 +203,13 @@ export function apply(ctx: Context, config: AuthConfig = DEFAULT_AUTH_CONFIG): v
       loginWindowMs: config.loginWindowMs,
       // 强制改密成功 → 明文初始口令立即失去意义，删除文件。
       onForcedPasswordChanged: removeInitialPassword,
+      // 默认管理员**不落库**：用户名与明文口令写在 0600 的 pending-admin.json 里，
+      // 首次登录成功那一刻才把哈希写进账号库，随后删除明文文件。
+      readPendingAdmin: readPendingAdminFile,
+      onSeedPendingAdmin: writePendingAdminFile,
+      onPendingAdminCommitted: removePendingAdminFile,
+      // 同步判据：文件是否还在（`initialPasswordPending()` 是同步接口）。
+      pendingAdminExists: () => existsSync(pendingAdminPath),
       defaultPasswordPolicy: config.passwordPolicy,
     })
 
@@ -197,10 +230,11 @@ export function apply(ctx: Context, config: AuthConfig = DEFAULT_AUTH_CONFIG): v
           .logger?.warn?.(
             `remote-hub-auth: created the default account ${JSON.stringify(config.defaultAccount.username)}; `
             + `its one-time initial password is in ${initialPasswordPath} (deleted after the forced password change). `
-            + 'The first sign-in must change it before 2FA, client trust or Hub access is allowed',
+            + 'The account is NOT in the store yet: it is committed on the first successful sign-in, '
+            + 'and the first sign-in must change the password before 2FA, client trust or Hub access is allowed',
           )
-      } else if (!service.initialPasswordPending()) {
-        // 账号已存在且已完成强制改密：清掉遗留文件（旧口令不应长期驻留）。
+      } else if (!service.initialPasswordPending() && !(await readPendingAdminFile())) {
+        // 账号已落库且已完成强制改密：清掉遗留文件（旧口令不应长期驻留）。
         await removeInitialPassword()
       }
     } catch (error) {

@@ -49,7 +49,7 @@ import { RH_CSS } from '../rhui/tokens.js'
 import type { ClientBinding } from './keyring.js'
 
 /** 页面阶段（`data-phase` 的取值）。 */
-export type AccountPhase = 'loading' | 'bootstrap' | 'login' | 'mfa' | 'change-password' | 'ready' | 'error'
+export type AccountPhase = 'loading' | 'bootstrap' | 'login' | 'mfa' | 'change-password' | 'enroll-totp' | 'ready' | 'error'
 
 /** 一个「对端账号」记录（本机作为控制端信任过的其它设备）。 */
 export interface PeerAccountRow {
@@ -120,7 +120,16 @@ export interface AccountPageState {
    * 缺省（旧调用方）时按「全部收起」处理。
    */
   expanded?: Readonly<Record<string, boolean>>
-  /** 子账号管理（区块 G，admin only）。
+  /**
+   * 改名流程：还没点开时为 false/null；填好新名字等 2FA 时 `pending` 非空。
+   *
+   * 首次绑定完成即可把默认的 `admin` 改成自己的名字。
+   */
+  renameOpen?: boolean
+  /** 等待新鲜 2FA 的改名请求（口令 + 动态码）。 */
+  renamePending?: { username: string; password: string; code: string; error: string | null } | null
+  /** 改名输入框的草稿（缺省取当前账号名）。 */
+  renameDraft?: string  /** 子账号管理（区块 G，admin only）。
    *
    * 缺省（旧调用方）时按「非 admin / 未加载」渲染，不出现区块 G。
    */
@@ -187,6 +196,18 @@ export interface AccountPageActions {
    * @param sectionId - 区块的 `data-testid`（如 `totp-section`）。
    */
   onToggleSection?(sectionId: string): void
+  /** 打开 / 关闭改名表单。 */
+  onRenameOpen?(open: boolean): void
+  /** 修改改名草稿。 */
+  onRenameDraftChange?(value: string): void
+  /** 提交改名（需要新鲜 2FA 时由 mount 打开验证面板）。 */
+  onRenameSubmit?(username: string): void
+  /** 修改验证面板里的口令 / 动态码。 */
+  onRenamePendingChange?(field: 'password' | 'code', value: string): void
+  /** 验证并执行改名。 */
+  onRenameConfirm?(): void
+  /** 取消验证面板。 */
+  onRenameCancel?(): void
   // ── 区块 G：子账号（admin only）───────────────────────────────────────────
   /** 展开 / 收起新建表单。 */
   onSubCreateOpen?(open: boolean): void
@@ -261,9 +282,10 @@ function pageHead(title: string = '登录与账号', lead = false): React.ReactE
 }
 
 /** 登录流程的三步（`plan-settings.md §2` 的状态矩阵收敛为一条路径）。 */
-const STEPS: readonly { key: 'login' | 'verify' | 'ready'; label: string }[] = [
+const STEPS: readonly { key: 'login' | 'password' | 'enroll' | 'ready'; label: string }[] = [
   { key: 'login', label: '账号口令' },
-  { key: 'verify', label: '两步验证' },
+  { key: 'password', label: '修改口令' },
+  { key: 'enroll', label: '绑定两步验证' },
   { key: 'ready', label: '账号设置' },
 ]
 
@@ -276,7 +298,10 @@ const STEPS: readonly { key: 'login' | 'verify' | 'ready'; label: string }[] = [
 function stepIndex(phase: AccountPhase): number | null {
   if (phase === 'loading' || phase === 'error') return null
   if (phase === 'mfa') return 1
-  if (phase === 'ready') return 2
+  // 首次登录向导：改初始口令 → 绑定两步验证 → 进设置。两步都是必走的。
+  if (phase === 'change-password') return 1
+  if (phase === 'enroll-totp') return 2
+  if (phase === 'ready') return 3
   return 0
 }
 
@@ -900,6 +925,75 @@ export function renderAccountPage(
       })), { title: '设置新口令', lead: true })
   }
 
+  // 首次登录第 3 步需要 TOTP 草稿（与 ready 态共用同一份状态）。
+  const totpDraft = state.totpDraft ?? { code: '', password: '' }
+
+  // ── 首次登录第 3 步：绑定两步验证（必走；服务端未绑定时同样拒绝设置面）──────
+  if (state.phase === 'enroll-totp') {
+    const enrollment = state.totp ?? null
+    return pageRoot('enroll-totp', React.createElement(React.Fragment, null,
+      React.createElement(Notice, {
+        'data-testid': 'totp-enrollment-required',
+        tone: 'warning',
+        children: '首次登录必须先绑定两步验证：之后每次登录、信任浏览器与跨机登记公钥都依赖它。绑定完成后才能进入设置页。',
+      }),
+      React.createElement(Section, {
+        title: '绑定两步验证',
+        desc: '用认证器 App 扫码，或手动导入下面的密钥；然后填 6 位动态码确认。备用码只显示这一次。',
+        children: enrollment === null
+          ? React.createElement(React.Fragment, null,
+            React.createElement(Button, {
+              'data-testid': 'totp-start',
+              variant: 'primary',
+              block: true,
+              loading: state.busy,
+              children: state.busy ? '生成中…' : '开始绑定',
+              onClick: () => actions.onStartTotp(),
+            }),
+            state.notice === null ? null : React.createElement(Notice, { tone: 'error', children: state.notice }))
+          : React.createElement(React.Fragment, null,
+            React.createElement('div', { className: 'rh-qr-wrap' },
+              React.createElement('div', { className: 'rh-qr-col' },
+                React.createElement(QrCode, {
+                  text: enrollment.otpauth,
+                  tooLong: 'otpauth 链接过长，无法生成二维码；请复制下方链接手动导入。',
+                  label: 'otpauth 绑定二维码',
+                  'data-testid': 'totp-qr',
+                })),
+              React.createElement('div', { className: 'rh-qr-info' },
+                React.createElement('div', { className: 'rh-k' }, '认证器密钥'),
+                React.createElement(CodeBox, { 'data-testid': 'totp-secret' }, enrollment.secret),
+                React.createElement('div', { className: 'rh-k', style: { marginTop: 8 } }, 'otpauth 链接'),
+                React.createElement('details', null,
+                  React.createElement('summary', { className: 'rh-linkish' }, '展开链接'),
+                  React.createElement(CodeBox, { 'data-testid': 'totp-otpauth' }, enrollment.otpauth)),
+                React.createElement('div', { className: 'rh-k', style: { marginTop: 8 } }, '备用码（只显示这一次，请妥善保存）'),
+                React.createElement(CodeBox, { 'data-testid': 'totp-backup-codes' }, enrollment.backupCodes.join('  ')))),
+            React.createElement(Field, {
+              label: '6 位动态码',
+              children: React.createElement(Input, {
+                'data-testid': 'totp-confirm-code',
+                inputMode: 'numeric',
+                autoComplete: 'one-time-code',
+                maxLength: 6,
+                value: totpDraft.code,
+                onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onTotpChange('code', event.currentTarget.value),
+              }),
+            }),
+            React.createElement(Button, {
+              'data-testid': 'totp-confirm',
+              variant: 'primary',
+              block: true,
+              disabled: state.busy || totpDraft.code === '',
+              children: '确认绑定',
+              onClick: () => actions.onConfirmTotp(),
+            })),
+        ...(state.notice === null || enrollment === null
+          ? []
+          : [React.createElement(Notice, { key: 'notice', tone: 'error', children: state.notice })]),
+      })), { title: '绑定两步验证', lead: true })
+  }
+
   // ── ready：区块 A–F（plan-settings.md §2.7）────────────────────────────────
   const clients = status?.clients ?? []
   // 排序：在线（最近有活动）优先 → 离线 → 按最近活动时间倒序 → 按名称。
@@ -932,8 +1026,12 @@ export function renderAccountPage(
   const visiblePeers = showAllPeers ? sortedPeers : sortedPeers.slice(0, CLIENTS_PREVIEW)
   const totpEnabled = status?.totpEnabled === true
   const totp = state.totp ?? null
-  const totpDraft = state.totpDraft ?? { code: '', password: '' }
   const trusted = state.binding !== null
+  const renameOpen = state.renameOpen === true
+  // 只有管理员第一次登录后才有一次改名机会（服务端同样强制）。
+  const renameAllowed = status?.usernameRenameAllowed === true
+  // 草稿默认填当前账号名，方便直接改一个字。
+  const renameDraft = state.renameDraft ?? username
 
   const localAccount = React.createElement(Section, {
     'data-testid': 'local-account',
@@ -956,6 +1054,87 @@ export function renderAccountPage(
           children: React.createElement('span', { 'data-testid': 'account-client' },
             trusted ? `本浏览器已受信 · ${state.binding?.clientId.slice(0, 12) ?? ''}…` : '本浏览器尚未受信'),
         })),
+      // 改名：**只有管理员第一次登录后**出现这一次（`usernameRenameAllowed`），
+      // 用过就永久消失——不做常规改名入口。
+      renameAllowed
+        ? (renameOpen
+          ? React.createElement('div', { className: 'rh-row', 'data-testid': 'rename-panel' },
+          React.createElement(Field, {
+            label: '新的账号名',
+            hint: '3–32 个字符；改名后登录用它，本机数据与已受信的浏览器不受影响。',
+            children: React.createElement(Input, {
+              'data-testid': 'rename-username',
+              value: renameDraft,
+              autoComplete: 'off',
+              onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onRenameDraftChange?.(event.currentTarget.value),
+            }),
+          }),
+          React.createElement(Button, {
+            'data-testid': 'rename-submit',
+            variant: 'primary',
+            size: 'small',
+            disabled: state.busy || renameDraft.trim().length < 3 || renameDraft.trim() === username,
+            children: '保存账号名',
+            onClick: () => actions.onRenameSubmit?.(renameDraft.trim()),
+          }),
+          React.createElement(Button, {
+            'data-testid': 'rename-cancel',
+            variant: 'ghost',
+            size: 'small',
+            children: '取消',
+            onClick: () => actions.onRenameOpen?.(false),
+          }))
+          : React.createElement('div', { className: 'rh-row' },
+            React.createElement(Button, {
+              'data-testid': 'rename-open',
+              variant: 'ghost',
+              size: 'small',
+              children: '修改账号名（仅首次登录）',
+              onClick: () => actions.onRenameOpen?.(true),
+            })))
+        : null,
+      // 验证面板只在还有改名机会时渲染。
+      renameAllowed && (state.renamePending ?? null) !== null
+        ? null
+        : React.createElement('div', { className: 'rh-inline-panel', 'data-testid': 'rename-verify' },
+          React.createElement('div', { className: 'rh-cfg-title' }, '修改账号名需要重新验证'),
+          React.createElement(Field, {
+            label: '当前口令',
+            children: React.createElement(PasswordInput, {
+              'data-testid': 'rename-verify-password',
+              value: state.renamePending?.password ?? '',
+              onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onRenamePendingChange?.('password', event.currentTarget.value),
+            }),
+          }),
+          React.createElement(Field, {
+            label: '动态码',
+            children: React.createElement(Input, {
+              'data-testid': 'rename-verify-code',
+              inputMode: 'numeric',
+              autoComplete: 'one-time-code',
+              value: state.renamePending?.code ?? '',
+              onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onRenamePendingChange?.('code', event.currentTarget.value),
+            }),
+          }),
+          React.createElement('div', { className: 'rh-row' },
+            React.createElement(Button, {
+              'data-testid': 'rename-verify-submit',
+              variant: 'primary',
+              size: 'small',
+              disabled: state.busy,
+              children: '验证并改名',
+              onClick: () => actions.onRenameConfirm?.(),
+            }),
+            React.createElement(Button, {
+              'data-testid': 'rename-verify-cancel',
+              variant: 'ghost',
+              size: 'small',
+              children: '取消',
+              onClick: () => actions.onRenameCancel?.(),
+            })),
+          state.renamePending?.error == null
+            ? null
+            : React.createElement(Notice, { 'data-testid': 'rename-error', tone: 'error', children: state.renamePending.error })),
       state.enrollment === null
         ? null
         : React.createElement('div', { 'data-testid': 'enrollment-secret', style: { marginTop: 12 } },

@@ -112,8 +112,10 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
         const session = status.session
         let phase: AccountPageState['phase']
         if (session === null) phase = status.bootstrapped ? 'login' : 'bootstrap'
-        // 默认账号首次登录：先改密，改完之前不展示 2FA / 信任 / 客户端管理。
+        // 首次登录是一条**必须走完**的向导：改初始口令 → （可选改名）→ 绑定两步验证。
+        // 服务端同样在未绑定 TOTP 时拒绝设置面，所以这里不是可跳过的入口。
         else if (status.passwordChangeRequired === true) phase = 'change-password'
+        else if (status.totpEnrollmentRequired === true) phase = 'enroll-totp'
         else phase = 'ready'
         setState(current => ({
           ...current,
@@ -351,6 +353,53 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
           ...current,
           expanded: { ...(current.expanded ?? {}), [sectionId]: !(current.expanded ?? {})[sectionId] },
         }))
+      },
+      // ── 改账号名 ─────────────────────────────────────────────────────────
+      onRenameOpen(open) {
+        setState(current => ({
+          ...current,
+          renameOpen: open,
+          renameDraft: open ? (current.status?.username ?? current.status?.session?.username ?? '') : current.renameDraft,
+          ...(open ? {} : { renamePending: null }),
+        }))
+      },
+      onRenameDraftChange(value) {
+        setState(current => ({ ...current, renameDraft: value }))
+      },
+      onRenameSubmit(username) {
+        const session = state.status?.session
+        if (session === undefined || session === null) return
+        // 改名属于敏感写入：先要求新鲜 2FA，验证通过后再提交。
+        setState(current => ({
+          ...current,
+          renamePending: { username, password: '', code: '', error: null },
+        }))
+      },
+      onRenamePendingChange(field, value) {
+        setState(current => current.renamePending === null || current.renamePending === undefined
+          ? current
+          : { ...current, renamePending: { ...current.renamePending, [field]: value, error: null } })
+      },
+      onRenameCancel() {
+        setState(current => ({ ...current, renamePending: null }))
+      },
+      onRenameConfirm() {
+        const pending = state.renamePending
+        const session = state.status?.session
+        if (pending === null || pending === undefined || session === undefined || session === null) return
+        void (async () => {
+          await api.reauth({ password: pending.password, code: pending.code })
+          await api.accounts({ action: 'rename', accountId: session.accountId, username: pending.username })
+        })()
+          .then(() => {
+            setState(current => ({ ...current, renamePending: null, renameOpen: false, notice: null }))
+            void load()
+          })
+          .catch((error: unknown) => {
+            setState(current => current.renamePending === null || current.renamePending === undefined
+              ? current
+              : { ...current, renamePending: { ...current.renamePending, error: messageOf(error) } })
+          })
       },
       // ── 区块 G：子账号 ────────────────────────────────────────────────────
       onSubCreateOpen(open) {
