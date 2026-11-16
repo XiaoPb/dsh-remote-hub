@@ -566,7 +566,12 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
   const server: Server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? '/', `${protocol}//${config.guardHost}:${config.guardPort}`)
-      const path = url.pathname
+      // 末尾斜杠归一化：`/remote-web/login/` 与 `/remote-web/login` 是同一个页面。
+      // 不归一化的话，浏览器地址栏 / 用户手打 / 某些客户端补斜杠时会落到
+      // 兜底的 404 JSON 上——用户看到的就是一坨 `{"type":"server-response"...}`。
+      // 只去掉一层尾部斜杠；根路径 `/` 保持原样。
+      const rawPath = url.pathname
+      const path = rawPath.length > 1 && rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath
       const method = (req.method ?? 'GET').toUpperCase()
       const rpcId = typeof req.headers['x-rpc-id'] === 'string' ? req.headers['x-rpc-id'] : 'guard'
 

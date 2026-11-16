@@ -384,7 +384,18 @@ function loginScript(mfaEndpoint: string, channel: string): string {
     } catch (error) {
       next = ''
     }
-    var safe = /^\/(?![\/\\])/.test(next) ? next : '/'
+    // 只接受「以单个正斜杠开头」的同源相对路径：协议相对地址（两个斜杠）
+    // 与反斜杠变体都会跳出本站，必须退回根路径。
+    //
+    // ⚠️ 这一段是模板字符串里生成的 JS，**注释里也不能出现反斜杠**：
+    // 模板同样会把它当转义吃掉，整个脚本就语法错误了 —— 真实故障表现是
+    // 表单退回原生 POST、用户看到裸 JSON。故用 charCodeAt 判反斜杠。
+    var safe = '/'
+    if (next.length > 0 && next.charAt(0) === '/') {
+      var second = next.charAt(1)
+      var isSeparator = second === '/' || second.charCodeAt(0) === 92
+      if (second.length === 0 || !isSeparator) safe = next
+    }
     location.replace(safe)
   }
 

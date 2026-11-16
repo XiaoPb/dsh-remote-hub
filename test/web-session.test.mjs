@@ -142,6 +142,28 @@ function createWebSession(deps) {
   }
 }
 
+// ── ⓪ 生成脚本的语法自检 ──────────────────────────────────────────────────
+
+/**
+ * 登录页的内联 JS 是用模板字符串写出来的，**生成阶段**才暴露转义问题。
+ *
+ * 曾经的 bug：`/^\/(?![\/\\])/` 写进模板后反斜杠被吃掉，
+ * 页面里变成 `/^/(?![/\])/` —— 语法错误，整段脚本不执行，
+ * 表单退回原生 POST，用户看到裸 JSON。源码看起来完全正常，
+ * 只有把**生成的文本**再解析一遍才能发现。
+ */
+test('登录页脚本里的正则不依赖会被模板吃掉的转义', () => {
+  // 生成后的页面文本里，不应出现「被吃剩」的半截字符类。
+  const html = typeof createWebSession({ service: {}, sessionTtlMs: 1000, guardOrigin: 'http://x' }).renderLoginPage === 'function'
+    ? createWebSession({ service: {}, sessionTtlMs: 1000, guardOrigin: 'http://x' }).renderLoginPage()
+    : webSessionSrc
+  assert.equal(typeof html, 'string')
+  // 真实故障特征：出现 `[/\]`（反斜杠丢失后的残骸）。
+  assert.ok(!html.includes('[/\\]'), '正则字符类里的反斜杠丢了，脚本会语法错误')
+  // 同理不应出现空的字符类。
+  assert.ok(!html.includes('[]'), '不能出现空字符类')
+})
+
 // ── ① 登录页 ────────────────────────────────────────────────────────────────
 
 test('登录页包含全部 6 个 data-testid，且源码里没有任何形如令牌的串', () => {
