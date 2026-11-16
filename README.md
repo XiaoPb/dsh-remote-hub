@@ -6,7 +6,7 @@
 [![Release](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml/badge.svg)](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml)
 [![npm](https://img.shields.io/npm/v/@xiaopb/dsh-remote-hub?label=npm)](https://www.npmjs.com/package/@xiaopb/dsh-remote-hub)
 
-**DSH 双角色远程接管插件（v0.4.0）**
+**DSH 双角色远程接管插件（v0.5.0）**
 
 文档：[部署与运维](docs/DEPLOY.md) ｜ [架构](docs/ARCHITECTURE.md) ｜ [设计契约](docs/DESIGN.md) ｜ [接口权限分布](docs/API-MATRIX.md) ｜ [文档索引](docs/INDEX.md) ｜ [更新日志](CHANGELOG.md) ｜ [English](README.en.md)
 
@@ -68,6 +68,43 @@
 - `full` **不等于** DSH owner：宿主侧的插件生命周期、凭据管理等由 DSH 自身策略与 Host 审批把关。
 
 完整接口级权限见 [接口权限分布](docs/API-MATRIX.md)。
+
+---
+
+## 两种用法
+
+| | 桌面端 / 客户端 | 浏览器直连（0.5.0+） |
+|---|---|---|
+| 怎么用 | 装 DSH 桌面端，在「云端设备」里填对端地址配对 | 浏览器打开 `http://<host>:<guardPort>/ ` |
+| 身份 | 客户端私钥，每请求签名 | HttpOnly 会话 Cookie |
+| 认证 | 首次信任时用账号 + 2FA，之后 7 天租约静默轮换 | **每次打开**都要账号 + 口令 + 动态码 |
+| 适合 | 自己的常用电脑 | 手机、平板、临时设备、无客户端环境 |
+| 需要 | 装客户端 | 只要浏览器 |
+
+两者并存，用哪个取决于你在什么设备上。浏览器直连的完整说明见
+**[docs/BROWSER-GATEWAY.md](docs/BROWSER-GATEWAY.md)**。
+
+### 快速上手：浏览器直连
+
+**前提**：账号已绑定两步验证。未绑定的账号浏览器入口会拒绝
+（TOTP 只能在首次登录向导里绑定）。
+
+1. 在 Host 的 `cordis.patch.yml` 开 `accountAuth.enabled: true`，
+   并给 `connection` 行加 `trustedHosts`（含一个非回环 authority，
+   否则「新建工作区」会去拉浏览器本地的文件夹）。详见文档 §4。
+2. 浏览器打开 `http://<host>:<guardPort>/`，自动跳到登录页。
+3. 输入账号、口令、6 位动态码。
+
+**服务器没有图形界面？** 第一次配置必须走本地 Web（经 SSH 隧道），
+因为 TOTP 绑定只能在首次登录向导里完成。完整步骤见
+[docs/BROWSER-GATEWAY.md §3](docs/BROWSER-GATEWAY.md)。
+
+### 反向代理
+
+守卫是普通 HTTP + WebSocket，可以放在 nginx / Caddy 后面。**关键是透传
+WebSocket 升级**（`/api/remote.mux` 是长连接，权限目录等客户端服务依赖它）
+并保留原始 `Host` 头。配置样例见
+[docs/BROWSER-GATEWAY.md §6](docs/BROWSER-GATEWAY.md)。
 
 ---
 
@@ -202,7 +239,7 @@ pnpm run build
 dsh plugin --profile web add link:$PWD
 ```
 
-主包为 `@xiaopb/dsh-remote-hub@0.4.0`（云端路径 UI 已内置，无需其它包）。要求 **Node.js ≥ 24.9.0**（认证存储用内置 `node:sqlite`；22.5+ 亦可运行，但在 22.x 上属实验特性，仅供自测）、**DSH ≥ 0.2.2-rc.1 < 0.3.0**（已发布：0.2.2-rc.1 / rc.2 / rc.3）。
+主包为 `@xiaopb/dsh-remote-hub@0.5.0`（云端路径 UI 已内置，无需其它包）。要求 **Node.js ≥ 24.9.0**（认证存储用内置 `node:sqlite`；22.5+ 亦可运行，但在 22.x 上属实验特性，仅供自测）、**DSH ≥ 0.2.2-rc.1 < 0.3.0**（已发布：0.2.2-rc.1 / rc.2 / rc.3）。
 
 ---
 
@@ -282,6 +319,17 @@ CI 跑上面同一套。发布走 CI/CD，**不接受本地手工 `npm publish`*
 - `full` **不会**自动变成 DSH owner：插件生命周期、动态 Cordis 执行、任意设置、凭据管理仍受独立管控，可能还需要 Host 审批。
 - 守卫默认只绑回环；跨网访问必须先配置 `publicAuthorities`，否则经隧道的请求会被来源围栏**全部拒绝**（这是 fail-closed 的正确行为）。
 
+### 浏览器直连的边界
+
+- **系统原生目录选择器（`directoryPicker/pick`）永远不开放**：浏览器不能让服务器弹出
+  系统文件对话框。浏览器里用的是「浏览远程目录」，走的是另一条白名单端点。
+- **未绑定两步验证的账号无法从浏览器登录**（`auth-totp-required`）。TOTP 只能在
+  首次登录向导里绑定，所以第一次配置必须走本地 Web。
+- **无图形界面的服务器**不能完成需要 OS 对话框的首次配置操作 —— 服务器上根本没有可弹的窗口。
+- **不要把守卫直接暴露到公网**。`network: lan` 只接受私有地址；公网场景请走
+  VPN，或反向代理 + 额外一层访问控制。
+- **务必用 https**。口令与动态码是明文 POST，反代终结 TLS 后 Cookie 才会带 `Secure`。
+
 ---
 
 ## 相关文档
@@ -289,6 +337,7 @@ CI 跑上面同一套。发布走 CI/CD，**不接受本地手工 `npm publish`*
 | 文档 | 内容 |
 | --- | --- |
 | [README.en.md](README.en.md) | English version |
+| [docs/BROWSER-GATEWAY.md](docs/BROWSER-GATEWAY.md) | **浏览器直连**：支持/不支持、安全模型、无界面服务器首次配置、反向代理 |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | 部署、配置项、隧道选型、巡检、故障排查 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 数据通路、身份、授权、持久化 |
 | [docs/DESIGN.md](docs/DESIGN.md) | 角色语义、状态归属、支持边界 |

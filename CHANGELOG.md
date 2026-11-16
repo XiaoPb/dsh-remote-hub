@@ -3,7 +3,71 @@
 本文件记录 `@xiaopb/dsh-remote-hub` 与伴生包 `@xiaopb/dsh-remote-paths` 的公开变更。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)；`0.x` 期间的次版本号可能包含不兼容变更。
 
-## [未发布]
+## [0.5.0] - 2026-11-16
+
+**浏览器直连（方案 A）：不装桌面端也能用完整的 DSH 界面。**
+
+这是本插件第一次让「只有浏览器」的场景成为一等公民。此前 Hub 只服务
+**装了桌面端 / 已有客户端私钥**的设备；现在用手机、平板、别人的电脑打开
+一个网址，输入账号口令 + 6 位动态码，就能拿到与桌面端一致的界面。
+
+### 新增：守卫托管官方界面
+
+- `GET <guard>/ ` 由守卫直接返回**官方 Web 外壳**（进程内
+  `webServer.readResource` + peer 身份，不依赖自启动令牌），浏览器感知不到
+  自己不是从 `:3080` 来的。
+- `/api/*` 走 **HttpOnly Cookie** 认证后以 `remote-device` 身份派发；
+  **认证在读 body 之前**，未登录一个字节都不转发。
+- `WS /api/remote.mux` 同样走 Cookie 认证，让客户端的 `permission catalog`、
+  插槽装配等依赖 Host generation 的服务正常建立。
+- 浏览器侧角色由账号 `role` 决定（`acc_admin` → `full`，其余 `read-only`），
+  **不会**以 `owner` 身份派发。
+
+### 修复：不登录时不再给一个死页面
+
+`GET <guard>/` 在未认证时 **302** 到 `/remote-web/login`（服务端判定，
+不依赖客户端 JS），并带 `?next=` 便于登录后返回原页面。
+登录页只接受同源相对路径，避免 `?next=` 变成开放重定向。
+
+### 修复：登录表单不再退回裸 JSON
+
+登录页生成的内联脚本曾因**模板字符串吃掉反斜杠**（`/^\/(?![\/\\])/`）
+整段语法错误，导致 `preventDefault()` 没执行、表单原生 POST、
+浏览器把接口 JSON 当页面渲染。改为 `charCodeAt` 判断，并加测试
+把生成后的脚本交给 `node --check`。
+
+同时修掉 `/remote-web/login/`（末尾斜杠）落到 404 JSON 的问题。
+
+### 修复：TOTP 二维码扫不出来
+
+自研编码器只能出两个固定版本，`otpauth://` 链接（约 140 字节）永远落在
+版本 10（57 模块）；配 120px 显示尺寸就是 **2.1px/模块**，低于扫码器
+普遍要求的 4px。改用 `qrcode-generator`（零依赖、随 bundle 内联）后
+自动选最小版本（**49 模块**），显示尺寸按 `模块数 × 4 + 8` 自适应
+（**204px → 4.16px/模块**），并加 `shape-rendering: crispEdges`
+避免重采样出灰边。
+
+### 新增：让 DSH 自身选用「浏览远程目录」
+
+配置 `connection.trustedHosts` 含非回环 authority 后，DSH 的
+`directory-picker-auto` 会挂 `browse` 后端 + 浏览客户端，
+浏览器的「新建工作区」于是弹出**远程主机的目录树**，而不是拉起浏览器本地
+的文件夹对话框。插件不再抢那两个插槽（抢了会盖掉官方实现）。
+
+### 变更
+
+- **目录选择交给官方**：删除插件自注册的 `conversation.hero.workspace.directoryFlow`
+  / `sidebar.workspaces.directoryFlow`，仅在需要时提供 `cloudPathContext()`。
+- **新增运行时依赖 `qrcode-generator`**（client bundle 内联，运行时无网络）。
+
+### 迁移
+
+- 想在浏览器里用：在 `cordis.patch.yml` 里为 `remote-hub` 行开
+  `accountAuth.enabled: true`，并为 `connection` 行加 `trustedHosts`
+  （详见 `docs/BROWSER-GATEWAY.md`）。
+- 只走桌面端的老用户无需改动，行为保持原样。
+
+## [0.4.0] - 2026-11-15
 
 **账号 + 2FA 认证与可信客户端（第二个 Cordis 插件行 `@xiaopb/dsh-remote-hub/auth`），默认启用。**
 
@@ -48,7 +112,7 @@
 
 ### 迁移
 
-- `accountAuth.enabled` **默认 false**：升级后既有设备令牌继续可用，避免升级即失联。
+- `accountAuth.enabled` **默认 true**（见上「默认行为变更」）。需要保留旧设备令牌语义的部署，
   在「登录与账号」页完成账号 + 2FA + 信任本浏览器后，再把 `cordis.patch.yml` 的
   `remote-hub` 行改成 `accountAuth.enabled: true` 并重启 Host。
 - 切换后**旧设备令牌立即失效**，且不会被静默升级成受信客户端（必须重新登记公钥）。
