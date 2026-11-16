@@ -674,6 +674,15 @@ function assembleRemoteHub(
       const policy = registerDevicePolicy(ctx, {
         devices,
         visibleResourceIds: () => visibleResources.resourceIds(),
+        // 账号模式的受信客户端存在 auth.db 的 clients 表里（cli_*），不在设备表
+        // （dev_*）中。不给这条回落，`bindings()` 对账号模式恒为空数组，
+        // 官方 decide() 就会把每个 Remote 调用都判成 no-allow。
+        // `listTrustedClients()` 已过滤已撤销的客户端，因此 revokedAt 恒为 null；
+        // 撤销后该 id 不再出现在列表里，bindings 自然变空 → 全量拒（立即失效）。
+        authClient: (clientId) => {
+          const client = auth?.listTrustedClients?.().find(item => item.clientId === clientId)
+          return client === undefined ? undefined : { role: client.activeRole, revokedAt: null }
+        },
         onDenied: row => { audit('access-denied', row) },
       })
       at('policy:registered')

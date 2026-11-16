@@ -58,6 +58,9 @@ export const PAIR_ISSUE_HEADER = 'x-pair-issue-token'
  *   与访问判定（红线 R9）。
  * - 两条**设备管理**路由（`devices` / `devicesRevoke`）只作用于本机页面：与
  *   签发端同样施加「回环 + `x-pair-issue-token`」双条件，不对外暴露。
+ * - 末尾四个是**浏览器入口**的路由族：`web`（index）与 `webAsset`（静态反代前缀）
+ *   是公开的静态面，`webLogin`（认证面前缀）与 `webApi`（页面 RPC 前缀）只声明
+ *   归属——鉴权仍由 `guard.ts` 与认证插件完成，**不因它们出现在表里而放宽**。
  */
 export const GUARD_ROUTES = {
   /** 无鉴权的最小事实：`{ ok, protocolVersion }`。不回显设备数，不暴露其它配置。 */
@@ -80,6 +83,37 @@ export const GUARD_ROUTES = {
    * **长期租约永远不进入 URL**。
    */
   wsTicket: '/remote/ws-ticket',
+  /**
+   * 浏览器入口（index 页）。**公开**：它就是登录页本身，不含任何凭据，
+   * 只有静态外壳 + 注入的 `__DSH_REMOTE_HUB__`（`{ mode: 'remote-browser' }`）。
+   *
+   * 由 `host/src/guard-web.ts` 从官方 Web origin 取回 index、保留
+   * `__DSH_BOOT__` 原样并插入远程标记后返回；**绝不**回显 `pairIssueToken`。
+   */
+  web: '/',
+  /**
+   * 官方静态资源的反代**前缀**（`/assets/*`、`/plugins/*`，含
+   * `/plugins/??a/client.js,b/client.js&rev=…` 这种字典拼接形式）。**公开**。
+   *
+   * 它是前缀不是完整路径：匹配规则与白名单在 `guard-web.ts` 的
+   * `isProxyableAssetPath()`（该函数另含 `manifest.webmanifest` 与 `favicon*.svg`）。
+   * 写成前缀是为了让「守卫认领哪一段」只有一个真源，避免两处各记一份。
+   */
+  webAsset: '/assets/',
+  /**
+   * 账号登录面（浏览器入口的登录/两步验证/首登引导）。**公开**（这正是登录前的页面）。
+   *
+   * 前缀：具体端点由认证插件 `provide('remoteHubAuth')` 的 `AuthHttpSurface.paths`
+   * 给出（`guard.ts` 逐条并进路由白名单），本常量只声明「这一段归认证面」。
+   */
+  webLogin: '/remote-auth/',
+  /**
+   * 浏览器页面的 RPC 面（官方 `/api/*` 信封）。**需要认证**：不是匿名可用。
+   *
+   * 前缀：与 `webLogin` 同理，本常量声明归属；真正的鉴权与派发在
+   * `guard.ts`（`/remote/rpc` + `/api`）与认证插件里完成。
+   */
+  webApi: '/api/',
 } as const
 
 export type GuardRouteName = keyof typeof GUARD_ROUTES

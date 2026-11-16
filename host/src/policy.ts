@@ -60,6 +60,17 @@ export interface DevicePolicyDeps {
    * `ctx.workspaceRegistry.list()` 读（都是同步内存读）；测试可注入固定集合。
    */
   visibleResourceIds?: () => { session?: readonly string[]; workspace?: readonly string[] }
+  /**
+   * 账号模式的受信客户端（`auth.db` 的 clients 表）。
+   *
+   * **为什么需要**：设备表（`devices.json`，dev_*）与账号客户端（cli_*）是两套
+   * id 空间。只查设备表时，账号模式下的 `bindings()` 恒为空数组，官方 `decide()`
+   * 把空 bindings 当成「没有允许项」→ 全量 `remote-access/denied`。P0 探针实测：
+   * full 角色连 `directoryPicker/list` 都拿不到，正是这个原因。
+   *
+   * 返回 `undefined` 表示该 id 不在这套客户端里（交给设备表判定）。
+   */
+  authClient?: (clientId: string) => { role: RoleName; revokedAt: string | null } | undefined
   /** 审计回调（越权尝试是最有价值的信号）。 */
   onDenied?: (row: { deviceId: string; action: string; reason: string; at: string }) => void
   /** 注入时钟。 */
@@ -111,9 +122,14 @@ export function registerDevicePolicy(ctx: Context, deps: DevicePolicyDeps): Acce
     if (device === undefined) return []
     // Defence in depth：已吊销设备的旧 Peer 若还活着，bindings 直接为空 → 全量拒。
     const record = deps.devices.get(device.deviceId)
-    if (record === undefined || record.revokedAt !== null) return []
-    // 角色以**设备表**为准（防止一个旧 Peer 里残留的高权限 role 被继续用）。
-    const role: RoleName = isRoleName(record.role) ? record.role : device.role
+    // 账号模式的客户端不在设备表里（dev_* vs cli_*），回落到 auth 侧查询。
+    const client = record === undefined ? deps.authClient?.(device.deviceId) : undefined
+    if (record === undefined && client === undefined) return []
+    if (record !== undefined && record.revokedAt !== null) return []
+    if (client !== undefined && client.revokedAt !== null) return []
+    // 角色以**设备表/客户端表**为准（防止旧 Peer 里残留的高权限 role 被继续用）。
+    const knownRole = record !== undefined ? record.role : client!.role
+    const role: RoleName = isRoleName(knownRole) ? knownRole : device.role
 
     const ids: { session?: readonly string[]; workspace?: readonly string[] } = (() => {
       try { return visible() } catch { return {} }

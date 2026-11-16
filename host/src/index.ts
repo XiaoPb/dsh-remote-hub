@@ -256,3 +256,16 @@ export const inject: readonly string[] = []
 export function apply(ctx: Context, config?: ConfigShape): void {
   applyRemoteHub(ctx, config ?? DEFAULT_CONFIG)
 }
+
+export {
+  createGuardWeb,
+  isProxyableAssetPath,
+  injectRemoteBrowserMarker,
+  REMOTE_BROWSER_GLOBAL,
+  REMOTE_BROWSER_MODE,
+  REMOTE_BROWSER_MARKUP,
+  BOOT_GLOBAL,
+  INDEX_CACHE_TTL_MS,
+  IMMUTABLE_CACHE_CONTROL,
+} from './guard-web.js'
+export type { GuardWebDeps, GuardWebHandle } from './guard-web.js'

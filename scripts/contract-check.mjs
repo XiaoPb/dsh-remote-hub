@@ -576,9 +576,10 @@ report.check(
       && !methodVocabulary.test(contractText)
       && !contractText.includes('REMOTE_METHODS')
       && !contractText.includes('HUB_METHODS')
-      // 阶段 B 起邀请链路（/remote/pair*）已删除，路由表只剩：
-      // health / rpc / devices / devicesRevoke / stats / config / wsTicket = 7。
-      && Object.keys(guardRoutes).length === 7
+      // 阶段 B 起邀请链路（/remote/pair*）已删除；随后方案 A 增加浏览器面：
+      // health / rpc / devices / devicesRevoke / stats / config / wsTicket = 7
+      // + web / webAsset / webLogin / webApi = 4，共 11。
+      && Object.keys(guardRoutes).length === 11
       && Object.keys(streamBudget).length === 6
   },
   'out/contract.json must have exactly six keys and no method-name vocabulary',

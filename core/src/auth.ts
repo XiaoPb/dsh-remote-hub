@@ -612,3 +612,73 @@ export const DEFAULT_PASSWORD_POLICY: PasswordPolicy = 'strong'
  * 没有改密就拿不到租约，也就进不了 Hub。
  */
 export const FORCED_PASSWORD_CHANGE = true
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 浏览器登录页与 Cookie 会话（守卫自己的 origin；与 `AUTH_ROUTES` 的 Web 面不同）
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 守卫 origin 上的浏览器登录页本身（`GET` 返回 HTML，**不含任何令牌**）。
+ *
+ * 与 `AUTH_ROUTES` 的区别：那组路由挂在 DSH 的 `webServer` 上（同源 Cookie 面），
+ * 这一组挂在**守卫自己的监听**上，用于「还没建立信任设备的浏览器先登录」——
+ * 页面与表单提交/postMessage 都走同一个 origin，Cookie 因此是真正的同源 Cookie。
+ */
+export const WEB_AUTH_ROUTES = {
+  /** 登录页（HTML）。 */
+  login: '/remote-web/login',
+  /** 口令步骤（POST JSON `{ username, password }`）。 */
+  loginSubmit: '/remote-web/login',
+  /** 第二步（POST JSON `{ mfaToken, code }`）。 */
+  mfaSubmit: '/remote-web/mfa',
+} as const
+
+/**
+ * 登录页上**唯一**的跨窗口通道：`mfaToken` 只经 `postMessage` 定位到父窗口，
+ * 从不写进 HTML、URL、`localStorage` 或 Cookie。
+ *
+ * 页面据此判断「这条消息是不是发给我这个窗口的」，守卫据此设置
+ * `targetOrigin = location.origin`。
+ */
+export const WEB_LOGIN_CHANNEL = 'dsh-remote-hub/web-login'
+
+/**
+ * 登录页两步之间的跨窗口消息类型。
+ *
+ * - `challenge`：`mfaToken` 与过期时间，由登录页发给打开它的宿主页面；
+ * - `complete`：会话已签发（Cookie 已由 `Set-Cookie` 写入），宿主可以继续；
+ * - `error`：`code` / `message` 已在页内展示过，仅供宿主记日志。
+ */
+export type WebLoginMessageType = 'challenge' | 'complete' | 'error'
+
+/** 登录页发出的跨窗口消息（**不含**会话令牌、口令、动态码）。 */
+export type WebLoginMessage =
+  | { channel: typeof WEB_LOGIN_CHANNEL; type: 'challenge'; mfaToken: string; expiresAt: number }
+  | { channel: typeof WEB_LOGIN_CHANNEL; type: 'complete' }
+  | { channel: typeof WEB_LOGIN_CHANNEL; type: 'error'; code: string; message: string }
+
+/** 覆盖登录页各控件的 `data-testid`（与守卫的 HTML 严格一致，测试按此抓取）。 */
+export const WEB_LOGIN_TEST_IDS = {
+  username: 'web-login-username',
+  password: 'web-login-password',
+  submit: 'web-login-submit',
+  mfaCode: 'web-mfa-code',
+  mfaSubmit: 'web-mfa-submit',
+  error: 'web-login-error',
+} as const
+
+/**
+ * 守卫 origin 上登录 / 第二步的结果（守卫据此写状态码，**不含**令牌）。
+ *
+ * `code` 取自 `AUTH_ERROR_CODES`；`message` 是已脱敏的中文提示（绝不含口令、
+ * 动态码或令牌原文）。
+ */
+export type WebLoginResult =
+  | { ok: true; mfaRequired: false }
+  | { ok: true; mfaRequired: true; mfaToken: string; expiresAt: number }
+  | { ok: false; code: AuthErrorCode; message: string }
+
+/** 第二步结果：成功后 `setCookie` 是可直接写进 `Set-Cookie` 响应头的一整行。 */
+export type WebMfaResult =
+  | { ok: true; setCookie: string }
+  | { ok: false; code: AuthErrorCode; message: string }
