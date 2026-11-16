@@ -601,7 +601,6 @@ export function Segmented<T extends string>({
       'data-selected': active ? 'true' : 'false',
       ...(option.value === undefined ? {} : { 'data-value': option.value }),
       'aria-selected': active ? 'true' : 'false',
-      'aria-pressed': active ? 'true' : 'false',
       tabIndex: active ? 0 : -1,
       disabled: disabled || option.disabled === true,
       onClick: () => { onChange(option.value) },

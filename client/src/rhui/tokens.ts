@@ -329,6 +329,7 @@ ${DARK_TOKENS}
   border: 0; background: transparent; color: var(--rh-text-2); cursor: pointer; border-radius: 6px;
 }
 .rh-eye:hover { color: var(--rh-text); }
+.rh-eye:focus-visible { outline: 2px solid var(--rh-blue); outline-offset: 2px; }
 
 /* Pill / 状态标签 */
 .rh-pill {
@@ -390,13 +391,15 @@ ${DARK_TOKENS}
   font-family: inherit; font-size: var(--rh-fs-label); font-weight: 500;
   padding: 5px 12px; border-radius: var(--rh-radius-pill); cursor: pointer; white-space: nowrap;
 }
-.rh-seg-btn:hover:not(:disabled):not([aria-pressed="true"]) { background: var(--rh-accent-hover); color: var(--rh-text); }
-.rh-seg-btn[aria-pressed="true"] {
+.rh-seg-btn:hover:not(:disabled):not([aria-selected="true"]) { background: var(--rh-accent-hover); color: var(--rh-text); }
+.rh-seg-btn[aria-selected="true"] {
   background: var(--rh-accent); border-color: var(--rh-border-strong); color: var(--rh-accent-fg);
   box-shadow: var(--rh-shadow);
+  /* forced-colors 兜底：高对比度模式下 box-shadow 消失，border 显示为系统色保留可辨性。 */
+  forced-color-adjust: none;
 }
-/* 选中项悬停时保持浅色选中底（不再反转变黑）。 */
-.rh-seg-btn[aria-pressed="true"]:hover:not(:disabled) {
+/* 选中项悬停时保持浅色选中底。 */
+.rh-seg-btn[aria-selected="true"]:hover:not(:disabled) {
   background: var(--rh-accent-hover); color: var(--rh-accent-fg);
 }
 .rh-seg-btn:disabled { opacity: .4; cursor: not-allowed; }
@@ -688,7 +691,7 @@ ${DARK_TOKENS}
   .rh-btn.is-small { min-height: 34px; }
   .rh-item-actions { width: 100%; }
   .rh-cfg-control { width: 100%; justify-content: flex-start; }
-  .rh-input, .rh-select, .rh-textarea { font-size: 16px; height: 40px; }
+  .rh-input, .rh-select, .rh-textarea { height: 40px; }
   .rh-textarea { height: auto; }
   .rh-diag { grid-template-columns: minmax(0, 1fr); }
   .rh-heat { grid-template-columns: repeat(18, 1fr); }

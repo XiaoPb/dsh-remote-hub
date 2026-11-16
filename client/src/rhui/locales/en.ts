@@ -257,4 +257,10 @@ export const en: Record<LocaleKey, string> = {
   deleteDeviceTitle: 'Delete device',
   deleteDeviceConfirm: 'Delete',
   deleteDeviceCancel: 'Cancel',
+
+  // ── Sub-account inline action labels ──────────────────────────
+  subActionDisable: 'Disable',
+  subActionEnable: 'Enable',
+  subActionDelete: 'Delete',
+  subActionCeiling: 'Change ceiling',
 }

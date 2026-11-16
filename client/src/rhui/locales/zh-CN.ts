@@ -256,6 +256,12 @@ export const zhCN = {
   deleteDeviceTitle: '删除设备',
   deleteDeviceConfirm: '确认删除',
   deleteDeviceCancel: '取消',
+
+  // ── 子账号行内动作标签 ──────────────────────────────────────────
+  subActionDisable: '禁用',
+  subActionEnable: '启用',
+  subActionDelete: '删除',
+  subActionCeiling: '修改上限',
 } as const
 
 export type LocaleKey = keyof typeof zhCN

@@ -571,12 +571,12 @@ function typeIcon(type: string): string {
   return '🖥'
 }
 
-/** 一次行内动作的中文名（用于按钮 aria-label 与文案）。 */
-const SUB_ACTION_LABEL: Record<'disable' | 'enable' | 'delete' | 'ceiling', string> = {
-  disable: '禁用',
-  enable: '启用',
-  delete: '删除',
-  ceiling: '修改上限',
+/** 一次行内动作的本地化名（用于按钮 aria-label 与文案）。 */
+function subActionLabel(action: 'disable' | 'enable' | 'delete' | 'ceiling'): string {
+  if (action === 'disable') return t('subActionDisable')
+  if (action === 'enable') return t('subActionEnable')
+  if (action === 'delete') return t('subActionDelete')
+  return t('subActionCeiling')
 }
 
 /**
@@ -687,7 +687,7 @@ function renderSubAccountRow(
     ? null
     : React.createElement('div', { className: 'rh-inline-panel' },
       React.createElement('div', { className: 'rh-cfg-title' },
-        t('subVerifyTitle', { action: SUB_ACTION_LABEL[pending.action], username: account.username })),
+        t('subVerifyTitle', { action: subActionLabel(pending.action), username: account.username })),
       pending.action === 'ceiling'
         ? React.createElement(Segmented, {
           'data-testid': 'sub-account-new-ceiling',
