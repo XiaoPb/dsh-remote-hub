@@ -1116,6 +1116,37 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
       } catch {
         return
       }
+      // ① 浏览器页面的 mux 升级（方案 A）：官方客户端 `connection.openWebSocket`
+  //    打的是 `/api/remote.mux`（与 `guard-mux.ts` 的 MUX_PATH 同值；本文件
+  //    刻意不 import 它，见 D-3「守卫不起 WebSocket 实现」）。
+  const BROWSER_MUX_PATH = '/api/remote.mux'
+      //    打的是 `/api/remote.mux`。浏览器拿不到自定义签名头，所以这里用
+      //    HttpOnly Cookie 认证，认证通过后复用同一条 mux 管线。
+      if (pathname === BROWSER_MUX_PATH && deps.webAuth !== undefined) {
+        void (async () => {
+          try {
+            const token = deps.webAuth!.readCookie(request)
+            const session = token === undefined ? null : await deps.webAuth!.readSession(token)
+            if (session === null || session === undefined) {
+              socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+              socket.destroy()
+              return
+            }
+            const shape = session as { record?: { accountId?: string }, view?: { role?: string } }
+            const accountId = shape.record?.accountId ?? 'acc_admin'
+            const role = deps.webAuth!.roleOf?.(accountId) ?? 'read-only'
+            const admitted = deps.ws!.admit(request, { deviceId: `web:${accountId}`, role })
+            if ('rejection' in admitted) {
+              socket.destroy()
+              return
+            }
+            deps.ws!.mux.accept(request, socket, head, admitted.peer, `web:${accountId}`)
+          } catch {
+            socket.destroy()
+          }
+        })()
+        return
+      }
       if (pathname !== route.path) return
       route.handler(request, socket, head)
     })
