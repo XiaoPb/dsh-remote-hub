@@ -471,11 +471,16 @@ report.check(
   () => {
     const qrSrc = readText(`${PATHS.clientSrc}/panel/qr.ts`)
     // 邀请二维码已随 P4 阶段 B 删除；编码器保留给设置页 TOTP 绑定二维码。
-    return qrSrc.includes('QR_MAX_BYTES = 106')
+    //
+    // 0.5.0 起编码交给 `qrcode-generator`（零依赖，随 client bundle 打包）。
+    // 真正的约束不是「手写」，而是**运行时不得依赖网络**：二维码必须在
+    // 断网的机器上也能渲染出来。因此断言的是「本地库 + 打包进 bundle」，
+    // 并显式排除远程加载。
+    return qrSrc.includes("from 'qrcode-generator'")
       && qrSrc.includes('export function encodeQr')
-      && qrSrc.includes('rsRemainder')
+      && !/https?:\/\//u.test(qrSrc)
   },
-  'the settings page must ship its own QR encoder for TOTP enrollment (no network dependency)',
+  'the settings page must render its TOTP QR locally (bundled encoder, no network)',
 )
 
 // 邀请链路删除后不再有相机扫码：`QrScanner` / `qr-decode` 必须保持删除状态。

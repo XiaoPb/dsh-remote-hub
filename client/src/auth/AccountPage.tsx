@@ -1194,7 +1194,6 @@ export function renderAccountPage(
               React.createElement(QrCode, {
                 'data-testid': 'totp-qr',
                 text: totp.otpauth,
-                size: 120,
                 label: '两步验证绑定二维码',
                 tooLong: 'otpauth 链接过长，无法生成二维码；请复制下方链接手动导入。',
               })),
