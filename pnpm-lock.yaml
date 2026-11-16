@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      qrcode-generator:
+        specifier: ^2.0.4
+        version: 2.0.4
       react-dom:
         specifier: ^18.3.1
         version: 18.3.1(react@18.3.1)
@@ -679,6 +682,9 @@ packages:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
 
+  qrcode-generator@2.0.4:
+    resolution: {integrity: sha512-mZSiP6RnbHl4xL2Ap5HfkjLnmxfKcPWpWe/c+5XxCuetEenqmNFf1FH/ftXPCtFG5/TDobjsjz6sSNL0Sr8Z9g==}
+
   quansync@1.0.0:
     resolution: {integrity: sha512-5xZacEEufv3HSTPQuchrvV6soaiACMFnq1H8wkVioctoH3TRha9Sz66lOxRwPK/qZj7HPiSveih9yAyh98gvqA==}
 
@@ -1250,6 +1256,8 @@ snapshots:
   on-headers@1.1.0: {}
 
   picomatch@4.0.7: {}
+
+  qrcode-generator@2.0.4: {}
 
   quansync@1.0.0: {}
 
