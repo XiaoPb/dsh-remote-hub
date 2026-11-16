@@ -115,7 +115,8 @@ export function registerDevicePolicy(ctx: Context, deps: DevicePolicyDeps): Acce
   }
 
   const now = deps.now ?? (() => new Date())
-  const visible = deps.visibleResourceIds ?? (() => ({}))
+  const visible: () => { session?: readonly string[], workspace?: readonly string[] }
+    = deps.visibleResourceIds ?? (() => ({}))
 
   const bindingsFor = (principal: unknown): readonly RemoteAccessBinding[] => {
     const device = readPrincipal(principal)
@@ -125,13 +126,36 @@ export function registerDevicePolicy(ctx: Context, deps: DevicePolicyDeps): Acce
     // 它没有客户端密钥，角色由守卫在**认证后**给出（见 guard 的 webAuth.roleOf），
     // 所以这里直接采信 principal 上的 role —— 它绝不来自请求方自述。
     if (device.deviceId.startsWith('web:')) {
+      // 浏览器身份没有客户端密钥，角色由守卫在认证后给出，这里直接采信。
+      //
+      // **必须按资源种类分别绑定**（与下面设备/客户端同一条规则，见文件头的
+      // D-11）：官方 decide() 拿到的 resources 是 Gateway 从方法参数解析出来的
+      // ——`sessionId` → session、`workspaceId` → workspace、没有身份参数 →
+      // global。只在 global 上授权，会让 `session/create` 这类调用被
+      // no-allow 拒绝（实测：页面报「initial Session restoration failed:
+      // session/create: access denied」）。
       const actions = allActionsFor(device.role) as readonly RemoteAccessAction[]
-      return [
+      const bindings: RemoteAccessBinding[] = [
         {
           role: { name: `remote-hub:${device.role}:global`, resource: 'global', actions },
           resource: { kind: 'global' },
         } as RemoteAccessBinding,
       ]
+      for (const id of visible().session ?? []) {
+        if (typeof id !== 'string' || id === '') continue
+        bindings.push({
+          role: { name: `remote-hub:${device.role}:session`, resource: 'session', actions },
+          resource: { kind: 'session', id },
+        } as unknown as RemoteAccessBinding)
+      }
+      for (const id of visible().workspace ?? []) {
+        if (typeof id !== 'string' || id === '') continue
+        bindings.push({
+          role: { name: `remote-hub:${device.role}:workspace`, resource: 'workspace', actions },
+          resource: { kind: 'workspace', id },
+        } as unknown as RemoteAccessBinding)
+      }
+      return bindings
     }
     const record = deps.devices.get(device.deviceId)
     // 账号模式的客户端不在设备表里（dev_* vs cli_*），回落到 auth 侧查询。
