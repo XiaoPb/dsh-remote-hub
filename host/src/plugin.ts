@@ -21,13 +21,13 @@
  * @module dsh-remote-hub/host/plugin
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { rm } from 'node:fs/promises'
+import { readFile, rm } from 'node:fs/promises'
 import http from 'node:http'
 import net from 'node:net'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import type { IncomingMessage } from 'node:http'
 
-import { GUARD_ROUTES, HUB_PROTOCOL_HEADER, PROTOCOL_VERSION, type RoleName } from '@core/index.js'
+import { GUARD_ROUTES, HUB_PROTOCOL_HEADER, PROTOCOL_VERSION, type AuthHttpSurface, type HubAuthPort, type RoleName } from '@core/index.js'
 
 import { createApprovalBridge, deviceTargetsResolver, type ApprovalAuditRow } from './approval-bridge.js'
 import { Config, DEFAULT_CONFIG, validateConfig, type Config as ConfigType } from './config.js'
@@ -39,8 +39,18 @@ import { createGuardMux } from './guard-mux.js'
 import { applyLocalPluginManager } from './local-plugin-manager/index.js'
 import { createSensitiveApprovalGate } from './sensitive-approval.js'
 import { createMetricsCollector } from './metrics.js'
-import { createPairingService } from './pairing.js'
 import { createVisibleResourceTracker, registerDevicePolicy } from './policy.js'
+import { createGuardWeb } from './guard-web.js'
+import { createWebSession } from './auth/web-session.js'
+import type { AuthService } from './auth/service.js'
+
+/**
+ * 浏览器会话 Cookie 的寿命。
+ *
+ * 与客户端租约同量级（6 小时）：足够一个工作日，又不至于长期驻留。
+ * 退出登录、撤销客户端都会让会话立刻失效，不依赖这个上限。
+ */
+const WEB_SESSION_TTL_MS = 6 * 60 * 60 * 1_000
 import { createRuntimeConfigStore } from './runtime-config.js'
 import { registerRemoteServices } from './services/index.js'
 import { createStreamEngine, gatewayStreamOpener } from './streams.js'
@@ -387,11 +397,31 @@ export function applyRemoteHub(ctx: Context, config: ConfigType = DEFAULT_CONFIG
   })
 
   // 服务就绪时再装配；宿主永不提供这些服务时回调不执行 → 插件安静地不装。
+  const deps: string[] = ['connection', 'typertGateway', 'remoteAccess']
+  // 账号认证开启时，再加一等公民依赖：认证插件 `provide('remoteHubAuth')`。
+  // 认证插件缺席/未就绪 → 回调不执行 → 守卫不监听（fail-closed，零暴露）。
+  if (config.accountAuth.enabled) deps.push('remoteHubAuth', 'remoteHubAuthHttp')
   ;(ctx as unknown as {
     inject(deps: readonly string[], callback: (scoped: Context) => void): { dispose?: () => unknown } | undefined
-  }).inject(['connection', 'typertGateway', 'remoteAccess'], scoped => {
-    writeStatus(config, { phase: 'services-ready' })
-    assembleRemoteHub(scoped, config)
+  }).inject(deps, scoped => {
+    writeStatus(config, { phase: 'services-ready', accountAuth: config.accountAuth.enabled })
+    const read = (name: string): unknown => {
+      try {
+        return (ctx as unknown as {
+          reflect?: { get?: (service: string, strict?: boolean) => unknown }
+        }).reflect?.get?.(name, false)
+      } catch {
+        return undefined
+      }
+    }
+    const auth = config.accountAuth.enabled ? read('remoteHubAuth') as HubAuthPort | undefined : undefined
+    const authHttp = config.accountAuth.enabled ? read('remoteHubAuthHttp') as AuthHttpSurface | undefined : undefined
+    if (config.accountAuth.enabled && (auth === undefined || authHttp === undefined)) {
+      // 声明了依赖却拿不到实现：宁可不开门。
+      writeStatus(config, { phase: 'failed', stage: 'auth-service', error: 'remoteHubAuth missing' })
+      return
+    }
+    assembleRemoteHub(scoped, config, auth, authHttp)
   })
 
   // ── 本地插件管理直连通道：**独立的注入 fiber** ────────────────────────────────
@@ -514,6 +544,99 @@ export function buildGuardWs(
  * @param ctx - Host Context。
  * @returns `http://127.0.0.1:<port>` 或 undefined。
  */
+/**
+ * 造一个进程内读官方 index 的函数。
+ *
+ * 官方 webServer.renderIndex(html, peer) 负责把各插件注入的行渲染进外壳；
+ * 外壳本身来自 web 产物的 index.html。插件与它同进程，直接读文件即可，
+ * 不必发一次带 ?token= 的 HTTP（那条路会逼我们保管自启动令牌）。
+ *
+ * @param ctx - Host Context。
+ * @returns 读取函数；拿不到 webServer 时返回 undefined。
+ */
+/**
+ * 造一个「进程内读官方 index」的函数。
+ *
+ * 官方 Web 的 index 对**未带自启动令牌**的请求回 401，但官方自己的
+ * liveshare 证明了正确做法：`webServer.readResource(request, peer)` ——
+ * 带上**读取者的 Peer 身份**，index 就会为该身份渲染开场访问快照，
+ * 完全不需要令牌（`webServer` 内部按 peer 放行）。
+ *
+ * 参考：`@deepseek-ai/dsh-experimental-liveshare` 的 viewer-assets
+ * （`readViewerAsset` 用 `http://viewer.invalid/` 作占位 origin，只取 path）。
+ *
+ * @param ctx - Host Context。
+ * @param peer - 读取者的 Peer（浏览器会话对应的 remote-device peer）。
+ * @returns 读取函数；拿不到 webServer 时返回 undefined。
+ */
+function buildHostIndexReader(
+  ctx: Context,
+  peer: unknown,
+): (() => Promise<string | undefined>) | undefined {
+  const webServer = (ctx as unknown as {
+    reflect?: { get?: (name: string, strict?: boolean) => unknown }
+  }).reflect?.get?.('webServer', false) as
+    | {
+      renderIndex?: (html: string, reader?: unknown) => string
+      readResource?: (request: Request, reader?: unknown) => Promise<Response>
+    }
+    | undefined
+  if (webServer === undefined || typeof webServer.readResource !== 'function') return undefined
+  const readResource = webServer.readResource.bind(webServer)
+  const renderIndex = typeof webServer.renderIndex === 'function'
+    ? webServer.renderIndex.bind(webServer)
+    : undefined
+  return async () => {
+    try {
+      // 占位 origin：readResource 只取 pathname，Host 由 webServer 自己判定。
+      const response = await readResource(new Request(new URL('/', 'http://viewer.invalid/')), peer)
+      console.warn(`[dsh-remote-hub] index read: status=${response.status}`)
+      if (!response.ok) return undefined
+      const html = await response.text()
+      console.warn(`[dsh-remote-hub] index raw length=${html.length}`)
+      if (html.trim() === '') return undefined
+      try {
+        return renderIndex === undefined ? html : renderIndex(html, peer)
+      } catch {
+        return html
+      }
+    } catch {
+      return undefined
+    }
+  }
+}
+/**
+ * 造一个进程内读页面资源的函数（官方 readResource + peer）。
+ *
+ * 官方 `webServer.readResource(request, peer)` 在**给了 peer 身份**时不需要
+ * 自启动令牌（liveshare 的 viewer-assets 用的正是这条路）。
+ *
+ * @param ctx - Host Context。
+ * @param peer - 读取者身份的 Peer。
+ * @returns 读取函数；拿不到 webServer 时 undefined。
+ */
+function buildHostAssetReader(ctx: Context, peer: unknown) {
+  const webServer = (ctx as unknown as {
+    reflect?: { get?: (name: string, strict?: boolean) => unknown }
+  }).reflect?.get?.('webServer', false) as
+    | { readResource?: (request: Request, reader?: unknown) => Promise<Response> }
+    | undefined
+  if (webServer === undefined || typeof webServer.readResource !== 'function') return undefined
+  const readResource = webServer.readResource.bind(webServer)
+  return async (pathWithQuery: string) => {
+    try {
+      const target = new URL(pathWithQuery, 'http://viewer.invalid/')
+      const response = await readResource(new Request(target), peer)
+      if (!response.ok) return undefined
+      return {
+        body: new Uint8Array(await response.arrayBuffer()),
+        contentType: response.headers.get('content-type') ?? 'application/octet-stream',
+      }
+    } catch {
+      return undefined
+    }
+  }
+}
 function resolveHostOrigin(ctx: Context): string | undefined {
   const webServer = (ctx as unknown as {
     reflect?: { get?: (name: string, strict?: boolean) => unknown }
@@ -563,7 +686,12 @@ function withHostOrigin(request: IncomingMessage, hostOrigin: string): IncomingM
 export type GuardWsInjection = NonNullable<GuardDeps['ws']>
 
 /** `ctx.inject` 回调里的真实装配（三个服务此时已就绪）。 */
-function assembleRemoteHub(ctx: Context, config: ConfigType): void {
+function assembleRemoteHub(
+  ctx: Context,
+  config: ConfigType,
+  auth?: HubAuthPort,
+  authHttp?: AuthHttpSurface,
+): void {
   ctx.effect(async () => {
     const disposers: (() => void | Promise<void>)[] = []
     const push = (dispose: () => void | Promise<void>): void => { disposers.push(dispose) }
@@ -590,7 +718,29 @@ function assembleRemoteHub(ctx: Context, config: ConfigType): void {
     }
 
     try {
-      // 0. 端口解析：首选配置端口，被占就顺延 +1 直到可用（用户可再改回固定端口）。
+      // 0. 运行时配置覆盖（页面可改）：
+      //    热项在下方 onPatched 里即时生效；冷项（端口/网络）必须在这里合并，
+      //    因为它们决定 bind 的地址与端口。
+      at('cold-config')
+      const runtimeConfig = createRuntimeConfigStore({
+        path: expandHome(config.deviceTablePath.replace(/devices\.json$/u, 'overrides.json')),
+        current: () => ({
+          singleController: config.singleController,
+          bridgeApprovals: config.bridgeApprovals,
+          defaultRole: config.defaultRole,
+          maxPairAttempts: config.maxPairAttempts,
+          network: config.network,
+          guardPort: config.guardPort,
+          pairQrTtlMs: config.pairQrTtlMs,
+          pairCodeTtlMs: config.pairCodeTtlMs,
+          tunnelKind: config.tunnel.kind,
+        }),
+      })
+      const cold = await runtimeConfig.overrides()
+      if (typeof cold.guardPort === 'number') config.guardPort = cold.guardPort
+      if (cold.network === 'lan' || cold.network === 'loopback') config.network = cold.network
+
+      // 0.1 端口解析：首选配置端口，被占就顺延 +1 直到可用（用户可再改回固定端口）。
       //    隧道与配对链接都用 guard.origin（**实际**端口），所以漂移不会指错。
       at('port-check')
       const requestedPort = config.guardPort
@@ -608,24 +758,6 @@ function assembleRemoteHub(ctx: Context, config: ConfigType): void {
       // 2. tokens（吊销/角色变更通知 → dispatcher 丢弃 Peer）
       const tokens = createTokenService({ devices })
 
-      // 3. pairing（两条路径共享签发出口；成功兑换写一行审计）
-      const pairing = createPairingService({
-        config: {
-          pairQrTtlMs: config.pairQrTtlMs,
-          pairCodeTtlMs: config.pairCodeTtlMs,
-          maxPairAttempts: config.maxPairAttempts,
-          defaultRole: config.defaultRole,
-        },
-        tokens,
-        onAudit: row => {
-          audit('pair-redeemed', {
-            deviceId: row.deviceId,
-            role: row.role,
-            path: row.path,
-            at: row.at,
-          })
-        },
-      })
 
       // 4. policy —— **必须早于第一个 createPeer**（D-13）
       at('policy:before')
@@ -646,6 +778,15 @@ function assembleRemoteHub(ctx: Context, config: ConfigType): void {
       const policy = registerDevicePolicy(ctx, {
         devices,
         visibleResourceIds: () => visibleResources.resourceIds(),
+        // 账号模式的受信客户端存在 auth.db 的 clients 表里（cli_*），不在设备表
+        // （dev_*）中。不给这条回落，`bindings()` 对账号模式恒为空数组，
+        // 官方 decide() 就会把每个 Remote 调用都判成 no-allow。
+        // `listTrustedClients()` 已过滤已撤销的客户端，因此 revokedAt 恒为 null；
+        // 撤销后该 id 不再出现在列表里，bindings 自然变空 → 全量拒（立即失效）。
+        authClient: (clientId) => {
+          const client = auth?.listTrustedClients?.().find(item => item.clientId === clientId)
+          return client === undefined ? undefined : { role: client.activeRole, revokedAt: null }
+        },
         onDenied: row => { audit('access-denied', row) },
       })
       at('policy:registered')
@@ -720,23 +861,10 @@ function assembleRemoteHub(ctx: Context, config: ConfigType): void {
         audit('device-connections-dropped', { deviceId, reason, ws: closedWs })
       }
 
-      // 7.5 运行指标 + 运行时配置 + 守卫信息（管理面与 guard 共用；
+      // 7.5 运行指标 + 守卫信息（管理面与 guard 共用；
       //     必须先于 registerRemoteServices：管理面服务要把它们注册进去）。
+      //     运行时配置在装配最前面创建（端口/网络要在 bind 之前合并冷覆盖）。
       const metrics = createMetricsCollector()
-      const runtimeConfig = createRuntimeConfigStore({
-        path: expandHome(config.deviceTablePath.replace(/devices\.json$/u, 'overrides.json')),
-        current: () => ({
-          singleController: config.singleController,
-          bridgeApprovals: config.bridgeApprovals,
-          defaultRole: config.defaultRole,
-          maxPairAttempts: config.maxPairAttempts,
-          network: config.network,
-          guardPort: config.guardPort,
-          pairQrTtlMs: config.pairQrTtlMs,
-          pairCodeTtlMs: config.pairCodeTtlMs,
-          tunnelKind: config.tunnel.kind,
-        }),
-      })
       const offPatched = runtimeConfig.onPatched(overrides => {
         if (Object.hasOwn(overrides, 'singleController')) {
           config.singleController = overrides.singleController as boolean
@@ -758,7 +886,6 @@ function assembleRemoteHub(ctx: Context, config: ConfigType): void {
         devices,
         tokens,
         policy,
-        pairing,
         // 吊销：令牌即时失效 + 既有连接（HTTP Peer / WS / 长轮询流）一并丢弃。
         onRevoked: deviceId => { dropDevice(deviceId, 'revoked') },
         metrics,
@@ -782,10 +909,90 @@ function assembleRemoteHub(ctx: Context, config: ConfigType): void {
       //   → guard-mux 把 mux 帧翻译成 typertGateway.wireStream.open 调用。
       // 两个官方能力缺失时**不挂载** WS（保持纯 HTTP），不让页面拿到半残能力。
       const ws = buildGuardWs(ctx, audit)
+
+      // 方案 A：浏览器直连。只有账号模式下才托管——
+      //   匿名/配对模式没有「账号」这个概念，登录页无从谈起。
+      // 官方静态资源从 Host 自己的 Web origin 取（resolveHostOrigin 已经能拿到），
+      // 业务数据不经过 `:3080` 的 HTTP，而是在守卫里用 Peer 派发。
+      const hostOriginForWeb = resolveHostOrigin(ctx)
+      // 浏览器登录面：与 API 客户端共用同一个认证服务，只是把凭据换成 HttpOnly Cookie。
+      // `AuthService extends HubAuthPort`，运行时是同一个对象。
+      // 浏览器会话的角色：管理员 full，其余退到最小权限（fail-closed）。
+      // 浏览器身份的映射角色。
+      //
+      // 原来写死 `accountId === 'acc_admin'`，导致**任何非内置账号**（子账号、
+      // 自建管理员）都退化成 `read-only`：`full` 专属的能力（`directoryPicker/list`
+      // 等）全部被 policy 以 `no-allow` 拒绝。改为按账号自身的管理员标记判定，
+      // 与 `AuthSessionView.role` 用同一依据。
+      const browserAuthRoleOf = (accountId: string): RoleName => {
+        const authWithAdmin = auth as { isAdminAccount?: (id: string) => boolean } | undefined
+        const admin = authWithAdmin?.isAdminAccount?.(accountId) ?? accountId === 'acc_admin'
+        return admin ? 'full' : 'read-only'
+      }
+      const webSession = auth === undefined ? undefined : createWebSession({
+        service: auth as unknown as AuthService,
+        // 与客户端租约同寿命：退出登录 / 撤销客户端时两边一起失效。
+        sessionTtlMs: WEB_SESSION_TTL_MS,
+        // Secure 由守卫 origin 的协议决定；TLS 通常由外层反向代理终止，
+        // 因此这里给出的是「直连守卫」的判定，代理场景由 x-forwarded-proto 补。
+        guardOrigin: `http://${config.guardHost}:${config.guardPort}`,
+      })
+      // 进程内取官方 index：插件就跑在 Host 进程里，没必要为了外壳去发一次带令牌的
+      // HTTP 请求。`webServer.renderIndex(html, peer)` 会把插件注入行渲染进去。
+      // 每个浏览器会话有自己的远程身份，index 必须按该身份的访问快照渲染。
+      // 这里延迟到调用时再造 peer：守卫传进来的是当前会话的 accountId。
+      const readHostIndex = (accountId: string, role: RoleName): Promise<string | undefined> => {
+        const peer = dispatcher.peerFor(`web:${accountId === '' ? 'anonymous' : accountId}`, role)
+        const reader = buildHostIndexReader(ctx, peer)
+        return reader === undefined ? Promise.resolve(undefined) : reader()
+      }
+      // 静态资源同样走进程内读取（官方 readResource + peer），
+      // 这样静态面一个字节都不必经过 `:3080` 的 HTTP，也就不需要自启动令牌。
+      // 角色与 index 一致：都由守卫按会话算好后传进来，这里不硬编码。
+      // 同一 deviceId 用不同 role 反复 peerFor 会把已建好的 peer 换成低权限版本，
+      // 实测表现为「目录读取被拒」（no-allow）。
+      const readHostAsset = (pathWithQuery: string, accountId: string, role: RoleName) => {
+        const identity = accountId === '' ? 'anonymous' : accountId
+        const reader = buildHostAssetReader(ctx, dispatcher.peerFor(`web:${identity}`, role))
+        return reader === undefined ? undefined : reader(pathWithQuery)
+      }
+      const browserWeb = auth === undefined ? undefined : createGuardWeb({
+        ...(hostOriginForWeb === undefined ? {} : { hostOrigin: hostOriginForWeb }),
+        // index 按读取者身份渲染（官方 liveshare 同款：readResource(request, peer)）。
+        ...(readHostIndex === undefined ? {} : { readIndex: readHostIndex }),
+        ...(readHostAsset === undefined ? {} : { readAsset: readHostAsset }),
+        // 谁在看：从 HttpOnly Cookie 解析出当前会话的账号。
+        readerOf: async (request: IncomingMessage) => {
+          const token = webSession?.readCookie(request)
+          if (token === undefined) return undefined
+          const session = await (auth as unknown as AuthService).readSession(token)
+          const accountId = session?.record?.accountId
+          if (accountId === undefined) return undefined
+          // 角色取自会话本身：`AuthSessionView.role` 是 `admin`（映射 full）或
+          // 该账号的上限。不用客户端列表——`TrustedClientView` 不含 accountId，
+          // 按它查会永远匹配不到，退化成 read-only（实测目录读取被拒）。
+          const sessionRole = session?.view?.role
+          const role: RoleName = sessionRole === 'admin' ? 'full'
+            : sessionRole === 'full' || sessionRole === 'control' || sessionRole === 'read-only'
+              ? sessionRole
+              : 'read-only'
+          return { accountId, role }
+        },
+        audit,
+      })
+      const browserAuth = auth === undefined ? undefined : {
+        basePath: '/remote-web',
+        page: () => webSession!.renderLoginPage(),
+        login: (username: string, password: string) => webSession!.handleLogin(username, password),
+        mfa: (mfaToken: string, code: string) => webSession!.handleMfa(mfaToken, code),
+        readCookie: (request: IncomingMessage) => webSession!.readCookie(request),
+        readSession: (token: string) => (auth as unknown as AuthService).readSession(token),
+        // 浏览器不登记自己的客户端密钥，角色取账号身份：管理员 full，其余按上限。
+        roleOf: (accountId: string) => browserAuthRoleOf(accountId),
+      }
       guard = await startGuard({
         config,
         tokens,
-        pairing,
         dispatcher,
         devices,
         metrics,
@@ -794,9 +1001,21 @@ function assembleRemoteHub(ctx: Context, config: ConfigType): void {
         // 单控让位：只断连接（丢 Peer、断流、关 WS），**不**吊销令牌（设计 v0.3 §7）。
         onSessionDisplaced: deviceId => { dropDevice(deviceId, 'displaced') },
         ...(ws === undefined ? {} : { ws }),
+        ...(auth === undefined ? {} : { auth }),
+        ...(authHttp === undefined ? {} : { authHttp }),
+        // 方案 A：浏览器入口。只有账号模式才托管（匿名模式没有登录页可挂）。
+        ...(browserWeb === undefined ? {} : { web: browserWeb }),
+        ...(browserAuth === undefined ? {} : { webAuth: browserAuth }),
       })
       at('guard:up')
       push(() => guard?.dispose())
+
+      // 账号认证模式：客户端被撤销 / 角色变化时，丢弃它**当前**的全部连接。
+      // 这是「撤销立即生效」的唯一出口——已建立的 socket 不会自己失效。
+      if (auth !== undefined) {
+        push(auth.onClientRevoked(clientId => { dropDevice(clientId, 'auth-client-revoked') }))
+        push(auth.onClientRoleChanged(clientId => { dropDevice(clientId, 'auth-role-changed') }))
+      }
 
       // 角色变化：既有 WS 里的 Peer 是握手时固定的 principal，必须断开重连，
       // 否则「降权」只对新请求生效（设计 v0.3 §7）。

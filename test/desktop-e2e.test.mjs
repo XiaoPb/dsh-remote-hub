@@ -43,19 +43,9 @@ describe('桌面端完整请求链（预检 → 真实请求 → JSON）', () =>
     const config = { ...mod.DEFAULT_CONFIG, guardPort: 0, deviceTablePath: join(dir, 'devices.json') }
     const devices = await mod.createDeviceStore(config.deviceTablePath)
     const tokens = mod.createTokenService({ devices })
-    const pairing = mod.createPairingService({
-      config: {
-        pairQrTtlMs: config.pairQrTtlMs,
-        pairCodeTtlMs: config.pairCodeTtlMs,
-        maxPairAttempts: config.maxPairAttempts,
-        defaultRole: config.defaultRole,
-      },
-      tokens,
-    })
     guard = await mod.startGuard({
       config,
       tokens,
-      pairing,
       dispatcher: dispatcherStub,
       devices,
       metrics: mod.createMetricsCollector(),

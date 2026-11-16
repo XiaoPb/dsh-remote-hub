@@ -39,6 +39,7 @@ run('tsc client', process.execPath, [tsc, '-p', 'tsconfig.build.client.json'])
 run('copy client css', process.execPath, ['scripts/copy-client-css.mjs'])
 run('tsc types', process.execPath, [tsc, '-p', 'tsconfig.types.json'])
 run('tsdown host', process.execPath, [tsdown, '--filter', 'dsh-remote-hub/lib'])
+run('tsdown auth', process.execPath, [tsdown, '--filter', 'dsh-remote-hub/auth'])
 run('tsdown carrier-boot', process.execPath, [tsdown, '--filter', 'dsh-remote-hub/carrier-boot'])
 if (!existsSync(`${root}lib/carrier-boot.js`)) {
   process.stderr.write('FAILED: lib/carrier-boot.js missing after carrier build\n')

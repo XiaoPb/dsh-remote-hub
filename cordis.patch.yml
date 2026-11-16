@@ -1,24 +1,42 @@
 # @xiaopb/dsh-remote-hub bundle patch.
 #
-# 往 web profile 的 roster 里插入一行，让本插件在宿主进程加载：
-#   - 导出 "."     → host 半边（配对 / 设备令牌 / 角色策略 / 回环守卫 / 隧道监督）
-#   - 导出 "./client" → browser 半边（dsh.client 声明在 package.json，
-#                      产物 lib/client.js 由 __ModuleLoader__ 作为 closure factory 载入）
+# 往 web profile 的 roster 里插入**两行**，同一个包里两个独立的 Cordis 插件：
+#   - `@xiaopb/dsh-remote-hub`       → Hub host 半边（配对 / 令牌 / 角色策略 / 回环守卫 / 隧道）
+#   - `@xiaopb/dsh-remote-hub/auth`  → 账号认证 host 半边（口令 + TOTP + 可信客户端 + 租约）
 #
-# 云端路径 UI（云端目录浏览 / 新建目录 / 选云端文件加入消息）自 0.3.0 起**内置**，
-# 不再是独立的 @xiaopb/dsh-remote-paths 包，也不需要第二条 roster：
-# DSH 的 `dsh.client` 声明按**包**生效（resolveMeta 只认包名根 specifier，
-# 且固定读 exports["./client"]），所以子路径 roster 拿不到自己的 client bundle。
-# 内置 UI 统一在 lib/client.js 里，由 client/src/index.ts → applyCloudPaths() 装配，
-# 服务（slots / commandUi / sessions / conversation）就绪后才注册；本机模式下不注册任何槽位。
+# 两行是**独立插件**：认证行 `provide('remoteHubAuth')`，Hub 行在启用账号认证时
+# `inject` 它并按「租约 + 客户端签名」校验请求。认证行缺失/被禁用时 Hub 保持守卫
+# 关闭（fail-closed），不会退化成无认证开放。
+#
+# 浏览器半边（`dsh.client`）按**包**生效：`lib/client.js` 同时承载 Hub 面板与
+# 账号/信任管理界面，由 `__ModuleLoader__` 作为 closure factory 载入。
 #
 # 安装（本地联调）：
 #   dsh plugin --profile web add link:E:/Code/DSH/plugins/dsh-remote-hub
 #
-# 注意：守卫默认只绑 127.0.0.1:8443 且对未配对设备 fail-closed；
-# 在把隧道接上去之前，本插件不会扩大任何网络暴露面。
+# 注意：守卫默认只绑 127.0.0.1:8443；认证面挂在 DSH 自己的 webServer 上
+# （`/remote-auth/*`），首个管理员只能在回环创建。
 #
-# roster id 固定为 `remote-hub`，**不随版本改变**（改名会让旧配置的入口悬空）。
+# roster id 固定，**不随版本改变**（改名会让旧配置的入口悬空）。
 - insert:
     - id: remote-hub
       name: '@xiaopb/dsh-remote-hub'
+      # `accountAuth.enabled: true`（默认）时 Hub **只**接受「租约 + 客户端签名」。
+      # 首次启动会在「尚无账号」时创建默认账号 admin，口令**安装时随机生成**
+      # 并明文写入 `<DSH_HOME>/remote-hub/initial-password`（0600）；
+      # **首次登录必须改密**，否则拿不到 2FA 绑定、客户端信任与 Hub 租约。
+      config:
+        accountAuth:
+          enabled: true
+
+- insert:
+    - id: remote-hub-auth
+      name: '@xiaopb/dsh-remote-hub/auth'
+      # 默认账号 admin 只在「尚无账号」时创建一次。
+      # password 留空 = 安装时随机生成，明文写入
+      # `~/.dsh/remote-hub/initial-password`（0600），强制改密成功后删除。
+      # 想让多台机器用同一个初始口令时才填固定值（同样会强制首次改密）。
+      config:
+        defaultAccount:
+          username: admin
+          password: ''

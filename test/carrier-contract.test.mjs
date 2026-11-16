@@ -295,6 +295,23 @@ describe('模式解析（同步优先 + 磁盘纠正）', () => {
     assert.equal(globalObject.__DSH_TRANSPORT__.streamBaseUrl, 'http://192.168.0.17:8443')
   })
 
+  it('账号模式（无 token）也能在启动时立即接管', async () => {
+    // 账号目标没有长期 token：只有 origin + account。解析时若把 account 丢了，
+    // carrier 会认为「cloud 但没凭据」而不安装传输层（T14 实机就是这个现象）。
+    const globalObject = makeGlobal()
+    const accountMode = {
+      mode: 'cloud', origin: 'http://127.0.0.1:8443', account: true, targetId: 'tg-1',
+    }
+    const result = await carrier.installCarrierResolvingMode({
+      readMode: () => ({ mode: 'local' }),
+      fetchModeSync: () => accountMode,
+      fetchMode: async () => accountMode,
+      globalObject,
+    })
+    assert.equal(result.active, true, '账号模式必须在启动时接管')
+    assert.equal(globalObject.__DSH_TRANSPORT__.streamBaseUrl, 'http://127.0.0.1:8443')
+  })
+
   it('只有异步来源时，本轮的注入在同步段完成（可能为 local），由异步段纠正', async () => {
     // 这是页面上真实发生的时序：connection 早于异步查询完成。
     // 正确行为是「本轮不接管，但把结果写回缓存并重载，让下一轮同步生效」。

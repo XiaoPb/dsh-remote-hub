@@ -58,16 +58,13 @@ export const PAIR_ISSUE_HEADER = 'x-pair-issue-token'
  *   与访问判定（红线 R9）。
  * - 两条**设备管理**路由（`devices` / `devicesRevoke`）只作用于本机页面：与
  *   签发端同样施加「回环 + `x-pair-issue-token`」双条件，不对外暴露。
+ * - 末尾四个是**浏览器入口**的路由族：`web`（index）与 `webAsset`（静态反代前缀）
+ *   是公开的静态面，`webLogin`（认证面前缀）与 `webApi`（页面 RPC 前缀）只声明
+ *   归属——鉴权仍由 `guard.ts` 与认证插件完成，**不因它们出现在表里而放宽**。
  */
 export const GUARD_ROUTES = {
   /** 无鉴权的最小事实：`{ ok, protocolVersion }`。不回显设备数，不暴露其它配置。 */
   health: '/remote/health',
-  /** 签发 QR 票据（32 字节随机，TTL 120s，单次）。**双条件回环门控**。 */
-  pairTicket: '/remote/pair/ticket',
-  /** 签发 8 位 Crockford 短码（40 bit，TTL 600s，5 次预算即烧）。**双条件回环门控**。 */
-  pairCode: '/remote/pair/code',
-  /** 兑换票据/短码。**故意不作回环门控**（远程设备在隧道外）。 */
-  pair: '/remote/pair',
   /** 一元入口：Bearer 令牌 + 来源围栏 + 设备 → Peer → official `/api` 派发。 */
   rpc: '/remote/rpc',
   /** 设备管理（只读）：本机页面列出已配对设备。**双条件回环门控**。 */
@@ -78,6 +75,45 @@ export const GUARD_ROUTES = {
   stats: '/remote/stats',
   /** 配置快照（只读）与白名单子集写入。**双条件回环门控**。 */
   config: '/remote/config',
+  /**
+   * 一次性 WebSocket 升级票据（账号认证模式）。
+   *
+   * 浏览器原生 WS 不能带自定义签名头，所以客户端先对本 HTTP 请求签名，拿到
+   * 30 秒、只能消费一次的票据，再把它放进 `/remote/ws?token=<ticket>`。
+   * **长期租约永远不进入 URL**。
+   */
+  wsTicket: '/remote/ws-ticket',
+  /**
+   * 浏览器入口（index 页）。**公开**：它就是登录页本身，不含任何凭据，
+   * 只有静态外壳 + 注入的 `__DSH_REMOTE_HUB__`（`{ mode: 'remote-browser' }`）。
+   *
+   * 由 `host/src/guard-web.ts` 从官方 Web origin 取回 index、保留
+   * `__DSH_BOOT__` 原样并插入远程标记后返回；**绝不**回显 `pairIssueToken`。
+   */
+  web: '/',
+  /**
+   * 官方静态资源的反代**前缀**（`/assets/*`、`/plugins/*`，含
+   * `/plugins/??a/client.js,b/client.js&rev=…` 这种字典拼接形式）。**公开**。
+   *
+   * 它是前缀不是完整路径：匹配规则与白名单在 `guard-web.ts` 的
+   * `isProxyableAssetPath()`（该函数另含 `manifest.webmanifest` 与 `favicon*.svg`）。
+   * 写成前缀是为了让「守卫认领哪一段」只有一个真源，避免两处各记一份。
+   */
+  webAsset: '/assets/',
+  /**
+   * 账号登录面（浏览器入口的登录/两步验证/首登引导）。**公开**（这正是登录前的页面）。
+   *
+   * 前缀：具体端点由认证插件 `provide('remoteHubAuth')` 的 `AuthHttpSurface.paths`
+   * 给出（`guard.ts` 逐条并进路由白名单），本常量只声明「这一段归认证面」。
+   */
+  webLogin: '/remote-auth/',
+  /**
+   * 浏览器页面的 RPC 面（官方 `/api/*` 信封）。**需要认证**：不是匿名可用。
+   *
+   * 前缀：与 `webLogin` 同理，本常量声明归属；真正的鉴权与派发在
+   * `guard.ts`（`/remote/rpc` + `/api`）与认证插件里完成。
+   */
+  webApi: '/api/',
 } as const
 
 export type GuardRouteName = keyof typeof GUARD_ROUTES
@@ -118,8 +154,6 @@ export const HUB_METHODS = {
   adminConfig: 'admin.config',
   adminConfigPatch: 'admin.configPatch',
   adminHealth: 'admin.health',
-  /** 签发配对凭据（owner 页面同源调用；仍需进程内 pin 作为第二因子）。 */
-  adminIssue: 'admin.issue',
   /** 本机连接信息：局域网 IPv4 + 端口（供其他设备填写 / 生成二维码链接）。 */
   adminEndpoints: 'admin.endpoints',
   /**
@@ -260,6 +294,12 @@ export const ERROR_CODES = {
   notFound: 'not-found',
   /** 守卫未预期错误。 */
   internal: 'internal',
+  /**
+   * 账号认证已启用，旧的「邀请兑换长期令牌」不再可用。
+   *
+   * 邀请仍然可以签发，但兑换必须改为登记客户端公钥；在客户端侧完成该流程前，
+   * 兑换端会明确返回这个码，而不是发一个用不了的令牌。
+   */
 } as const
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES]

@@ -91,6 +91,7 @@ describe('设备连接生命周期（守卫 + mux + 真实 ws 客户端）', () 
   let base
   let opened = []
   let devices
+  let tokens
   /** 本轮守卫使用的 mux 句柄（与升级回调里是同一个对象）。 */
   let muxHandle
 
@@ -98,16 +99,7 @@ describe('设备连接生命周期（守卫 + mux + 真实 ws 客户端）', () 
     dir = await mkdtemp(join(tmpdir(), 'lifecycle-'))
     const config = { ...mod.DEFAULT_CONFIG, guardPort: 0, deviceTablePath: join(dir, 'devices.json') }
     devices = await mod.createDeviceStore(config.deviceTablePath)
-    const tokens = mod.createTokenService({ devices })
-    const pairing = mod.createPairingService({
-      config: {
-        pairQrTtlMs: config.pairQrTtlMs,
-        pairCodeTtlMs: config.pairCodeTtlMs,
-        maxPairAttempts: config.maxPairAttempts,
-        defaultRole: config.defaultRole,
-      },
-      tokens,
-    })
+    tokens = mod.createTokenService({ devices })
 
     const m = mod.createGuardMux({
       open: async (endpoint, payload, uplink, peer, signal) => {
@@ -124,7 +116,6 @@ describe('设备连接生命周期（守卫 + mux + 真实 ws 客户端）', () 
     guard = await mod.startGuard({
       config,
       tokens,
-      pairing,
       dispatcher: dispatcherStub,
       devices,
       pairIssueToken: 'pin-lifecycle',
@@ -157,19 +148,10 @@ describe('设备连接生命周期（守卫 + mux + 真实 ws 客户端）', () 
     }
   })
 
-  /** 配对一台设备并返回令牌。 */
+  /** 直接签发一台设备的令牌（邀请链路已移除），返回与旧兑换响应同形的对象。 */
   async function pair(role, label) {
-    const issued = await (await fetch(`${base}/remote/pair/code`, {
-      method: 'POST',
-      headers: { 'x-hub-protocol': '1', 'x-pair-issue-token': 'pin-lifecycle', 'content-type': 'application/json' },
-      body: JSON.stringify({ role }),
-    })).json()
-    const redeemed = await (await fetch(`${base}/remote/pair`, {
-      method: 'POST',
-      headers: { 'x-hub-protocol': '1', 'content-type': 'application/json' },
-      body: JSON.stringify({ code: issued.code, clientLabel: label }),
-    })).json()
-    return redeemed
+    const issued = await tokens.issue({ label, role })
+    return { deviceId: issued.device.deviceId, token: issued.token, role: issued.device.role }
   }
 
   /** 打开一条守卫 WS。 */

@@ -35,8 +35,8 @@ export function renderNavIcon(props: NavIconProps = {}): React.ReactNode {
   connected
     ? React.createElement('circle', {
       'data-testid': 'remote-hub-connected-dot', cx: 19.5, cy: 4.5, r: 3.2,
-      fill: 'var(--dsw-alias-state-success-primary, #22c55e)',
-      stroke: 'var(--dsw-alias-bg-layer-1, #fff)', strokeWidth: 1.5,
+      fill: 'var(--rh-green)',
+      stroke: 'var(--rh-bg)', strokeWidth: 1.5,
     })
     : React.createElement('path', { 'data-testid': 'remote-hub-disconnected-slash', d: 'M3 3 21 21' }))
 }

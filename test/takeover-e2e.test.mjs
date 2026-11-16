@@ -22,6 +22,8 @@ import { join } from 'node:path'
 
 const mod = await import('../lib/index.js')
 const { WebSocket } = mod
+// 账号模式夹具：引导账号 → 登记浏览器公钥 → 提供签名头。
+const { bootstrappedAccount } = await import('./_account-harness.mjs')
 
 const dispatcherStub = {
   peerFor() { throw new Error('not used') },
@@ -58,21 +60,20 @@ describe('整机接管端到端（守卫 + mux + WS 客户端）', () => {
   let base
   let opened = []
   let cancelled = []
+  let account
+  let enrolled
+  let clientKey
 
   before(async () => {
     dir = await mkdtemp(join(tmpdir(), 'takeover-'))
     const config = { ...mod.DEFAULT_CONFIG, guardPort: 0, deviceTablePath: join(dir, 'devices.json') }
     const devices = await mod.createDeviceStore(config.deviceTablePath)
     const tokens = mod.createTokenService({ devices })
-    const pairing = mod.createPairingService({
-      config: {
-        pairQrTtlMs: config.pairQrTtlMs,
-        pairCodeTtlMs: config.pairCodeTtlMs,
-        maxPairAttempts: config.maxPairAttempts,
-        defaultRole: config.defaultRole,
-      },
-      tokens,
-    })
+    // 账号模式：不再有配对服务；WS 票据由签名换取。
+    account = await bootstrappedAccount('takeover')
+    const enrolledPair = await account.enroll('control')
+    enrolled = enrolledPair.enrolled
+    clientKey = enrolledPair.key
 
     // 假 gateway：实现 wireStream 语义。
     const mux = mod.createGuardMux({
@@ -91,7 +92,7 @@ describe('整机接管端到端（守卫 + mux + WS 客户端）', () => {
     guard = await mod.startGuard({
       config,
       tokens,
-      pairing,
+      auth: account.service,
       dispatcher: dispatcherStub,
       devices,
       pairIssueToken: 'pin-e2e',
@@ -106,6 +107,7 @@ describe('整机接管端到端（守卫 + mux + WS 客户端）', () => {
 
   after(async () => {
     await guard?.dispose()
+    account?.cleanup()
     // Windows 上文件句柄释放略滞后，重试几次再放弃。
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
@@ -117,21 +119,24 @@ describe('整机接管端到端（守卫 + mux + WS 客户端）', () => {
     }
   })
 
-  /** 签发一个可用的设备令牌。 */
+  /** 用租约签一次 `/remote/ws-ticket`，换一次性 WS 票据（账号模式的生产路径）。 */
   async function issueToken() {
-    const response = await fetch(`${base}/remote/pair/code`, {
-      method: 'POST',
-      headers: { 'x-hub-protocol': '1', 'x-pair-issue-token': 'pin-e2e', 'content-type': 'application/json' },
-      body: JSON.stringify({ role: 'control' }),
+    const { headers } = account.proofHeaders(enrolled, clientKey, {
+      path: '/remote/ws-ticket', body: '', audience: new URL(base).host.toLowerCase(),
     })
-    const issued = await response.json()
-    const redeemed = await fetch(`${base}/remote/pair`, {
+    const response = await fetch(`${base}/remote/ws-ticket`, {
       method: 'POST',
-      headers: { 'x-hub-protocol': '1', 'content-type': 'application/json' },
-      body: JSON.stringify({ code: issued.code, clientLabel: 'e2e' }),
+      headers: {
+        ...headers,
+        authorization: `Bearer ${enrolled.lease.lease}`,
+        'x-hub-protocol': '1',
+        'content-type': 'text/plain',
+      },
+      body: '',
     })
-    const token = await redeemed.json()
-    return token.token
+    const body = await response.json()
+    assert.equal(response.status, 200, JSON.stringify(body))
+    return body.ticket
   }
 
   it('无令牌 → 握手被拒（401，非 101）', async () => {

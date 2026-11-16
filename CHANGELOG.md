@@ -3,6 +3,120 @@
 本文件记录 `@xiaopb/dsh-remote-hub` 与伴生包 `@xiaopb/dsh-remote-paths` 的公开变更。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)；`0.x` 期间的次版本号可能包含不兼容变更。
 
+## [0.5.0] - 2026-11-16
+
+**浏览器直连（方案 A）：不装桌面端也能用完整的 DSH 界面。**
+
+这是本插件第一次让「只有浏览器」的场景成为一等公民。此前 Hub 只服务
+**装了桌面端 / 已有客户端私钥**的设备；现在用手机、平板、别人的电脑打开
+一个网址，输入账号口令 + 6 位动态码，就能拿到与桌面端一致的界面。
+
+### 新增：守卫托管官方界面
+
+- `GET <guard>/ ` 由守卫直接返回**官方 Web 外壳**（进程内
+  `webServer.readResource` + peer 身份，不依赖自启动令牌），浏览器感知不到
+  自己不是从 `:3080` 来的。
+- `/api/*` 走 **HttpOnly Cookie** 认证后以 `remote-device` 身份派发；
+  **认证在读 body 之前**，未登录一个字节都不转发。
+- `WS /api/remote.mux` 同样走 Cookie 认证，让客户端的 `permission catalog`、
+  插槽装配等依赖 Host generation 的服务正常建立。
+- 浏览器侧角色由账号 `role` 决定（`acc_admin` → `full`，其余 `read-only`），
+  **不会**以 `owner` 身份派发。
+
+### 修复：不登录时不再给一个死页面
+
+`GET <guard>/` 在未认证时 **302** 到 `/remote-web/login`（服务端判定，
+不依赖客户端 JS），并带 `?next=` 便于登录后返回原页面。
+登录页只接受同源相对路径，避免 `?next=` 变成开放重定向。
+
+### 修复：登录表单不再退回裸 JSON
+
+登录页生成的内联脚本曾因**模板字符串吃掉反斜杠**（`/^\/(?![\/\\])/`）
+整段语法错误，导致 `preventDefault()` 没执行、表单原生 POST、
+浏览器把接口 JSON 当页面渲染。改为 `charCodeAt` 判断，并加测试
+把生成后的脚本交给 `node --check`。
+
+同时修掉 `/remote-web/login/`（末尾斜杠）落到 404 JSON 的问题。
+
+### 修复：TOTP 二维码扫不出来
+
+自研编码器只能出两个固定版本，`otpauth://` 链接（约 140 字节）永远落在
+版本 10（57 模块）；配 120px 显示尺寸就是 **2.1px/模块**，低于扫码器
+普遍要求的 4px。改用 `qrcode-generator`（零依赖、随 bundle 内联）后
+自动选最小版本（**49 模块**），显示尺寸按 `模块数 × 4 + 8` 自适应
+（**204px → 4.16px/模块**），并加 `shape-rendering: crispEdges`
+避免重采样出灰边。
+
+### 新增：让 DSH 自身选用「浏览远程目录」
+
+配置 `connection.trustedHosts` 含非回环 authority 后，DSH 的
+`directory-picker-auto` 会挂 `browse` 后端 + 浏览客户端，
+浏览器的「新建工作区」于是弹出**远程主机的目录树**，而不是拉起浏览器本地
+的文件夹对话框。插件不再抢那两个插槽（抢了会盖掉官方实现）。
+
+### 变更
+
+- **目录选择交给官方**：删除插件自注册的 `conversation.hero.workspace.directoryFlow`
+  / `sidebar.workspaces.directoryFlow`，仅在需要时提供 `cloudPathContext()`。
+- **新增运行时依赖 `qrcode-generator`**（client bundle 内联，运行时无网络）。
+
+### 迁移
+
+- 想在浏览器里用：在 `cordis.patch.yml` 里为 `remote-hub` 行开
+  `accountAuth.enabled: true`，并为 `connection` 行加 `trustedHosts`
+  （详见 `docs/BROWSER-GATEWAY.md`）。
+- 只走桌面端的老用户无需改动，行为保持原样。
+
+## [0.4.0] - 2026-11-15
+
+**账号 + 2FA 认证与可信客户端（第二个 Cordis 插件行 `@xiaopb/dsh-remote-hub/auth`），默认启用。**
+
+守卫的长期 bearer 设备令牌在账号认证模式下被**租约 + 每请求客户端签名**取代：
+偷到租约不足以冒用，还得持有该客户端的私钥。账号与 2FA 只在**建立信任**时使用，
+之后按客户端公钥证明身份，7 天租约在后台静默轮换。
+
+### 默认行为变更
+- **`accountAuth.enabled` 默认 `true`**：Hub 不再接受长期设备令牌。
+- **首次启动自动创建默认账号 `admin`**（仅当账号库为空）。初始口令**安装时随机生成**，
+  明文写入 `~/.dsh/remote-hub/initial-password`（0600 / 目录 0700）；**改密成功后文件即删除**，
+  不再有任何可用初始凭据。可用 `remote-hub-auth` 行的 `defaultAccount` 覆盖用户名/口令。
+- **首次登录强制改密**：改密之前 `status` 之外的认证端点一律
+  `auth-password-change-required`，因此绑定 2FA、信任客户端与轮换租约全部不可用，
+  也就进不了 Hub。改密成功后该标记**永久清除**（只强制一次），之后仍可主动改密。
+- **口令策略默认强密码**：≥12 位且包含大小写、数字、符号，且不含用户名；弱口令无法保存
+  （服务端拒绝并返回未满足项清单）。设置页可切换为「基础口令」（≥8 位），立即生效。
+  引导/改密/设置页共用同一份规则与逐条 ✓ 提示。
+- **账号页移入设置**：`settings.section` 注册「登录与账号」（口令、2FA、可信客户端、
+  口令策略）；侧栏只保留「云端设备」运行面。
+
+### 新增
+
+- **端口 / 网络模式可在页面修改**：「本机配置」里的 `guardPort` 与 `network` 从只读变为可编辑，
+  保存即写入 `~/.dsh/remote-hub/overrides.json`（优先于 profile 配置）。它们属于**冷配置**——
+  守卫的监听在装配时建立，换端口必须重建监听并丢弃全部在途连接（还连带隧道与邀请链接），
+  因此不做热切换：页面显示「有修改待重启生效」，重启 `dsh web` 后生效。
+- **独立认证插件行**：`@xiaopb/dsh-remote-hub/auth`，`provide('remoteHubAuth')`；
+  Hub 行按 `accountAuth.enabled` 注入它，服务缺失时守卫保持关闭（fail-closed）。
+- **账号与 MFA**：首个管理员仅回环创建；口令走 scrypt（拒绝明文历史值）；TOTP
+  （RFC 6238）+ 10 个一次性备用码；登录按用户名限速，MFA 挑战 5 分钟、5 次错误即烧。
+- **可信客户端**：每个浏览器/App 一把 ECDSA P-256 密钥（WebCrypto `extractable: false`），
+  服务端只存公钥；公钥指纹仅供人眼核对，**不参与认证**。
+- **每请求签名**：覆盖方法、路径、目标 authority、时间戳、一次性 nonce、客户端/密钥 id、
+  租约代次与正文摘要；服务端原子拒绝重放与换体。
+- **7 天租约轮换**：后台自动轮换、旧代次立即失效；重放旧代次视为令牌被盗并**撤销该客户端**。
+- **一次性 WS 票据**：浏览器 WS 不能带自定义头，改为先签名换 30 秒、消费一次的票据，
+  长期租约**不进入 URL**。
+- **角色上限**：每个客户端有服务端 `roleCeiling`，可信会话内切换 `activeRole` 不再要求 2FA。
+- **「登录与账号」页**：引导 / 口令 + MFA / 信任本浏览器 / 可信客户端列表（指纹、角色、
+  撤销）/ 退出登录。退出只撤销会话，撤销客户端是独立动作。
+
+### 迁移
+
+- `accountAuth.enabled` **默认 true**（见上「默认行为变更」）。需要保留旧设备令牌语义的部署，
+  在「登录与账号」页完成账号 + 2FA + 信任本浏览器后，再把 `cordis.patch.yml` 的
+  `remote-hub` 行改成 `accountAuth.enabled: true` 并重启 Host。
+- 切换后**旧设备令牌立即失效**，且不会被静默升级成受信客户端（必须重新登记公钥）。
+
 ## [0.3.6] - 2026-11-14
 
 **本地插件页：在接管云端设备时可直接管理本机插件，功能与官方插件页对齐。**

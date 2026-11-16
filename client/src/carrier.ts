@@ -44,6 +44,8 @@ import {
   type CarrierMode,
 } from '@core/carrier-contract.js'
 import { announcePermissionDenied } from './permission-notice.js'
+import { createLazySigner } from './auth/lazy.js'
+import { fetchWsTicket, type AuthSigner } from './auth/session.js'
 import { AUTH_HEADER, BEARER_SCHEME, ERROR_CODES, GUARD_ROUTES, HUB_PROTOCOL_HEADER, PROTOCOL_VERSION } from '@core/protocol.js'
 
 /** 守卫受理 WebSocket 的路径（与 GUARD_ROUTES 平行，但只用于 WS 升级）。 */
@@ -115,6 +117,12 @@ export interface CarrierOptions {
   webSocketImpl?: (url: string) => WebSocket
   /** 注入 reload（测试用）。 */
   reload?: () => void
+  /**
+   * 账号认证签名器：给出时一元 RPC 带「租约 + 签名」，WS 用一次性票据。
+   *
+   * 与 `CarrierMode.token` 互斥：账号认证模式下服务端拒绝长期 bearer。
+   */
+  signer?: AuthSigner
   /** 注入全局对象（测试用）。 */
   globalObject?: CarrierGlobal
   /**
@@ -245,7 +253,9 @@ export function createCarrier(options: CarrierOptions = {}): CarrierInstallResul
   const globalObject = (options.globalObject ?? (globalThis as unknown as CarrierGlobal))
 
   const mode = readMode()
-  if (mode.mode !== 'cloud' || mode.origin === undefined || mode.token === undefined) {
+  // 账号模式：没有长期 token，用「租约 + 每请求签名」。
+  const accountMode = mode.account === true
+  if (mode.mode !== 'cloud' || mode.origin === undefined || (!accountMode && mode.token === undefined)) {
     return {
       active: false,
       transport: undefined,
@@ -257,8 +267,46 @@ export function createCarrier(options: CarrierOptions = {}): CarrierInstallResul
 
   const guardOrigin = mode.origin.replace(/\/+$/u, '')
   const token = mode.token
+  // 账号模式：懒签名器（同步构造，首次签名时才读 IndexedDB）。
+  const signer = options.signer
+    ?? (accountMode && mode.origin !== undefined ? createLazySigner(mode.origin) : undefined)
   const snapshot = globalObject.__DSH_TRANSPORT__
   let fallbackDone = false
+
+  /**
+   * 一次性 WS 票据池。
+   *
+   * `createWebSocket` 必须**同步**返回 WebSocket，所以票据要提前备好：
+   * 保持 2 张在手，用掉一张就补一张。票据 30 秒过期、只能消费一次，
+   * 因此任何一张被窃取也只能换来一次失败的握手。
+   */
+  const ticketPool: string[] = []
+  let ticketFetching = false
+  async function ensureTickets(): Promise<void> {
+    if (signer === undefined || ticketFetching) return
+    if (ticketPool.length >= 2) return
+    ticketFetching = true
+    try {
+      while (ticketPool.length < 2) {
+        ticketPool.push(await fetchWsTicket(signer, guardOrigin, fetchImpl))
+      }
+    } catch {
+      // 票据不可用：本次连接会以无 token 尝试，服务端 401，随后走既有降级路径。
+    } finally {
+      ticketFetching = false
+    }
+  }
+  function takeTicket(): string | undefined {
+    if (signer === undefined) return undefined
+    const next = ticketPool.shift()
+    void ensureTickets()
+    return next
+  }
+  if (options.signer !== undefined) {
+    void ensureTickets()
+    const timer = setInterval(() => { void ensureTickets() }, 15_000)
+    ;(timer as { unref?: () => void }).unref?.()
+  }
 
   /**
    * 报告一个会挤压默认 mux 路线的既有字段。
@@ -314,13 +362,22 @@ export function createCarrier(options: CarrierOptions = {}): CarrierInstallResul
 
     let response: Response
     try {
+      // 账号认证模式：每次请求都带租约与客户端签名（正文参与摘要）。
+      const authBasis = signer === undefined
+        ? authHeaders(token ?? '')
+        : await signer.headers({
+          method: 'POST',
+          path: GUARD_ROUTES.rpc,
+          body: typeof init?.body === 'string' ? init.body : '',
+        })
       response = await fetchImpl(`${guardOrigin}${GUARD_ROUTES.rpc}`, {
         ...init,
         ...(init?.body === undefined ? {} : { body: normalizeSessionCreateBody(init.body) }),
         method: 'POST',
         headers: {
           ...(init?.headers as Record<string, string> | undefined),
-          ...authHeaders(token),
+          ...authBasis,
+          [HUB_PROTOCOL_HEADER]: String(PROTOCOL_VERSION),
           'content-type': 'application/json',
         },
       })
@@ -361,7 +418,9 @@ export function createCarrier(options: CarrierOptions = {}): CarrierInstallResul
    * 这里改写到守卫的 `/remote/ws` 并附加令牌。
    */
   const createWebSocket = (url: string): WebSocket => {
-    const target = buildGuardWebSocketUrl(url, token)
+    // 账号认证模式：URL 里只放**一次性票据**（长期租约绝不进 URL）。
+    const ticket = takeTicket()
+    const target = buildGuardWebSocketUrl(url, ticket ?? token ?? '')
     const factory = options.webSocketImpl ?? ((href: string) => new WebSocket(href))
     return factory(target)
   }
@@ -509,6 +568,9 @@ export function installCarrierResolvingMode(
             mode: 'cloud',
             ...(fromDisk.origin === undefined ? {} : { origin: fromDisk.origin }),
             ...(fromDisk.targetId === undefined ? {} : { targetId: fromDisk.targetId }),
+            // 账号模式没有 token：漏掉 account 会被判成「不可用的 cloud」，
+            // 传输层就不安装了（实测表现为启动后 __DSH_TRANSPORT__ 缺失）。
+            ...(fromDisk.account === true ? { account: true } : {}),
             ...(fromDisk.token === undefined ? {} : { token: fromDisk.token }),
             ...(fromDisk.deviceLabel === undefined ? {} : { deviceLabel: fromDisk.deviceLabel }),
           }

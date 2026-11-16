@@ -467,14 +467,35 @@ report.check(
   'single-controller must DISPLACE (drop the connection, keep the pairing) rather than revoke, and be configurable',
 )
 report.check(
-  'pairing-qr-encoder: ok',
+  'totp-qr-encoder: ok',
   () => {
     const qrSrc = readText(`${PATHS.clientSrc}/panel/qr.ts`)
-    return qrSrc.includes('QR_MAX_BYTES = 106')
+    // 邀请二维码已随 P4 阶段 B 删除；编码器保留给设置页 TOTP 绑定二维码。
+    //
+    // 0.5.0 起编码交给 `qrcode-generator`（零依赖，随 client bundle 打包）。
+    // 真正的约束不是「手写」，而是**运行时不得依赖网络**：二维码必须在
+    // 断网的机器上也能渲染出来。因此断言的是「本地库 + 打包进 bundle」，
+    // 并显式排除远程加载。
+    return qrSrc.includes("from 'qrcode-generator'")
       && qrSrc.includes('export function encodeQr')
-      && qrSrc.includes('rsRemainder')
+      && !/https?:\/\//u.test(qrSrc)
   },
-  'pairing page must ship its own QR encoder (no network dependency at runtime)',
+  'the settings page must render its TOTP QR locally (bundled encoder, no network)',
+)
+
+// 邀请链路删除后不再有相机扫码：`QrScanner` / `qr-decode` 必须保持删除状态。
+report.check(
+  'scanner-removed: ok',
+  () => {
+    const scannerSrc = readText(`${PATHS.clientSrc}/panel/QrScanner.ts`)
+    const decoderSrc = readText(`${PATHS.clientSrc}/panel/qr-decode.ts`)
+    const pageSrc = readText(`${PATHS.clientSrc}/panel/RemoteHubPage.ts`)
+    return scannerSrc === ''
+      && decoderSrc === ''
+      && !pageSrc.includes('QrScanner')
+      && !pageSrc.includes("'data-testid': 'scan'")
+  },
+  'camera scanning belonged to the invite flow and must stay removed',
 )
 
 // 局域网信任域：只放宽到私网，公网必须走隧道/VPN。
@@ -499,19 +520,7 @@ report.check(
   'binding a public address must be refused even in LAN mode',
 )
 
-// 扫码：必须能在没有 BarcodeDetector 的 Windows/Electron 上工作（自研解码器）。
-report.check(
-  'scanner-self-contained: ok',
-  () => {
-    const scannerSrc = readText(`${PATHS.clientSrc}/panel/QrScanner.ts`)
-    const decoderSrc = readText(`${PATHS.clientSrc}/panel/qr-decode.ts`)
-    return scannerSrc.includes('getUserMedia')
-      && scannerSrc.includes('getTracks')
-      && decoderSrc.includes('export function decodeQrGray')
-      && decoderSrc.includes('export function decodeQrMatrix')
-  },
-  'camera scanning must ship its own QR decoder (Electron on Windows lacks BarcodeDetector)',
-)
+// 扫码链路已随邀请一起删除（见 scanner-removed）：相机自研解码器不再存在。
 
 // ---------------------------------------------------------------------------
 // 8. out/contract.json — six keys, zero method-name vocabulary
@@ -572,9 +581,10 @@ report.check(
       && !methodVocabulary.test(contractText)
       && !contractText.includes('REMOTE_METHODS')
       && !contractText.includes('HUB_METHODS')
-      // 7 条基础路由（health/pairTicket/pairCode/pair/rpc/devices/devicesRevoke）
-      // + 2 条管理端点（stats/config；2026-11-11 四区改造新增）= 9。
-      && Object.keys(guardRoutes).length === 9
+      // 阶段 B 起邀请链路（/remote/pair*）已删除；随后方案 A 增加浏览器面：
+      // health / rpc / devices / devicesRevoke / stats / config / wsTicket = 7
+      // + web / webAsset / webLogin / webApi = 4，共 11。
+      && Object.keys(guardRoutes).length === 11
       && Object.keys(streamBudget).length === 6
   },
   'out/contract.json must have exactly six keys and no method-name vocabulary',

@@ -8,6 +8,7 @@
  */
 export * from './protocol.js'
 export * from './roles.js'
+export * from './auth.js'
 export * from './device.js'
 export * from './capabilities.js'
 export * from './capabilities-redlines.js'

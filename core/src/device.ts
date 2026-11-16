@@ -54,6 +54,24 @@ export interface IssuedDeviceToken {
 }
 
 /**
+ * 账号认证模式下的邀请兑换结果：**没有**长期令牌，只有一次租约。
+ *
+ * 私钥留在控制端浏览器，守卫只保存公钥；因此这里给的是「登记成功的客户端 +
+ * 租约明文」，拿到租约但没有私钥依然签不出请求。
+ */
+export interface IssuedClientLease {
+  deviceId: string
+  clientId: string
+  keyId: string
+  role: RoleName
+  lease: string
+  generation: number
+  expiresAt: number
+  /** 单控模式下被本次兑换踢下线的客户端（只断连接，信任仍保留）。 */
+  displacedDevices?: { deviceId: string; label: string }[]
+}
+
+/**
  * 守卫侧的身份视图。
  *
  * ⚠️ 这是 **core 内部**的视图，不是 `PeerScope.principal`。真正进 Peer 的

@@ -60,6 +60,17 @@ export interface DevicePolicyDeps {
    * `ctx.workspaceRegistry.list()` 读（都是同步内存读）；测试可注入固定集合。
    */
   visibleResourceIds?: () => { session?: readonly string[]; workspace?: readonly string[] }
+  /**
+   * 账号模式的受信客户端（`auth.db` 的 clients 表）。
+   *
+   * **为什么需要**：设备表（`devices.json`，dev_*）与账号客户端（cli_*）是两套
+   * id 空间。只查设备表时，账号模式下的 `bindings()` 恒为空数组，官方 `decide()`
+   * 把空 bindings 当成「没有允许项」→ 全量 `remote-access/denied`。P0 探针实测：
+   * full 角色连 `directoryPicker/list` 都拿不到，正是这个原因。
+   *
+   * 返回 `undefined` 表示该 id 不在这套客户端里（交给设备表判定）。
+   */
+  authClient?: (clientId: string) => { role: RoleName; revokedAt: string | null } | undefined
   /** 审计回调（越权尝试是最有价值的信号）。 */
   onDenied?: (row: { deviceId: string; action: string; reason: string; at: string }) => void
   /** 注入时钟。 */
@@ -104,16 +115,57 @@ export function registerDevicePolicy(ctx: Context, deps: DevicePolicyDeps): Acce
   }
 
   const now = deps.now ?? (() => new Date())
-  const visible = deps.visibleResourceIds ?? (() => ({}))
+  const visible: () => { session?: readonly string[], workspace?: readonly string[] }
+    = deps.visibleResourceIds ?? (() => ({}))
 
   const bindingsFor = (principal: unknown): readonly RemoteAccessBinding[] => {
     const device = readPrincipal(principal)
     if (device === undefined) return []
     // Defence in depth：已吊销设备的旧 Peer 若还活着，bindings 直接为空 → 全量拒。
+    // 浏览器会话（方案 A）：守卫用 `web:<accountId>` 作合成身份。
+    // 它没有客户端密钥，角色由守卫在**认证后**给出（见 guard 的 webAuth.roleOf），
+    // 所以这里直接采信 principal 上的 role —— 它绝不来自请求方自述。
+    if (device.deviceId.startsWith('web:')) {
+      // 浏览器身份没有客户端密钥，角色由守卫在认证后给出，这里直接采信。
+      //
+      // **必须按资源种类分别绑定**（与下面设备/客户端同一条规则，见文件头的
+      // D-11）：官方 decide() 拿到的 resources 是 Gateway 从方法参数解析出来的
+      // ——`sessionId` → session、`workspaceId` → workspace、没有身份参数 →
+      // global。只在 global 上授权，会让 `session/create` 这类调用被
+      // no-allow 拒绝（实测：页面报「initial Session restoration failed:
+      // session/create: access denied」）。
+      const actions = allActionsFor(device.role) as readonly RemoteAccessAction[]
+      const bindings: RemoteAccessBinding[] = [
+        {
+          role: { name: `remote-hub:${device.role}:global`, resource: 'global', actions },
+          resource: { kind: 'global' },
+        } as RemoteAccessBinding,
+      ]
+      for (const id of visible().session ?? []) {
+        if (typeof id !== 'string' || id === '') continue
+        bindings.push({
+          role: { name: `remote-hub:${device.role}:session`, resource: 'session', actions },
+          resource: { kind: 'session', id },
+        } as unknown as RemoteAccessBinding)
+      }
+      for (const id of visible().workspace ?? []) {
+        if (typeof id !== 'string' || id === '') continue
+        bindings.push({
+          role: { name: `remote-hub:${device.role}:workspace`, resource: 'workspace', actions },
+          resource: { kind: 'workspace', id },
+        } as unknown as RemoteAccessBinding)
+      }
+      return bindings
+    }
     const record = deps.devices.get(device.deviceId)
-    if (record === undefined || record.revokedAt !== null) return []
-    // 角色以**设备表**为准（防止一个旧 Peer 里残留的高权限 role 被继续用）。
-    const role: RoleName = isRoleName(record.role) ? record.role : device.role
+    // 账号模式的客户端不在设备表里（dev_* vs cli_*），回落到 auth 侧查询。
+    const client = record === undefined ? deps.authClient?.(device.deviceId) : undefined
+    if (record === undefined && client === undefined) return []
+    if (record !== undefined && record.revokedAt !== null) return []
+    if (client !== undefined && client.revokedAt !== null) return []
+    // 角色以**设备表/客户端表**为准（防止旧 Peer 里残留的高权限 role 被继续用）。
+    const knownRole = record !== undefined ? record.role : client!.role
+    const role: RoleName = isRoleName(knownRole) ? knownRole : device.role
 
     const ids: { session?: readonly string[]; workspace?: readonly string[] } = (() => {
       try { return visible() } catch { return {} }

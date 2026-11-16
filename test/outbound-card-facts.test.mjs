@@ -11,20 +11,21 @@ function text(node) {
 }
 const state = {
   mode: { mode: 'local' }, outboundTargets: [{ id: 'a'.repeat(64), origin: 'http://example.test', role: 'full', pairedAt: 1700000000000, lastConnectedAt: 1700000001000 }],
-  guard: null, guardError: null, devices: [], loading: false, role: 'control', issued: null, issuedCode: null, autoReissue: false,
-  originDraft: '', secretDraft: '', deviceFilter: 'all', stats: null, statsError: null, config: null, configDraft: null, configSaving: false,
+  guard: null, guardError: null, devices: [], loading: false, role: 'control', originDraft: '', deviceFilter: 'all', stats: null, statsError: null, config: null, configDraft: null, configSaving: false,
   configSavedAt: null, busy: null, error: '连接失败：配对凭据已过期', now: Date.now(),
 }
 test('outbound card exposes recorded role and pairing time, and failures have readable text', () => {
   const result = text(renderRemoteHubPage(state, {}))
-  assert.ok(result.includes('授权角色：'))
+  // 事实行现在是「键 / 值」两组节点（不再用「键：」内联），文本里以空格分隔。
+  assert.ok(result.includes('授权角色'))
   assert.ok(result.includes('完全控制'))
-  assert.ok(result.includes('配对时间：'))
-  assert.ok(result.includes('最近连接：'))
+  assert.ok(result.includes('信任时间'))
+  assert.ok(result.includes('最近连接'))
+  assert.ok(result.includes('客户端标识'))
   assert.ok(result.includes('连接失败：配对凭据已过期'))
 })
 test('legacy unknown pairing metadata is explicitly unknown', () => {
   const result = text(renderRemoteHubPage({ ...state, outboundTargets: [{ id: 'b'.repeat(64), origin: 'http://example.test' }] }, {}))
-  assert.ok(result.includes('未知（需重新配对确认）'))
-  assert.ok(result.includes('未知（旧配对未记录）'))
+  assert.ok(result.includes('未知（需重新信任确认）'))
+  assert.ok(result.includes('未知（旧记录未保存）'))
 })

@@ -16,13 +16,17 @@ const context = readFileSync(new URL('../client/src/paths/context.ts', import.me
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
 test('cloud path UI lives inside the main package', () => {
-  assert.match(src, /if \(!cloudPathContext\(\)\) return/, '本机模式下必须直接返回，不注册任何槽位')
+  // 本机模式不注册任何槽位；远程模式下由 mountAll() 统一注册（见 apply 的注释）。
+  assert.match(src, /if \(!cloudPathContext\(\)\)/, '本机模式下不注册任何槽位')
+  assert.match(src, /function mountAll\(ctx: PathsContext\)/, '注册集中在 mountAll')
   assert.match(src, /ctx\.commandUi\.register/)
   assert.match(src, /name: 'cloud-file'/)
   assert.match(src, /priority: -2/)
-  assert.match(src, /conversation\.hero\.workspace\.directoryFlow/)
-  assert.match(src, /sidebar\.workspaces\.directoryFlow/)
+  // 目录选择交给官方 browse 表面：`directory-picker-auto` 在 trustedHosts
+  // 含非回环 authority 时自动挂 browse 后端 + browse 客户端，浏览器里就是
+  // 「浏览远程目录」。本插件不再抢那两个插槽（抢了反而覆盖官方选择）。
   assert.match(src, /directoryPicker\/list/)
+  assert.match(src, /delegated-to-official/)
   assert.equal(pkg.name, '@xiaopb/dsh-remote-hub')
   assert.equal(typeof pkg.workspaces, 'undefined', '不能再依赖伴生 workspace 包')
   assert.equal(pkg.exports['./paths'], undefined, '不应再导出独立 paths 入口')
@@ -36,6 +40,8 @@ test('cloud path mounting waits for host services', () => {
 
 test('cloud path transport is allow-listed and only active when the carrier is', () => {
   assert.match(context, /directoryPicker\/list', 'directoryPicker\/createDirectory', 'workspaceFiles\/list'/)
-  assert.match(context, /carrier\?\.active !== true/)
+  // 载体分支要求 active === true 且传输完整；否则不会走控制端那条路。
+  assert.match(context, /carrier\?\.active === true/)
+  assert.match(context, /typeof transport\?\.fetch === 'function'/)
   assert.match(context, /remote-access\/denied/)
 })

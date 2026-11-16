@@ -21,14 +21,18 @@
 import type { Context } from '@deepseek-ai/cordis'
 
 import { readCarrierMode } from '@core/carrier-contract.js'
+import type { RoleName } from '@core/roles.js'
 
 import type { RemoteTransport, TransportOptions, AdminRequestDiagnostic, HubLogEntry } from './transport.js'
 import { createTransport, RemoteHubError, HUB_LOG_LIMIT } from './transport.js'
 import { createAccessStore } from './access.js'
 import { mountRemote } from './mount.js'
-import { createRemoteHubPageComponent, classifyPairSecret } from './panel/RemoteHubPage.js'
+import { createRemoteHubPageComponent } from './panel/RemoteHubPage.js'
 import type { CloudDeviceRow } from './panel/RemoteHubPage.js'
 import { RemoteHubNavIcon } from './panel/NavIcon.js'
+import { createAccountPageComponent } from './auth/mount.js'
+import { createAuthApi } from './auth/api.js'
+import { createKeyring } from './auth/keyring.js'
 import { mountLocalPluginsPanel } from './local-plugin-manager/panel.js'
 import { watchTakeover } from './local-plugin-manager/lifecycle.js'
 
@@ -145,8 +149,75 @@ function hubGlobal(): HubGlobal {
  * 的 transport —— 后者的 origin 在页面加载时就固定了，而连接动作恰恰是要换
  * origin。
  */
+/** 「登录与账号」页：本机账号 + 对端账号（出站信任记录）。 */
+const AccountPage = createAccountPageComponent({
+  async loadPeers() {
+    const targets = await createAdminTransport().listOutboundTargets()
+    return targets.map(target => ({
+      id: target.id,
+      origin: target.origin,
+      ...(target.deviceLabel === undefined ? {} : { label: target.deviceLabel }),
+      ...(target.role === undefined ? {} : { role: target.role }),
+      ...(target.lastConnectedAt === undefined ? {} : { lastConnectedAt: target.lastConnectedAt }),
+    }))
+  },
+  async forgetPeer(targetId) {
+    return createAdminTransport().forgetOutboundTarget(targetId)
+  },
+})
+
+/**
+ * 用对端账号登录并信任本浏览器（账号认证模式）。
+ *
+ * 跨源：目标守卫上的 `/remote-auth/*` 用头会话（`Authorization: Bearer`），
+ * 不依赖 SameSite Cookie。成功后把「私钥 + 租约」按 origin 存进 IndexedDB，
+ * 并在出站档案里留一条 `account: true`（**不含**任何 bearer）。
+ */
+async function connectWithAccount(input: {
+  origin: string
+  username: string
+  password: string
+  code: string
+  role: RoleName
+}): Promise<{ clientId: string; deviceLabel?: string; role?: string; targetId?: string }> {
+  const api = createAuthApi({ origin: input.origin, headerSession: true })
+  const login = await api.login({ username: input.username, password: input.password })
+  if (login.mfaRequired) {
+    if (input.code.trim() === '') throw new Error('对端已启用两步验证，请填写 6 位验证码')
+    await api.mfa({ mfaToken: login.mfaToken, code: input.code.trim() })
+  }
+  const keyring = createKeyring()
+  const { identity } = await keyring.loadOrCreate()
+  const enrolled = await api.enroll({
+    label: `controller ${globalThis.location?.host ?? ''}`.trim(),
+    clientType: 'browser',
+    publicKey: identity.publicKey,
+    roleCeiling: input.role,
+  })
+  await keyring.saveBinding({
+    clientId: enrolled.client.clientId,
+    keyId: enrolled.client.keyId,
+    lease: enrolled.lease.lease,
+    generation: enrolled.lease.generation,
+    expiresAt: enrolled.lease.expiresAt,
+  }, input.origin)
+  const deviceLabel = `${input.origin} · ${enrolled.client.label}`
+  const saved = await createAdminTransport().saveOutboundTarget({
+    origin: input.origin,
+    account: true,
+    accountId: enrolled.client.clientId,
+    deviceLabel,
+    role: input.role,
+    lastConnectedAt: Date.now(),
+  })
+  // 必须把档案 id 交给页面：carrier-mode.json 靠 targetId 关联到这条账号目标，
+  // 否则重启后读不到（只剩 origin，会被当成旧版 bearer 记录而回退到本机）。
+  return { clientId: enrolled.client.clientId, deviceLabel, role: input.role, targetId: saved.id }
+}
+
 const RemoteHubPage = createRemoteHubPageComponent({
   injected: () => hubGlobal(),
+  connectWithAccount,
   /** 守卫诊断：最近一次管理请求（transport 写回模块级变量）。 */
   diagnostic: () => lastDiagnostic,
   /** 用户可见日志时间线。 */
@@ -167,29 +238,6 @@ const RemoteHubPage = createRemoteHubPageComponent({
   },
   async revokeDevices(input) {
     return createAdminTransport().revokeDevices(input)
-  },
-  async issueTicket({ origin, pairIssueToken, role }) {
-    const transport = createTransport({ origin, pairIssueToken, adminChannel: '' })
-    return transport.issueTicket(role)
-  },
-  async issueCode({ origin, pairIssueToken, role }) {
-    const transport = createTransport({ origin, pairIssueToken, adminChannel: '' })
-    return transport.issueCode(role)
-  },
-  /**
-   * 同源签发（桌面端唯一可行路径）。
-   *
-   * 走 `hub/admin.issue`：owner 页面经 Electron `forwardWebRequest` 同源转发，
-   * 不需要 pin，也不受 `dsh-app://app` 跨协议限制。
-   */
-  async adminIssue({ kind, role }) {
-    const transport = createAdminTransport()
-    if (kind === 'ticket') {
-      const issued = await transport.issueTicket(role)
-      return { kind: 'ticket' as const, value: issued.ticket, expiresAt: issued.expiresAt, role: issued.role }
-    }
-    const issued = await transport.issueCode(role)
-    return { kind: 'code' as const, value: issued.code, expiresAt: issued.expiresAt, role: issued.role }
   },
   /**
    * 本机连接信息（局域网 IPv4 + 端口）。
@@ -223,22 +271,6 @@ const RemoteHubPage = createRemoteHubPageComponent({
   /** 出站状态变更后重新装配页面（整页重载，重置 RPC 通道）。 */
   reload() {
     globalThis.location?.reload()
-  },
-  async connect({ origin, secret }) {
-    const transport = createTransport({ origin })
-    const kind = classifyPairSecret(secret)
-    if (kind === null) throw new Error('pair-invalid：无法识别的配对凭据')
-    const issued = await transport.redeem({
-      ...(kind === 'ticket' ? { ticket: secret } : { code: secret }),
-      clientLabel: 'DSH 主控端',
-    })
-    return {
-      token: issued.token,
-      role: issued.role,
-      deviceId: issued.deviceId,
-      label: issued.deviceId,
-      ...(issued.displacedDevices === undefined ? {} : { displacedDevices: issued.displacedDevices }),
-    }
   },
   // ③ 运行指标（守卫 /remote/stats；旧版本 404 → 页面降级卡）。
   async stats() {
@@ -403,6 +435,15 @@ export function applyRemoteHubClient(ctx: Context, options: ClientAssemblyOption
         disposersNav.push(slots.register(
           { name: 'main', key: 'remote-hub' },
           RemoteHubPage,
+        ))
+      })
+
+      // 账号与信任：挂在**设置页**（`settings.section`），与运行面分开：
+      // 身份/口令/2FA/可信客户端属于配置，云端设备页只保留运行与连接。
+      declare('settings.section', () => {
+        disposersNav.push(slots.register(
+          { name: 'settings.section', id: 'remote-hub-account', order: 25, label: '登录与账号' },
+          AccountPage,
         ))
       })
       return () => { for (const dispose of [...disposersNav].reverse()) dispose() }

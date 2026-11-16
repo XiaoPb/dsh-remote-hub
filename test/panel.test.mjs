@@ -43,13 +43,8 @@ function baseState(overrides = {}) {
     guardError: null,
     devices: [],
     loading: false,
-    pairIssueToken: 'issue-token',
     role: 'control',
-    issued: null,
-    issuedCode: null,
-    autoReissue: true,
     originDraft: 'http://127.0.0.1:8443',
-    secretDraft: '',
     deviceFilter: 'all',
     stats: null,
     statsError: null,
@@ -66,30 +61,49 @@ function baseState(overrides = {}) {
 
 const noopActions = {
   onRefresh() {},
-  onRoleChange() {},
-  onIssue() {},
   onForgetDevice() {},
   onForgetOutbound() {},
   onRevoke() {},
   onRevokeAll() {},
   onOriginChange() {},
-  onSecretChange() {},
   onConnect() {},
+  onAccountChange() {},
+  onAccountConnect() {},
   onReconnect() {},
   onDetach() {},
   onCopy() {},
-  onScan() {},
-  onAutoReissueChange() {},
   onFilterChange() {},
   onConfigChange() {},
   onConfigSave() {},
+}
+
+/**
+ * 遍历一棵 React 元素树。
+ *
+ * 阶段 A 之后 `Section` / `Field` 会把**组件元素**（`Pill` / `Button` …）放在 props 里，
+ * 真正展开发生在 React 渲染期；这些测试不挂载 React。于是遍历器在 `children`
+ * 之外也下钻其它 props（跳过 `key` / `ref`）——组件元素的 props 本身就是它的输入，
+ * 页面的标题/操作区/选项 testid 都在那里。
+ * @param node - 元素或任意子树值。
+ * @param visit - 访问函数。
+ */
+function walkProps(node, visit) {
+  if (node === null || node === undefined || typeof node !== 'object') return
+  if (Array.isArray(node)) { for (const child of node) walkProps(child, visit); return }
+  if (node.$$typeof !== undefined && (node.props === null || node.props === undefined)) return
+  const props = node.$$typeof === undefined ? node : node.props
+  if (props === null || props === undefined || typeof props !== 'object') return
+  for (const [key, value] of Object.entries(props)) {
+    if (key === 'key' || key === 'ref' || value === undefined) continue
+    visit(value)
+  }
 }
 
 function collectText(node, out = []) {
   if (node === null || node === undefined || node === false) return out
   if (typeof node === 'string' || typeof node === 'number') { out.push(String(node)); return out }
   if (Array.isArray(node)) { for (const child of node) collectText(child, out); return out }
-  if (node.props && node.props.children !== undefined) collectText(node.props.children, out)
+  walkProps(node, value => collectText(value, out))
   return out
 }
 
@@ -97,7 +111,7 @@ function collectByTestId(node, testid, out = []) {
   if (node === null || node === undefined || node === false) return out
   if (Array.isArray(node)) { for (const child of node) collectByTestId(child, testid, out); return out }
   if (node.props?.['data-testid'] === testid) out.push(node)
-  if (node.props?.children !== undefined) collectByTestId(node.props.children, testid, out)
+  walkProps(node, value => collectByTestId(value, testid, out))
   return out
 }
 
@@ -123,7 +137,7 @@ describe('断开后的出站配对目标（保留卡片并支持重连）', () =
   })
 
   it('断开后配对目标卡显示重连按钮但不泄漏 token', async () => {
-    const { renderRemoteHubPage, classifyPairSecret } = await loadPage()
+    const { renderRemoteHubPage } = await loadPage()
     const token = 'SECRET_TOKEN_MUST_NOT_RENDER'
     const target = {
       origin: 'http://192.168.0.17:8443',
@@ -145,7 +159,6 @@ describe('断开后的出站配对目标（保留卡片并支持重连）', () =
     assert.ok(text.includes('debian'), '应显示目标名')
     assert.ok(text.includes(target.origin), '应显示目标地址')
     assert.equal(text.includes(token), false, '长期令牌绝不能渲染到 DOM 文案')
-    assert.equal(classifyPairSecret(token), null, '保存的长期 token 不是配对输入凭据')
   })
 
   it('重连按钮回调携带已配对目标（不要求重新扫码）', async () => {
@@ -303,33 +316,40 @@ describe('槽位注册契约（官方 inject 包装）', () => {
 
 describe('主题 token（语义化样式，外部可换肤）', () => {
   const PAGE_SRC = read(`${PATHS.clientSrc}/panel/RemoteHubPage.ts`)
+  const TOKENS_SRC = read(`${PATHS.clientSrc}/rhui/tokens.ts`)
 
-  it('样式只经 --rh-* 语义 token 引用，除二维码白底黑模块与 token 定义外无硬编码色值', () => {
-    // 允许：① THEME_CSS 常量内的 token 默认定义（唯一合法的字面色值位置）；
-    // ② QR 的 #fff/#000（扫码可用性要求）。其余十六进制色一律禁止。
-    const stripped = PAGE_SRC
-      .replace(/const THEME_CSS = `[\s\S]*?`/u, '')
-      .replace(/#fff\b/g, '').replace(/#000\b/g, '')
+  it('页面样式只经 --rh-* 语义 token 引用，无硬编码色值', () => {
+    // A 阶段起 token 定义整体迁到 `client/src/rhui/tokens.ts`（唯一允许字面色值的位置），
+    // 页面只剩 `var(--rh-*)` 引用；二维码白底黑模块仍留在页面里（扫码可用性要求）。
+    const stripped = PAGE_SRC.replace(/#fff\b/g, '').replace(/#000\b/g, '')
     assert.doesNotMatch(stripped, /#[0-9a-fA-F]{3,8}\b/, '发现硬编码色值，请改用 var(--rh-*)')
-    assert.match(PAGE_SRC, /const THEME_CSS = `[\s\S]*--rh-accent[\s\S]*?`/u, '缺 token 定义块')
+    assert.match(TOKENS_SRC, /--rh-accent:/u, 'tokens.ts 缺 token 定义块')
+    assert.match(PAGE_SRC, /ThemeStyle\(RH_CSS\)/u, '页面必须注入设计系统样式表')
   })
 
   it('注入主题样式：token 定义 + 明暗两套（data-theme 强制 + 系统偏好自动）', async () => {
     const { renderRemoteHubPage } = await loadPage()
     const tree = renderRemoteHubPage(baseState(), noopActions)
-    const styleNodes = collectByTestId(tree, 'remote-hub-page')[0].props.children
-      .filter(child => child?.props?.['data-rh-theme'] !== undefined)
+    const styleNodes = []
+    const scan = (node) => {
+      if (node === null || node === undefined || typeof node !== 'object') return
+      if (Array.isArray(node)) { for (const child of node) scan(child); return }
+      if (node.props?.['data-rh-theme'] !== undefined) styleNodes.push(node)
+      walkProps(node, scan)
+    }
+    scan(tree)
     assert.equal(styleNodes.length, 1, '主题 <style> 必须随页面注入')
     const css = String(styleNodes[0].props.children)
     assert.ok(css.includes('--rh-accent'), '缺核心 token 定义')
     assert.ok(css.includes('data-theme="dark"'), '缺 data-theme 暗色强制覆盖')
     assert.ok(css.includes('prefers-color-scheme: dark'), '缺系统暗色偏好自适应')
-    assert.ok(css.includes('@media (max-width: 639px)'), '缺手机断点')
-    assert.ok(css.includes('@media (max-width: 1023px)'), '缺平板断点')
+    // design-system §5 的三档断点：平板 <900、手机 <480。
+    assert.ok(css.includes('@media (max-width: 899px)'), '缺平板断点')
+    assert.ok(css.includes('@media (max-width: 479px)'), '缺手机断点')
   })
 })
 
-describe('四区结构（参考文档 ①令牌 ②设备 ③统计 ④配置）', () => {
+describe('区块结构（design-system §9：页头 + 区块 1–5）', () => {
   const SAMPLE_STATS = {
     startedAt: new Date(0).toISOString(),
     pairIssued: 3,
@@ -354,7 +374,7 @@ describe('四区结构（参考文档 ①令牌 ②设备 ③统计 ④配置）
     tunnelKind: 'none',
   }
 
-  it('四个分区 testid 都在（宿主支持全部数据源时）', async () => {
+  it('五个区块 testid 都在，且顺序固定（被控端 → 设备 → 主控端 → 统计 → 配置）', async () => {
     const { renderRemoteHubPage } = await loadPage()
     const tree = renderRemoteHubPage(baseState({
       stats: SAMPLE_STATS,
@@ -362,10 +382,11 @@ describe('四区结构（参考文档 ①令牌 ②设备 ③统计 ④配置）
       configDraft: SAMPLE_CONFIG,
       devices: [GUARD && { deviceId: 'dev_a', label: 'A', role: 'control', createdAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), revokedAt: null }],
     }), noopActions)
-    assert.equal(collectByTestId(tree, 'host-section').length, 1, '① 令牌区')
-    assert.equal(collectByTestId(tree, 'devices-section').length, 1, '② 设备区')
-    assert.equal(collectByTestId(tree, 'stats-section').length, 1, '③ 统计区')
-    assert.equal(collectByTestId(tree, 'config-section').length, 1, '④ 配置区')
+    assert.equal(collectByTestId(tree, 'host-section').length, 1, '区块 2 · 本机接入设备（被控端）')
+    assert.equal(collectByTestId(tree, 'devices-section').length, 1, '区块 2/3 · 设备总览')
+    assert.equal(collectByTestId(tree, 'client-section').length, 1, '区块 3 · 连接其他设备（主控端）')
+    assert.equal(collectByTestId(tree, 'stats-section').length, 1, '区块 5 · 统计')
+    assert.equal(collectByTestId(tree, 'config-section').length, 1, '区块 4 · 守卫状态 & 配置')
   })
 
   it('③ 统计区：统计卡 + 折线/柱状 + 热力图', async () => {
@@ -394,6 +415,8 @@ describe('四区结构（参考文档 ①令牌 ②设备 ③统计 ④配置）
     assert.equal(collectByTestId(tree, 'cfg-bridge').length, 1, '审批桥开关')
     assert.equal(collectByTestId(tree, 'cfg-role').length, 1, '角色下拉')
     assert.equal(collectByTestId(tree, 'cfg-attempts').length, 1, '尝试次数输入')
+    assert.equal(collectByTestId(tree, 'cfg-port').length, 1, '端口可编辑')
+    assert.equal(collectByTestId(tree, 'cfg-network').length, 1, '网络模式可编辑')
     assert.equal(collectByTestId(tree, 'config-save').length, 1, '保存按钮')
     const texts = collectText(tree)
     assert.ok(texts.some(t => t.includes('重启后生效')), '冷项标注')
@@ -437,8 +460,12 @@ describe('四区结构（参考文档 ①令牌 ②设备 ③统计 ④配置）
 
     const tree = renderRemoteHubPage(baseState(), noopActions)
     assert.equal(collectByTestId(tree, 'device-filter').length, 1)
-    const filters = collectByTestId(tree, 'filter')
-    assert.ok(filters.length >= 2, '全部/连接本机两个筛选')
+    // `Segmented` 是组件元素：选项 testid 在它的 props.options 里（渲染后才是按钮）。
+    const group = collectByTestId(tree, 'device-filter')[0]
+    const optionIds = group.type?.name === 'Segmented'
+      ? group.props.options.map(option => option.testId)
+      : collectByTestId(tree, 'filter').map(node => node.props['data-testid'])
+    assert.ok(optionIds.filter(id => id === 'filter').length >= 2, '全部/连接本机两个筛选')
   })
 
   it('② 三态文案与离线置灰', async () => {
@@ -453,30 +480,14 @@ describe('四区结构（参考文档 ①令牌 ②设备 ③统计 ④配置）
     const pills = collectByTestId(tree, 'device-status')
     const byStatus = new Map(pills.map(pill => [pill.props['data-status'], pill]))
     assert.ok(byStatus.has('connected'), '必须渲染「已连接」')
-    assert.ok(byStatus.has('paired'), '必须渲染「已配对」')
-    assert.ok(byStatus.has('invalid'), '必须渲染「配对失效」')
+    assert.ok(byStatus.has('paired'), '必须渲染「已信任（离线）」')
+    assert.ok(byStatus.has('invalid'), '必须渲染「已撤销」')
     const texts = collectText(tree)
     assert.ok(texts.includes('已连接'))
-    assert.ok(texts.includes('已配对'))
-    assert.ok(texts.includes('配对失效'))
+    assert.ok(texts.includes('已信任（离线）'))
+    assert.ok(texts.includes('已撤销'))
   })
 
-  it('① 过期自动重签开关存在且默认勾选', async () => {
-    const { renderRemoteHubPage } = await loadPage()
-    const tree = renderRemoteHubPage(baseState(), noopActions)
-    const boxes = collectByTestId(tree, 'auto-reissue')
-    assert.equal(boxes.length, 1)
-    assert.equal(boxes[0].props.checked, true)
-  })
-})
-
-describe('页面内容完整性（回归：早期版本只渲染标题+折叠项）', () => {
-  it('两个身份分区都在：本机（被控端）/ 连接其他设备（主控端）', async () => {
-    const { renderRemoteHubPage } = await loadPage()
-    const tree = renderRemoteHubPage(baseState(), noopActions)
-    assert.equal(collectByTestId(tree, 'host-section').length, 1, '被控端分区')
-    assert.equal(collectByTestId(tree, 'client-section').length, 1, '主控端分区')
-  })
 
   it('守卫状态可见：运行中/地址/协议/单控策略', async () => {
     const { renderRemoteHubPage } = await loadPage()
@@ -501,70 +512,12 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
     assert.equal(collectByTestId(tree, 'single-controller').length, 0)
   })
 
-  it('签发区：角色选择 + 生成二维码/短码', async () => {
-    const { renderRemoteHubPage } = await loadPage()
-    const tree = renderRemoteHubPage(baseState(), noopActions)
-    const roles = collectByTestId(tree, 'role')
-    assert.equal(roles.length, 3)
-    assert.equal(collectByTestId(tree, 'issue-ticket').length, 1)
-    assert.equal(collectByTestId(tree, 'issue-code').length, 1)
-  })
 
-  it('无签发凭据时给出明确原因（仍是完整文案，不是空白）', async () => {
-    const { renderRemoteHubPage } = await loadPage()
-    const tree = renderRemoteHubPage(baseState({ pairIssueToken: undefined }), noopActions)
-    assert.equal(collectByTestId(tree, 'pair-issue').length, 0)
-    assert.equal(collectByTestId(tree, 'pair-issue-unavailable').length, 1)
-  })
 
-  it('票据签发 → 渲染二维码 + 链接 + 倒计时', async () => {
-    const { renderRemoteHubPage } = await loadPage()
-    const tree = renderRemoteHubPage(baseState({
-      issued: { kind: 'ticket', value: 'a'.repeat(43), role: 'control', expiresAt: 1_000_000 + 120_000 },
-    }), noopActions)
-    assert.equal(collectByTestId(tree, 'pair-qr').length, 1, 'QR rendered')
-    const texts = collectText(tree)
-    assert.ok(texts.some(t => t.includes('#dshrh=')), 'link text')
-    assert.ok(texts.some(t => t.includes('剩余 120s')), 'countdown')
-    assert.equal(collectByTestId(tree, 'copy-link').length, 1)
-  })
 
-  it('短码签发 → 等宽短码 + 复制按钮；二维码显示占位（三件套始终可见）', async () => {
-    const { renderRemoteHubPage } = await loadPage()
-    const tree = renderRemoteHubPage(baseState({
-      issuedCode: { kind: 'code', value: 'ABCD2345', role: 'read-only', expiresAt: 1_000_000 + 600_000 },
-    }), noopActions)
-    const texts = collectText(tree)
-    assert.ok(texts.includes('ABCD2345'))
-    assert.equal(collectByTestId(tree, 'copy-code').length, 1)
-    // 只签发了短码时，二维码槽位显示占位并引导生成（而不是整块消失）。
-    assert.equal(collectByTestId(tree, 'pair-qr').length, 0, 'no QR without ticket')
-    assert.equal(collectByTestId(tree, 'qr-placeholder').length, 1, '二维码占位必须可见')
-  })
 
-  it('票据 + 短码并存 → 二维码、短码、链接同时展示', async () => {
-    const { renderRemoteHubPage } = await loadPage()
-    const tree = renderRemoteHubPage(baseState({
-      guard: {
-        host: '127.0.0.1', port: 8443, origin: 'http://192.168.0.106:8443',
-        protocolVersion: 1, singleController: true,
-      },
-      listenAddress: 'http://192.168.0.106:8443',
-      issued: { kind: 'ticket', value: 'a'.repeat(43), role: 'control', expiresAt: 1_000_000 + 15_000 },
-      issuedCode: { kind: 'code', value: 'ABCD2345', role: 'control', expiresAt: 1_000_000 + 15_000 },
-    }), noopActions)
-    assert.equal(collectByTestId(tree, 'pair-qr').length, 1, '二维码')
-    assert.equal(collectByTestId(tree, 'qr-placeholder').length, 0, '无占位')
-    assert.equal(collectByTestId(tree, 'issued-code').length, 1, '短码')
-    assert.equal(collectByTestId(tree, 'issued-link').length, 1, '链接')
-    const texts = collectText(tree)
-    assert.ok(texts.includes('ABCD2345'), '短码文本')
-    // 链接必须使用局域网地址，而不是回环地址。
-    assert.ok(texts.some(t => t.includes('192.168.0.106:8443#dshrh=')), '链接用局域网地址')
-    assert.equal(texts.some(t => t.includes('127.0.0.1:8443#dshrh=')), false, '不得用回环地址')
-  })
 
-  it('已配对设备：每行有「清除配对」，顶部有「清除全部」', async () => {
+  it('可信客户端：运行页只显示状态，权限与撤销指向设置页', async () => {
     const { renderRemoteHubPage } = await loadPage()
     const tree = renderRemoteHubPage(baseState({
       devices: [
@@ -572,12 +525,34 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
         { deviceId: 'd2', label: 'Old', role: 'full', lastSeenAt: null, revokedAt: '2026-01-01T00:00:00Z' },
       ],
     }), noopActions)
-    const revokes = collectByTestId(tree, 'revoke')
-    assert.equal(revokes.length, 1, '只有未吊销设备有清除按钮')
-    assert.equal(collectByTestId(tree, 'revoke-all').length, 1)
+    // 运行页不再提供撤销/删除：身份管理统一在设置页，避免两处都能改权限。
+    assert.equal(collectByTestId(tree, 'revoke').length, 0)
+    assert.equal(collectByTestId(tree, 'revoke-all').length, 0)
+    assert.equal(collectByTestId(tree, 'device-delete').length, 0)
+    assert.ok(collectByTestId(tree, 'manage-in-settings').length >= 1, '每张卡都指向设置页')
     const texts = collectText(tree)
     assert.ok(texts.some(t => t.includes('Pixel 9')))
-    assert.ok(texts.some(t => t.includes('配对失效')), '已吊销行显示「配对失效」')
+    assert.ok(texts.some(t => t.includes('已撤销')), '已吊销行显示「已撤销」')
+  })
+
+  it('账号认证模式：对端账号登录表单存在，空输入禁用，填写后可提交', async () => {
+    const { renderRemoteHubPage } = await loadPage()
+    const empty = renderRemoteHubPage(baseState(), noopActions)
+    assert.equal(collectByTestId(empty, 'account-user').length, 1)
+    assert.equal(collectByTestId(empty, 'account-password').length, 1)
+    assert.equal(collectByTestId(empty, 'account-code').length, 1)
+    assert.equal(collectByTestId(empty, 'account-role').length, 1)
+    assert.equal(collectByTestId(empty, 'account-connect')[0].props.disabled, true, '空草稿不可提交')
+
+    let calls = 0
+    const filled = renderRemoteHubPage(baseState({
+      originDraft: 'http://peer.test:8443',
+      accountDraft: { username: 'admin', password: 'Secret-Pass-1!', code: '123456', role: 'control' },
+    }), { ...noopActions, onAccountConnect() { calls += 1 } })
+    const button = collectByTestId(filled, 'account-connect')[0]
+    assert.equal(button.props.disabled, false, '填好后可提交')
+    button.props.onClick()
+    assert.equal(calls, 1)
   })
 
   it('页头独立吸顶，卡片标题不参与跨卡片滚动', async () => {
@@ -585,19 +560,20 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
     const tree = renderRemoteHubPage(baseState(), noopActions)
     const title = collectByTestId(tree, 'page-title')[0]
     assert.equal(collectByTestId(tree, 'remote-hub-page')[0].props.style, undefined)
-    assert.equal(title.props.className, 'rh-page-title')
+    // A 阶段起 `<h1>` 同时带设计系统字号类（`rh-h1`），页面自己的标识类仍保留。
+    assert.match(String(title.props.className), /\brh-page-title\b/u)
     assert.equal(collectByTestId(tree, 'host-section')[0].props['data-sticky-header'], undefined)
     assert.equal(collectByTestId(tree, 'devices-section')[0].props['data-sticky-header'], undefined)
   })
 
-  it('清除全部只进入既有动作的一次确认流程', async () => {
+  it('运行页不提供批量撤销（撤销在设置页逐个进行）', async () => {
     const { renderRemoteHubPage } = await loadPage()
-    let called = 0
     const tree = renderRemoteHubPage(baseState({ devices: [
       { deviceId: 'd1', label: 'Pixel', revokedAt: null },
-    ] }), { ...noopActions, onRevokeAll() { called += 1 } })
-    collectByTestId(tree, 'revoke-all')[0].props.onClick()
-    assert.equal(called, 1)
+    ] }), noopActions)
+    assert.equal(collectByTestId(tree, 'revoke-all').length, 0)
+    // 提示文案指向设置页的账号管理。
+    assert.ok(collectText(tree).some(t => t.includes('登录与账号')))
   })
 
   it('已配对目标卡的连接为主操作，删除与其分开', async () => {
@@ -610,13 +586,13 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
     assert.match(collectByTestId(card, 'outbound-delete')[0].props.className, /danger/)
   })
 
-  it('已配对设备都提供删除入口，确认后由 Host 撤销并移除设备记录', async () => {
+  it('运行页不再提供设备删除入口（撤销与删除记录统一在设置页）', async () => {
     const { renderRemoteHubPage } = await loadPage()
     const tree = renderRemoteHubPage(baseState({ devices: [
       { deviceId: 'd1', label: 'Active', role: 'control', revokedAt: null, lastSeenAt: new Date().toISOString() },
       { deviceId: 'd2', label: 'Stale', role: 'full', revokedAt: '2026-01-01T00:00:00Z', lastSeenAt: null },
     ] }), noopActions)
-    assert.equal(collectByTestId(tree, 'device-delete').length, 2)
+    assert.equal(collectByTestId(tree, 'device-delete').length, 0)
   })
 
   it('守卫诊断使用可换行的响应式网格容器', async () => {
@@ -648,29 +624,8 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
     assert.ok(texts.some(t => t.includes('☁ PC-01')))
   })
 
-  it('主控端提供「扫码」按钮（拉起摄像头）', async () => {
-    const { renderRemoteHubPage } = await loadPage()
-    const tree = renderRemoteHubPage(baseState(), noopActions)
-    const scan = collectByTestId(tree, 'scan')
-    assert.equal(scan.length, 1, 'scan button rendered')
-    assert.ok(String(scan[0].props['aria-label']).includes('摄像头'))
-  })
 
-  it('地址栏粘贴完整配对链接时拆分为地址和票据', async () => {
-    const { connectionAddressDraft } = await loadPage()
-    const link = `http://192.168.0.17:8443#dshrh=${'a'.repeat(43)}`
-    assert.deepEqual(connectionAddressDraft(link), { origin: 'http://192.168.0.17:8443', secret: 'a'.repeat(43) })
-    assert.deepEqual(connectionAddressDraft('http://192.168.0.17:8443'), { origin: 'http://192.168.0.17:8443' })
-    assert.deepEqual(connectionAddressDraft('invalid'), { origin: 'invalid' })
-  })
 
-  it('非法输入禁用连接并给内联提示', async () => {
-    const { renderRemoteHubPage } = await loadPage()
-    const tree = renderRemoteHubPage(baseState({ secretDraft: 'xx', originDraft: 'not a url' }), noopActions)
-    assert.equal(collectByTestId(tree, 'secret-invalid').length, 1)
-    assert.equal(collectByTestId(tree, 'origin-invalid').length, 1)
-    assert.equal(collectByTestId(tree, 'connect')[0].props.disabled, true)
-  })
 
   it('错误信息渲染为 alert', async () => {
     const { renderRemoteHubPage } = await loadPage()
@@ -682,13 +637,6 @@ describe('页面内容完整性（回归：早期版本只渲染标题+折叠项
 })
 
 describe('纯函数契约', () => {
-  it('classifyPairSecret：Crockford 短码 / 票据 / 非法', async () => {
-    const { classifyPairSecret } = await loadPage()
-    assert.equal(classifyPairSecret('ABCD2345'), 'code')
-    assert.equal(classifyPairSecret('ABCDI345'), null)
-    assert.equal(classifyPairSecret('a'.repeat(43)), 'ticket')
-    assert.equal(classifyPairSecret('short'), null)
-  })
 
   it('normalizeOrigin：接受 http(s) 裸地址，拒绝路径/凭据/非 http', async () => {
     const { normalizeOrigin } = await loadPage()
@@ -699,13 +647,6 @@ describe('纯函数契约', () => {
     assert.equal(normalizeOrigin('http://x/path'), undefined)
   })
 
-  it('配对链接可往返：buildPairLink → parsePairLink', async () => {
-    const { buildPairLink, parsePairLink } = await loadPage()
-    const link = buildPairLink('http://127.0.0.1:8443', 'a'.repeat(43))
-    assert.deepEqual(parsePairLink(link), { origin: 'http://127.0.0.1:8443', secret: 'a'.repeat(43) })
-    assert.equal(parsePairLink('plain code'), null)
-    assert.equal(parsePairLink('http://x#dshrh=nope'), null, '非法票据视为无效')
-  })
 
   it('remainingSeconds：向上取整且不为负', async () => {
     const { remainingSeconds } = await loadPage()

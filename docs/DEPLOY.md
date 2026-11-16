@@ -45,7 +45,7 @@ dsh plugin --profile web list
 
 ### 1.1 版本与兼容门
 
-当前插件版本为 `0.3.6`。
+当前插件版本为 `0.5.0`。
 `package.json` 的 `engines.dsh` 是**唯一**被 DSH 读取的兼容门：
 
 ```jsonc
@@ -101,6 +101,30 @@ dsh plugin --profile web list
 - 一元调用不是「代理到 upstream」，而是守卫用 `peer` 身份走
   `ctx.connection.createSharedFetchHandler('/api').fetch(request, peer)` 在进程内派发。
 - HTTP RPC 与 WebSocket mux 使用同一设备身份和角色策略；`hub/stream.*` 长轮询方法保留为受支持的辅助/兼容通道。
+
+### 3.1 浏览器直连（0.5.0+）
+
+用户只拿浏览器时（手机、平板、临时设备），走守卫托管的官方界面：
+
+```
+浏览器 ── Cookie ──► 守卫 :8443 ── 进程内 ──► DSH connection/Gateway
+                                    （remote-device 身份）
+官方 :3080 ── 始终只绑 127.0.0.1，不对外
+```
+
+要点：
+
+- 需要 `accountAuth.enabled: true`（账号体系）。
+- 需要 `connection.trustedHosts` 含**一个非回环 authority**，否则 DSH 的
+  `directory-picker-auto` 会挂 `native` 后端 —— 浏览器点「新建工作区」
+  会去拉浏览器本地的文件夹对话框，或无桌面时干脆没反应。
+- **认证在读 body 之前**：未登录 `/api/*` 直接 401，零字节转发。
+- WebSocket `/api/remote.mux` 同样走 Cookie 认证；反向代理必须透传升级，
+  否则页面能打开但功能全空。
+
+首次配置在无图形界面的服务器上要走 SSH 隧道到 `:3080`（TOTP 只能在首次
+登录向导里绑定）。完整步骤、反向代理样例与排查表见
+**[BROWSER-GATEWAY.md](BROWSER-GATEWAY.md)**。
 
 ## 4. provider 选型
 

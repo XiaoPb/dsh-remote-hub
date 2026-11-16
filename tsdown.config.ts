@@ -47,6 +47,7 @@ const PKG_ID = (
 const HOST_CORE = fileURLToPath(new URL('./.build/host/core/src/', import.meta.url))
 const CLIENT_CORE = fileURLToPath(new URL('./.build/client/core/src/', import.meta.url))
 const HOST_ENTRY = fileURLToPath(new URL('./.build/host/host/src/index.js', import.meta.url))
+const AUTH_ENTRY = fileURLToPath(new URL('./.build/host/host/src/auth-entry.js', import.meta.url))
 const CLIENT_ENTRY = fileURLToPath(new URL('./.build/client/client/src/index.js', import.meta.url))
 
 /** `@core/x.js` → emit 后的 core 目录。 */
@@ -93,6 +94,20 @@ export default defineConfig([
     outputOptions: { entryFileNames: 'index.js' },
   },
   {
+    name: 'dsh-remote-hub/auth',
+    entry: { auth: AUTH_ENTRY },
+    outDir: 'lib',
+    format: 'esm',
+    platform: 'node',
+    target: 'es2024',
+    fixedExtension: false,
+    dts: false,
+    clean: false,
+    alias: aliasFor(HOST_CORE),
+    deps: { neverBundle: nodeExternal, alwaysBundle: (s: string) => !nodeExternal(s) },
+    outputOptions: { entryFileNames: 'auth.js' },
+  },
+  {
     // 第一段：carrier 独立 IIFE（bundle 顶层执行）。必须先于 client 打包。
     name: 'dsh-remote-hub/carrier-boot',
     entry: { 'carrier-boot': fileURLToPath(new URL('./.build/client/client/src/carrier-entry.js', import.meta.url)) },
@@ -131,7 +146,14 @@ export default defineConfig([
     // 「never bundle = 一律 external」的判定函数，相对路径也会被误判成 external，
     // 于是 `require("css-modules.js")` 这类裸名被留在了 bundle 里（2026-11-14 实测）。
     // `external` 是纯 allowlist：只外置明确列出的框架包，其余（含所有相对路径）全部内联。
-    deps: { external: browserExternal },
+    // `external` 是 allowlist，但 tsdown 仍会把 package.json 的 `dependencies`
+    // 默认当成 external（第三方库不进 bundle）——浏览器侧的模块表没有它，
+    // 运行时会报 `require("qrcode-generator") missed the module table`。
+    // 所以这里**显式**要求把第三方运行时依赖内联进 client bundle。
+    // 与 host 侧同一语义：`alwaysBundle` 返回 true 的 specifier 会被内联。
+    // 浏览器侧的模块表只认识框架包与已物化的模块，第三方依赖必须进 bundle，
+    // 否则运行时报 `require("qrcode-generator") missed the module table`。
+    deps: { alwaysBundle: (specifier: string) => !browserExternal(specifier) },
     outputOptions: {
       entryFileNames: 'client.js',
       // Window guard first: the desktop host's node half imports this file while

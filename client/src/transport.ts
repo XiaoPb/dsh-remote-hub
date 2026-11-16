@@ -28,8 +28,11 @@ import {
   STREAM_BUDGET,
   hubEndpoint,
 } from '@core/protocol.js'
-import type { IssuedDeviceToken } from '@core/device.js'
+import type { IssuedClientLease, IssuedDeviceToken } from '@core/device.js'
+import type { ClientPublicKeyJwk } from '@core/auth.js'
 import type { RoleName } from '@core/roles.js'
+
+import type { AuthSigner } from './auth/session.js'
 
 /** 官方 `client-request` 信封。 */
 export interface ClientRequestEnvelope {
@@ -170,6 +173,15 @@ export interface TransportOptions {
    * 设为空字符串可强制关闭（仅用于测试守卫直连路径）。
    */
   adminChannel?: string
+  /**
+   * 账号认证签名器（`client/src/auth/session.ts`）。
+   *
+   * 给出时：每个 Hub 请求都附带「租约 + 客户端签名」，**不再**发送设备令牌。
+   * 与 `token` 互斥——账号认证模式下长期 bearer 令牌在服务端也会被拒绝。
+   */
+  signer?: AuthSigner
+  /** 租约到期前的后台轮换（默认启用；需要 `signer`）。 */
+  autoRenew?: boolean
 }
 
 /** 一条已配对设备（守卫 `/remote/devices` 的返回行）。 */
@@ -214,11 +226,6 @@ export interface RemoteTransport {
   /** 开始轮询循环；返回停止函数。 */
   subscribe(onEvent: (frame: unknown) => void): () => void
   /** 兑换票据/短码。 */
-  redeem(input: { ticket?: string; code?: string; clientLabel: string }): Promise<IssuedDeviceToken>
-  /** 签发 QR 票据（本机）。 */
-  issueTicket(role: RoleName): Promise<{ ticket: string; expiresAt: number; role: RoleName }>
-  /** 签发短码（本机）。 */
-  issueCode(role: RoleName): Promise<{ code: string; expiresAt: number; role: RoleName }>
   /** 健康检查。 */
   health(): Promise<{ ok: boolean; protocolVersion: number }>
   /** 守卫健康与实例信息（同源管理面；桌面端唯一可用路径）。 */
@@ -227,14 +234,6 @@ export interface RemoteTransport {
     protocolVersion: number
     guard: { origin: string; loopbackOrigin: string; port: number }
     singleController: boolean
-  }>
-  /** 同源签发配对凭据（桌面端「生成二维码/短码」的唯一可用路径）。 */
-  adminIssue(input: { kind: 'ticket' | 'code'; role: RoleName }): Promise<{
-    ok: true
-    kind: 'ticket' | 'code'
-    value: string
-    expiresAt: number
-    role: string
   }>
   /** 本机对外监听信息（局域网 IPv4 + 端口；来自 admin.endpoints）。 */
   endpoints(): Promise<{
@@ -249,7 +248,19 @@ export interface RemoteTransport {
   /** 把页面出站状态写回磁盘（返回写入后的 mtime）。 */
   carrierWrite(mode: Record<string, unknown>): Promise<number>
   listOutboundTargets(): Promise<readonly OutboundTargetView[]>
-  saveOutboundTarget(target: { origin: string; token: string; deviceLabel?: string; deviceId?: string; role?: string; pairedAt?: number; lastConnectedAt?: number }): Promise<OutboundTargetView>
+  saveOutboundTarget(target: {
+    origin: string
+    /** 旧版 bearer（账号模式不需要）。 */
+    token?: string
+    /** 账号认证模式的目标：凭据在浏览器（私钥 + 租约），档案只留客户端 id。 */
+    account?: boolean
+    accountId?: string
+    deviceLabel?: string
+    deviceId?: string
+    role?: string
+    pairedAt?: number
+    lastConnectedAt?: number
+  }): Promise<OutboundTargetView>
   activateOutboundTarget(targetId: string): Promise<number>
   forgetOutboundTarget(targetId: string): Promise<boolean>
   /** 列出本机已配对设备（需要 pairIssueToken；仅回环页面可用）。 */
@@ -343,6 +354,32 @@ export function createTransport(options: TransportOptions): RemoteTransport {
     ...(token === undefined ? {} : { [AUTH_HEADER]: `${BEARER_SCHEME} ${token}` }),
   })
 
+  /**
+   * 认证头：账号认证模式下由签名器生成（租约 + 签名），否则退回设备令牌。
+   * @param path - 请求路径（签名只覆盖 pathname）。
+   * @param method - HTTP 方法。
+   * @param body - 请求正文。
+   * @returns 要合并进请求的头。
+   */
+  const authHeadersFor = async (path: string, method: string, body: string): Promise<Record<string, string>> => {
+    if (options.signer !== undefined) {
+      return options.signer.headers({ method, path, body })
+    }
+    return token === undefined ? {} : { [AUTH_HEADER]: `${BEARER_SCHEME} ${token}` }
+  }
+
+  // 租约到期前静默轮换：7 天周期，用户不会被要求重新登录/重输 2FA。
+  if (options.signer !== undefined && options.autoRenew !== false) {
+    const timer = setInterval(() => {
+      if (closed) return
+      if (!options.signer!.needsRenewal()) return
+      void options.signer!.renew().catch(() => {
+        // 轮换失败（例如客户端已被撤销）由下一次请求的 401 处理。
+      })
+    }, 60 * 60 * 1000)
+    ;(timer as { unref?: () => void }).unref?.()
+  }
+
   const handleUnauthorized = (): void => {
     token = undefined
     if (unauthorizedCalled) return
@@ -403,7 +440,11 @@ export function createTransport(options: TransportOptions): RemoteTransport {
     try {
       response = await fetchImpl(url, {
         method: init.method,
-        headers: { ...baseHeaders(), ...(init.headers ?? {}) },
+        headers: {
+          ...baseHeaders(),
+          ...(await authHeadersFor(path, init.method, init.body ?? '')),
+          ...(init.headers ?? {}),
+        },
         ...(init.body === undefined ? {} : { body: init.body }),
       })
     } catch (cause) {
@@ -730,73 +771,6 @@ export function createTransport(options: TransportOptions): RemoteTransport {
       })()
       return () => loop.stop()
     },
-    async redeem(input) {
-      const { status, text } = await rawFetch(GUARD_ROUTES.pair, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          ...(input.ticket === undefined ? {} : { ticket: input.ticket }),
-          ...(input.code === undefined ? {} : { code: input.code }),
-          clientLabel: input.clientLabel,
-        }),
-      })
-      let parsed: Record<string, unknown>
-      try { parsed = JSON.parse(text) as Record<string, unknown> } catch {
-        throw new RemoteHubError(ERROR_CODES.internal, 'malformed pairing response', status)
-      }
-      if (status !== 200) {
-        const code = typeof (parsed.result as { error?: { code?: unknown } } | undefined)?.error?.code === 'string'
-          ? (parsed.result as { error: { code: string } }).error.code
-          : (typeof parsed.error === 'object' && parsed.error !== null
-            ? String((parsed.error as { code?: unknown }).code ?? ERROR_CODES.pairInvalid)
-            : ERROR_CODES.pairInvalid)
-        throw new RemoteHubError(code, 'pairing credential rejected', status)
-      }
-      const issued = parsed as unknown as IssuedDeviceToken
-      token = issued.token
-      unauthorizedCalled = false
-      options.onAccessSnapshot?.({ role: issued.role })
-      return issued
-    },
-    async issueTicket(role) {
-      if (options.adminChannel !== '') {
-        // 同源优先：桌面页面无法跨协议访问守卫。
-        const issued = await adminCall<{ ok: true; kind: string; value: string; expiresAt: number; role: string }>(
-          hubEndpoint(HUB_METHODS.adminIssue),
-          { kind: 'ticket', role },
-        )
-        return { ticket: issued.value, expiresAt: issued.expiresAt, role: issued.role as RoleName }
-      }
-      const { status, text } = await rawFetch(GUARD_ROUTES.pairTicket, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-pair-issue-token': options.pairIssueToken ?? '',
-        },
-        body: JSON.stringify({ role }),
-      })
-      if (status !== 200) throw new RemoteHubError(ERROR_CODES.forbidden, 'pairing issue refused', status)
-      return JSON.parse(text) as { ticket: string; expiresAt: number; role: RoleName }
-    },
-    async issueCode(role) {
-      if (options.adminChannel !== '') {
-        const issued = await adminCall<{ ok: true; kind: string; value: string; expiresAt: number; role: string }>(
-          hubEndpoint(HUB_METHODS.adminIssue),
-          { kind: 'code', role },
-        )
-        return { code: issued.value, expiresAt: issued.expiresAt, role: issued.role as RoleName }
-      }
-      const { status, text } = await rawFetch(GUARD_ROUTES.pairCode, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-pair-issue-token': options.pairIssueToken ?? '',
-        },
-        body: JSON.stringify({ role }),
-      })
-      if (status !== 200) throw new RemoteHubError(ERROR_CODES.forbidden, 'pairing issue refused', status)
-      return JSON.parse(text) as { code: string; expiresAt: number; role: RoleName }
-    },
     async health() {
       const { status, text } = await rawFetch(GUARD_ROUTES.health, { method: 'GET' })
       if (status !== 200) throw new RemoteHubError(ERROR_CODES.internal, 'health check failed', status)
@@ -816,13 +790,6 @@ export function createTransport(options: TransportOptions): RemoteTransport {
         guard: { origin, loopbackOrigin: origin, port: Number(new URL(origin || 'http://127.0.0.1:8443').port) },
         singleController: true,
       }
-    },
-    async adminIssue(input) {
-      // 同源通道：owner 页面专用，不需要 pin（也不需要跨协议 fetch）。
-      return adminCall(hubEndpoint(HUB_METHODS.adminIssue), {
-        kind: input.kind,
-        role: input.role,
-      })
     },
     async endpoints() {
       return adminCall(hubEndpoint(HUB_METHODS.adminEndpoints), {})

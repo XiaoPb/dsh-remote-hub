@@ -70,8 +70,9 @@ describe('同源管理面服务契约', () => {
       new URL('../host/src/services/index.ts', import.meta.url),
       'utf8',
     )
+    // `admin.issue` 常量与方法已随邀请链路删除（P4 阶段 B）。
     for (const marker of [
-      "admin.health", "admin.devices", "admin.deviceForget", "admin.stats", "admin.config", "admin.configPatch", "admin.issue",
+      "admin.health", "admin.devices", "admin.deviceForget", "admin.stats", "admin.config", "admin.configPatch",
     ]) {
       assert.ok(
         source.includes(`@Remote('${marker}')`),

@@ -41,10 +41,10 @@ function baseState(overrides = {}) {
   return {
     mode: { mode: 'local' },
     guard: { host: '127.0.0.1', port: 8443, origin: 'http://h:8443', protocolVersion: 1, singleController: true },
-    guardError: null, devices: [], loading: false, autoReissue: true, pairIssueToken: 'p',
-    originDraft: '', secretDraft: '', deviceFilter: 'all', stats: null, statsError: null,
+    guardError: null, devices: [], loading: false, pairIssueToken: 'p',
+    originDraft: '', deviceFilter: 'all', stats: null, statsError: null,
     config: null, configDraft: null, configSaving: false, configSavedAt: null,
-    busy: null, error: null, issued: null, issuedCode: null, now: 1_000_000_000,
+    busy: null, error: null, now: 1_000_000_000,
     injection: { hasPin: true, instanceId: 'i', pid: 1, injectedAt: '', protocolVersion: 1 },
     diagnostic: null, logs: [], retry: { attempts: 0, nextRetryAt: null },
     ...overrides,
@@ -134,8 +134,8 @@ describe('状态只用标签表达（不堆叠文字说明）', () => {
 
     const texts = collectText(tree)
     assert.ok(texts.includes('已连接'))
-    assert.ok(texts.includes('已配对'))
-    assert.ok(texts.includes('配对失效'))
+    assert.ok(texts.includes('已信任（离线）'))
+    assert.ok(texts.includes('已撤销'))
 
     // 不应出现任何解释性长文案
     const all = texts.join('')

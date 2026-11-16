@@ -22,13 +22,15 @@
  *
  * @module dsh-remote-hub/host/guard
  */
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { networkInterfaces } from 'node:os'
 
 import {
   AUTH_HEADER,
+  AUTH_HEADERS,
+  AUTH_ROUTES,
   BEARER_SCHEME,
   ERROR_CODES,
   GUARD_ROUTES,
@@ -36,8 +38,10 @@ import {
   LIMITS,
   PROTOCOL_VERSION,
   STREAM_BUDGET,
+  type AuthHttpSurface,
+  type HubAuthPort,
 } from '@core/index.js'
-import { isRoleName } from '@core/roles.js'
+import { isRoleName, type RoleName } from '@core/roles.js'
 
 import type { Config } from './config.js'
 import { assertBindableHost, isPrivateAddress } from './config.js'
@@ -46,7 +50,6 @@ import { createGuardWsRoute } from './guard-ws.js'
 import type { Dispatcher } from './dispatch.js'
 import { checkLoopback, checkPrivatePeer, checkSource, isLoopbackHostname, type FenceRequest } from './fence.js'
 import type { HubMetrics, MetricsCollector } from './metrics.js'
-import type { PairingService } from './pairing.js'
 import type { TokenService } from './token.js'
 
 /** 注入到 index 页的全局名（host 的 `webserver/index-inject` 会写这一行）。 */
@@ -88,7 +91,6 @@ export interface GuardHandle {
 export interface GuardDeps {
   config: Config
   tokens: TokenService
-  pairing: PairingService
   dispatcher: Dispatcher
   /** 设备表（设备管理路由要列/吊销；不经过 Peer 与 decide()）。 */
   devices: DeviceStore
@@ -127,7 +129,70 @@ export interface GuardDeps {
     admit: (request: IncomingMessage, device: { deviceId: string; role: string }) =>
       { peer: unknown; release: () => Promise<void> } | { rejection: unknown }
   }
+  /**
+   * 浏览器入口（方案 A）：官方 Web 的静态外壳 + 反代。
+   *
+   * **必须排在路由白名单检查之前**：`/`、`/assets/*`、`/plugins/*` 都不在
+   * `GUARD_ROUTES` 的精确集合里，晚于白名单就会被 404 掉。
+   * 缺省时不托管浏览器入口（保持只做数据面的旧行为）。
+   */
+  web?: {
+    /** true = 已处理；false = 不是本模块的路径。永不 reject。 */
+    handle(req: IncomingMessage, res: ServerResponse): Promise<boolean>
+  }
+  /**
+   * 浏览器登录面（方案 A）：`/remote-web/login` 与 `/remote-web/mfa`。
+   *
+   * 与数据面的令牌/签名认证并列，专供**浏览器**使用 HttpOnly Cookie。
+   * 缺省时不挂载（API 客户端仍走原有的签名路径）。
+   */
+  webAuth?: {
+    /** 登录页 HTML 与两个端点的路径前缀（例如 /remote-web）。 */
+    basePath: string
+    /** GET 登录页。 */
+    page(): string
+    /** POST 口令步骤。 */
+    login(username: string, password: string): Promise<{
+      ok: boolean
+      mfaRequired?: boolean
+      mfaToken?: string
+      expiresAt?: number
+      code?: string
+      message?: string
+    }>
+    /** POST 动态码步骤；成功时给出完整的 Set-Cookie 行。 */
+    mfa(mfaToken: string, code: string): Promise<{ ok: boolean, setCookie?: string, code?: string, message?: string }>
+    /** 从请求 Cookie 里取出会话令牌（数据面复用）。 */
+    readCookie(req: IncomingMessage): string | undefined
+    /** 会话令牌是否有效（交给认证服务判定）。 */
+    readSession(token: string): Promise<unknown> | unknown
+    /**
+     * 该账号在浏览器模式下的角色上限。
+     *
+     * 浏览器不像控制端那样登记自己的客户端密钥，所以角色取自账号本身
+     * （管理员=full）；返回 `undefined` 时按最小权限处理。
+     */
+    roleOf?(accountId: string): RoleName | undefined
+  }
+  /**
+   * 账号认证端口（认证插件 `provide('remoteHubAuth')`）。
+   *
+   * 给出时：RPC 与 WS 一律走「租约 + 客户端签名 / 一次性升级票据」，
+   * **不再**接受长期 bearer 设备令牌（旧令牌不会静默升级为受信客户端）。
+   * 缺省时维持旧的设备令牌路径（兼容已有部署与测试）。
+   */
+  auth?: HubAuthPort
+  /**
+   * 认证面的 HTTP 处理器（认证插件提供）。
+   *
+   * 给出时守卫把自己的 `/remote-auth/*` 也开出来：控制端可跨源完成
+   * 「账号 + TOTP → 登记客户端公钥」，随后用租约 + 签名访问 Hub。
+   */
+  authHttp?: AuthHttpSurface
 }
+
+/** 一次性 WS 升级票据的 TTL（秒级短窗：只能换一次握手）。 */
+export const WS_TICKET_TTL_MS = 30_000
 
 /**
  * 配置存取（config 路由依赖；由 plugin.ts 提供，测试可注入桩）。
@@ -149,6 +214,21 @@ interface GuardError {
 
 function failure(code: string, status: number, message: string): GuardError {
   return { code, status, message }
+}
+
+/** 请求体 sha256（十六进制小写）——与客户端签名覆盖的摘要口径一致。 */
+function sha256Hex(buffer: Buffer): string {
+  return createHash('sha256').update(buffer).digest('hex')
+}
+
+/** 只取认证相关请求头（其余头不参与签名判定）。 */
+function proofHeadersOf(req: IncomingMessage): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {}
+  for (const name of Object.values(AUTH_HEADERS)) {
+    const value = req.headers[name]
+    out[name] = typeof value === 'string' ? value : undefined
+  }
+  return out
 }
 
 /**
@@ -203,6 +283,22 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** 读取请求体，超出上限即拒（防令牌洪泛 / 超大 body）。 */
+
+/**
+ * 读一个 JSON 请求体（浏览器登录面用）。
+ *
+ * 失败时返回 `null` 而不是抛错：调用方按「参数非法」回 400，
+ * 不让畸形 body 变成 500。
+ *
+ * @param req - 请求。
+ * @returns 解析后的对象，或 null。
+ */
+async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | null> {
+  const body = await readBody(req, 64 * 1024)
+  if (body === null) return null
+  const parsed = parseJson(body.toString('utf8'))
+  return isPlainObject(parsed) ? parsed : null
+}
 async function readBody(req: IncomingMessage, limit: number): Promise<Buffer | null> {
   const chunks: Buffer[] = []
   let size = 0
@@ -318,12 +414,40 @@ export function primaryLanAddress(): string | undefined {
  */
 export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
   const config = deps.config
+
+  /**
+   * 一次性 WS 升级票据表：`ticket → { identity, expiresAt }`。
+   *
+   * 只在内存里（守卫重启即清空，符合「一次握手」语义）；消费即删除，重放无效。
+   * 这样长期租约不会出现在 URL / 代理日志里。
+   */
+  const wsTickets = new Map<string, { deviceId: string; role: RoleName; expiresAt: number }>()
+
+  function issueWsTicket(identity: { deviceId: string; role: RoleName }): { ticket: string; expiresAt: number } {
+    const now = Date.now()
+    for (const [key, value] of wsTickets) {
+      if (value.expiresAt <= now) wsTickets.delete(key)
+    }
+    const ticket = randomBytes(32).toString('base64url')
+    const expiresAt = now + WS_TICKET_TTL_MS
+    wsTickets.set(ticket, { ...identity, expiresAt })
+    return { ticket, expiresAt }
+  }
+
+  function consumeWsTicket(ticket: string): { deviceId: string; role: RoleName } | null {
+    const entry = wsTickets.get(ticket)
+    if (entry === undefined) return null
+    wsTickets.delete(ticket)
+    if (entry.expiresAt <= Date.now()) return null
+    return { deviceId: entry.deviceId, role: entry.role }
+  }
   assertBindableHost(config.guardHost, config.network)
   const protocolHeader = String(PROTOCOL_VERSION)
   // 进程内随机，只注入本机 index 页。隧道拿不到它，所以即便隧道在本机终止、
   // socket 地址恒为回环、且伪造了 Host 头，也过不了签发端（§9.3 第 1 条的补强）。
   const pairIssueToken = deps.pairIssueToken ?? randomBytes(32).toString('base64url')
-  const limiter = new RedeemLimiter(LIMITS.pairRedeemPerMinute)
+  /** 认证面（login/mfa/bootstrap）的来源限流：与配对预算分开计。 */
+  const authLimiter = new RedeemLimiter(LIMITS.pairRedeemPerMinute)
   const rpcSlots = new DeviceSemaphore(LIMITS.maxInflightRequestsPerDevice)
   const protocol = 'http:' as const
   const sockets = new Set<import('node:net').Socket>()
@@ -350,12 +474,16 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
     try {
       const url = new URL(origin)
       allowed = (url.protocol === 'http:' || url.protocol === 'https:')
-        && isLoopbackHostname(url.hostname)
+        && (isLoopbackHostname(url.hostname)
+          // 显式声明的跨机 origin（与来源围栏同一份白名单）：只放行这两个头，
+          // 不因为 CORS 而放宽认证判定。
+          || config.allowedOrigins.includes(origin))
     } catch {
       allowed = false
     }
     if (!allowed) return false
     res.setHeader('access-control-allow-origin', origin)
+    res.setHeader('access-control-allow-credentials', 'true')
     res.setHeader('vary', 'Origin')
     return true
   }
@@ -395,12 +523,39 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
     GUARD_ROUTES.devicesRevoke,
     GUARD_ROUTES.stats,
     GUARD_ROUTES.config,
-    GUARD_ROUTES.pairTicket,
-    GUARD_ROUTES.pairCode,
   ])
 
   const audit = (event: string, fields: Record<string, unknown>): void => {
     deps.audit?.(event, fields)
+  }
+
+  /**
+   * 账号认证模式的单控：某个客户端开始控制时，把其它客户端标记为「被挤下线」。
+   *
+   * 旧流程只在**邀请兑换**时挤压设备记录；账号模式没有兑换这一步，所以必须
+   * 在认证通过后自己执行，否则「单控已启用」只是页面文案（P2）。
+   * 60 秒去抖：同一客户端的连续请求不重复写盘/断连。
+   */
+  const lastAuthSessionStart = new Map<string, number>()
+  const enforceSingleController = async (clientId: string): Promise<readonly string[]> => {
+    if (!config.singleController || deps.auth === undefined) return []
+    const at = Date.now()
+    const previous = lastAuthSessionStart.get(clientId) ?? 0
+    lastAuthSessionStart.set(clientId, at)
+    if (at - previous < 60_000) return []
+    let displaced: readonly string[]
+    try {
+      displaced = await deps.auth.displaceOthers(clientId)
+    } catch (error) {
+      audit('single-controller-failed', { reason: error instanceof Error ? error.message : String(error) })
+      return []
+    }
+    if (displaced.length === 0) return []
+    audit('single-controller-displaced', { keep: clientId, count: displaced.length })
+    for (const id of displaced) {
+      try { deps.onSessionDisplaced?.(id) } catch { /* 忽略 */ }
+    }
+    return displaced
   }
 
   /** 守卫层统一拒绝（仍是官方 server-response 形状，便于客户端只解析一种信封）。 */
@@ -411,12 +566,98 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
   const server: Server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? '/', `${protocol}//${config.guardHost}:${config.guardPort}`)
-      const path = url.pathname
+      // 末尾斜杠归一化：`/remote-web/login/` 与 `/remote-web/login` 是同一个页面。
+      // 不归一化的话，浏览器地址栏 / 用户手打 / 某些客户端补斜杠时会落到
+      // 兜底的 404 JSON 上——用户看到的就是一坨 `{"type":"server-response"...}`。
+      // 只去掉一层尾部斜杠；根路径 `/` 保持原样。
+      const rawPath = url.pathname
+      const path = rawPath.length > 1 && rawPath.endsWith('/') ? rawPath.slice(0, -1) : rawPath
       const method = (req.method ?? 'GET').toUpperCase()
       const rpcId = typeof req.headers['x-rpc-id'] === 'string' ? req.headers['x-rpc-id'] : 'guard'
 
+      // ⓪ 浏览器入口（方案 A）：官方静态外壳与其资源。
+      //    必须在白名单之前——`/` 与 `/assets/*` 不在 GUARD_ROUTES 的精确集合里。
+      if (deps.web !== undefined && await deps.web.handle(req, res)) return
+
+      // ⓪.5 浏览器登录面（方案 A）：登录页 + 口令 + 动态码。
+      //      它也不在 GUARD_ROUTES 里（那是数据面的路径表），所以同样排在白名单之前。
+      if (deps.webAuth !== undefined) {
+        const webAuth = deps.webAuth
+        const html = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }
+        if (path === webAuth.basePath + '/login' && method === 'GET') {
+          res.writeHead(200, html)
+          res.end(webAuth.page())
+          return
+        }
+        if (path === webAuth.basePath + '/login' && method === 'POST') {
+          const body = await readJsonBody(req)
+          const result = await webAuth.login(String(body?.username ?? ''), String(body?.password ?? ''))
+          res.writeHead(result.ok ? 200 : 401, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+          res.end(JSON.stringify(result))
+          return
+        }
+        if (path === webAuth.basePath + '/mfa' && method === 'POST') {
+          const body = await readJsonBody(req)
+          const result = await webAuth.mfa(String(body?.mfaToken ?? ''), String(body?.code ?? ''))
+          const headers: Record<string, string> = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
+          if (result.ok && typeof result.setCookie === 'string') headers['set-cookie'] = result.setCookie
+          res.writeHead(result.ok ? 200 : 401, headers)
+          res.end(JSON.stringify({ ok: result.ok, code: result.code, message: result.message }))
+          return
+        }
+      }
+
+      // ⓪.6 浏览器数据面（方案 A）：`/api/*` 用 Cookie 认证后以 remote-device 派发。
+      //      **认证必须在读 body 之前**：未认证直接 401，一个字节都不往 Gateway 转。
+      if (deps.webAuth !== undefined && (path === '/api' || path.startsWith('/api/'))) {
+        const webAuth = deps.webAuth
+        const token = webAuth.readCookie(req)
+        const session = token === undefined ? null : await webAuth.readSession(token)
+        if (session === null || session === undefined) {
+          res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ ok: false, code: 'auth-unauthorized', message: 'sign in required' }))
+          return
+        }
+        if (method !== 'POST') {
+          res.writeHead(405, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ ok: false, code: 'bad-request', message: 'method not allowed' }))
+          return
+        }
+        const endpoint = path.slice('/api/'.length)
+        const body = await readJsonBody(req)
+        // `readSession` 返回 `{ record, view }`：账号 id 在 `record` 上，
+        // 不在 `view` 上。取错会退化成「匿名」→ 角色被压到 read-only → 全量 no-allow。
+        const sessionShape = session as {
+          record?: { accountId?: string }
+          view?: { accountId?: string }
+          accountId?: string
+        }
+        const accountId = sessionShape.record?.accountId
+          ?? sessionShape.view?.accountId
+          ?? sessionShape.accountId
+          ?? 'acc_admin'
+        // 浏览器会话对应的角色来自该账号当前登记的客户端（取最高上限）。
+        const role = deps.webAuth.roleOf?.(accountId) ?? 'read-only'
+        const envelope = body !== null && typeof body === 'object' && (body as { type?: string }).type === 'client-request'
+          ? body
+          : null
+        if (envelope === null) {
+          res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ ok: false, code: 'bad-request', message: 'invalid client-request envelope' }))
+          return
+        }
+        const peer = deps.dispatcher.peerFor(`web:${accountId}`, role)
+        const response = await deps.dispatcher.fetch(endpoint, envelope, peer)
+        await writeFetchResponse(res, response, protocolHeader)
+        return
+      }
+
       // ① 路由白名单：不在表里一律 404（含 /api/*、/remote/stream/*）。
       const known = new Set<string>(Object.values(GUARD_ROUTES))
+      // 认证面（账号 + TOTP → 登记客户端公钥）也开在守卫上，供控制端跨源调用。
+      const authPaths = deps.authHttp?.paths ?? []
+      for (const authPath of authPaths) known.add(authPath)
+      const isAuthPath = authPaths.includes(path)
       if (!known.has(path)) {
         reject(res, rpcId, failure(ERROR_CODES.notFound, 404, 'not found'))
         return
@@ -425,14 +666,17 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
       // ①.5 CORS 预检（必须在版本头检查之前：预检不携带自定义头）。
       if (handlePreflight(req, res, rpcId)) return
 
-      // 其它真实请求：回环 origin 需要 CORS 宣告，浏览器才能读取响应。
+      // 其它真实请求：回环 / 已声明 origin 需要 CORS 宣告，浏览器才能读取响应。
       applyLoopbackCors(req, res)
 
       // ② 自有面版本头：不符即 400，不降级、不猜测。
-      const version = req.headers[HUB_PROTOCOL_HEADER]
-      if (version !== protocolHeader) {
-        reject(res, rpcId, failure(ERROR_CODES.protocolVersionMismatch, 400, 'protocol version mismatch'))
-        return
+      //    认证面是标准 JSON API（浏览器客户端不塞自定义协议头），这里不要求版本头。
+      if (!isAuthPath) {
+        const version = req.headers[HUB_PROTOCOL_HEADER]
+        if (version !== protocolHeader) {
+          reject(res, rpcId, failure(ERROR_CODES.protocolVersionMismatch, 400, 'protocol version mismatch'))
+          return
+        }
       }
 
       // ③ 三段来源围栏（对所有路由生效，包括 health 与签发端）。
@@ -440,8 +684,8 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
         publicAuthorities: config.publicAuthorities,
         protocol,
         allowPrivate: config.network === 'lan',
-        // 本机管理端点：web 页面与守卫同主机不同端口，Origin authority 天然不等。
-        allowLoopbackCrossPortOrigin: ADMIN_ROUTE_SET.has(path),
+        // 本机管理端点 / 认证面：web 页面与守卫同主机不同端口，Origin authority 天然不等。
+        allowLoopbackCrossPortOrigin: ADMIN_ROUTE_SET.has(path) || isAuthPath,
         // 跨机接管：主控端页面的 origin 必须被显式放行（默认空 = fail-closed）。
         allowedOrigins: config.allowedOrigins,
         // lan 模式：自动放行来自私有地址的 Origin（主控端页面在对端机器上，
@@ -451,6 +695,23 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
       if (!fence.ok) {
         audit('source-rejected', { path, reason: fence.reason })
         reject(res, rpcId, failure(ERROR_CODES.forbidden, 403, 'source not allowed'))
+        return
+      }
+
+      // ③.5 认证面：交给认证插件提供的处理器（头会话，无 Cookie 依赖）。
+      if (isAuthPath && deps.authHttp !== undefined) {
+        // login / mfa / bootstrap 是暴力破解面：按来源限流；status 不消耗预算。
+        const isAttempt = path.endsWith('/login') || path.endsWith('/mfa') || path.endsWith('/bootstrap')
+        if (isAttempt) {
+          const source = req.socket.remoteAddress ?? 'unknown'
+          if (!authLimiter.allow(source)) {
+            deps.metrics?.countAuthDenied()
+            audit('auth-surface-throttled', { path })
+            reject(res, rpcId, failure(ERROR_CODES.rateLimited, 429, 'too many authentication attempts'))
+            return
+          }
+        }
+        await deps.authHttp.handle(req, res)
         return
       }
 
@@ -464,111 +725,6 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
         return
       }
 
-      // ── 签发端（双条件回环 + 进程内令牌）────────────────────────────────
-      if (path === GUARD_ROUTES.pairTicket || path === GUARD_ROUTES.pairCode) {
-        if (method !== 'POST' && method !== 'GET') {
-          reject(res, rpcId, failure(ERROR_CODES.notFound, 404, 'not found'))
-          return
-        }
-        const loop = checkLoopback(req)
-        if (!loop.ok) {
-          audit('pair-issue-rejected', { path, reason: loop.reason })
-          reject(res, rpcId, failure(ERROR_CODES.forbidden, 403, 'pairing issue is loopback-only'))
-          return
-        }
-        const presented = req.headers[PAIR_ISSUE_HEADER]
-        if (presented !== pairIssueToken) {
-          audit('pair-issue-rejected', { path, reason: 'missing pairIssueToken' })
-          reject(res, rpcId, failure(ERROR_CODES.forbidden, 403, 'pairing issue is loopback-only'))
-          return
-        }
-        const body = await readBody(req, 64 * 1024)
-        const parsed = body === null ? undefined : parseJson(body.toString('utf8'))
-        let role = config.defaultRole
-        if (isPlainObject(parsed) && parsed.role !== undefined) {
-          if (!isRoleName(parsed.role)) {
-            reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'invalid role'))
-            return
-          }
-          role = parsed.role
-        }
-        const issued = path === GUARD_ROUTES.pairTicket
-          ? deps.pairing.issueTicket(role)
-          : deps.pairing.issueCode(role)
-        deps.metrics?.countPairIssued()
-        // 票据/短码只在这次响应里出现一次；不写日志、不回显进错误体。
-        sendJson(res, 200, {
-          ...(path === GUARD_ROUTES.pairTicket ? { ticket: issued.secret } : { code: issued.secret }),
-          expiresAt: issued.expiresAt,
-          role: issued.role,
-        }, protocolHeader)
-        return
-      }
-
-      // ── 兑换端（**不**加回环门控：远程设备在隧道外）─────────────────────
-      if (path === GUARD_ROUTES.pair) {
-        if (method !== 'POST') {
-          reject(res, rpcId, failure(ERROR_CODES.notFound, 404, 'not found'))
-          return
-        }
-        const source = req.socket.remoteAddress ?? 'unknown'
-        if (!limiter.allow(source)) {
-          reject(res, rpcId, failure(ERROR_CODES.rateLimited, 429, 'too many pairing attempts'))
-          return
-        }
-        const body = await readBody(req, 64 * 1024)
-        if (body === null) {
-          reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'body too large'))
-          return
-        }
-        const parsed = parseJson(body.toString('utf8'))
-        if (!isPlainObject(parsed)) {
-          reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'invalid body'))
-          return
-        }
-        const clientLabel = typeof parsed.clientLabel === 'string' ? parsed.clientLabel.slice(0, 120) : 'remote device'
-        const ticket = typeof parsed.ticket === 'string' ? parsed.ticket : undefined
-        const code = typeof parsed.code === 'string' ? parsed.code : undefined
-        if ((ticket === undefined) === (code === undefined)) {
-          reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'provide exactly one of ticket or code'))
-          return
-        }
-        const result = ticket !== undefined
-          ? await deps.pairing.redeemTicket(ticket, clientLabel)
-          : await deps.pairing.redeemCode(code as string, clientLabel)
-        if (!result.ok) {
-          // 错误体只有码，**不含**票据/短码，也不区分「不存在/过期/预算耗尽」之外的细节。
-          const status = result.code === ERROR_CODES.rateLimited ? 429 : 403
-          deps.metrics?.countPairRejected()
-          reject(res, rpcId, failure(result.code, status, 'pairing credential rejected'))
-          return
-        }
-        deps.metrics?.countPairRedeemed()
-        audit('pair-redeemed', { deviceId: result.issued.deviceId, role: result.issued.role, path: ticket !== undefined ? 'qr' : 'code' })
-        // 单控策略：新设备接管时把**其它设备踢下线**（断开连接），但保留它们的配对。
-        // 令牌不失效 → 被挤设备仍是「已配对」，可再次连接（2026-11-12 修订）。
-        let displacedForNotice: { deviceId: string; label: string }[] = []
-        if (config.singleController) {
-          const displaced = await displaceOthers(deps, result.issued.deviceId)
-          if (displaced.length > 0) {
-            audit('single-controller-displaced', { keep: result.issued.deviceId, displaced })
-            // 记下名字供 UI 弹窗；同时立即断开它们的连接（Peer 与在途流）。
-            const byId = new Map(deps.devices.list().map(device => [device.deviceId, device.label]))
-            displacedForNotice = displaced.map(deviceId => ({
-              deviceId,
-              label: byId.get(deviceId) ?? deviceId,
-            }))
-            for (const deviceId of displaced) {
-              try { deps.onSessionDisplaced?.(deviceId) } catch { /* 忽略 */ }
-            }
-          }
-        }
-        sendJson(res, 200, {
-          ...result.issued,
-          ...(displacedForNotice.length > 0 ? { displacedDevices: displacedForNotice } : {}),
-        }, protocolHeader)
-        return
-      }
 
       // ── 设备管理（只作用于本机页面：回环 + 进程内令牌，双条件）──────────
       if (path === GUARD_ROUTES.devices || path === GUARD_ROUTES.devicesRevoke) {
@@ -589,16 +745,31 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
             reject(res, rpcId, failure(ERROR_CODES.notFound, 404, 'not found'))
             return
           }
-          const rows = deps.devices.list().map(device => ({
-            deviceId: device.deviceId,
-            label: device.label,
-            role: device.role,
-            createdAt: device.createdAt,
-            lastSeenAt: device.lastSeenAt,
-            revokedAt: device.revokedAt,
-            // 被单控挤下线（仍保留配对）——UI 据此区分「已配对」与「配对失效」。
-            displacedAt: device.displacedAt ?? null,
-          }))
+          // 账号认证模式下「客户端」是 auth clients，不是旧版设备表：
+          // 运行页与设置页必须看到同一批身份，否则两处各说各话（P2）。
+          const rows = deps.auth !== undefined
+            ? deps.auth.listTrustedClients().map(client => ({
+              deviceId: client.clientId,
+              label: client.label,
+              role: client.activeRole,
+              createdAt: client.createdAt,
+              lastSeenAt: client.lastSeenAt,
+              revokedAt: client.revokedAt,
+              displacedAt: client.displacedAt ?? null,
+              // 归属账号（plan-optimization §9.3）：运行页与设置页共用同一字段。
+              accountId: client.accountId ?? null,
+              username: client.username ?? null,
+            }))
+            : deps.devices.list().map(device => ({
+              deviceId: device.deviceId,
+              label: device.label,
+              role: device.role,
+              createdAt: device.createdAt,
+              lastSeenAt: device.lastSeenAt,
+              revokedAt: device.revokedAt,
+              // 被单控挤下线（仍保留配对）——UI 据此区分「已配对」与「配对失效」。
+              displacedAt: device.displacedAt ?? null,
+            }))
           sendJson(res, 200, {
             ok: true,
             protocolVersion: PROTOCOL_VERSION,
@@ -711,6 +882,52 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
         return
       }
 
+      // ── ws-ticket：认证模式下换取一次性 WS 升级票据 ──────────────────────
+      //
+      // 浏览器原生 WebSocket 不能带自定义头，所以签名只能在 HTTP 上做：
+      // 客户端先对本请求签名，服务端返回一个 30 秒、**只能消费一次**的票据，
+      // 再把它放进 `?token=` 完成升级。长期租约永远不进入 URL。
+      if (path === GUARD_ROUTES.wsTicket) {
+        if (method !== 'POST') {
+          reject(res, rpcId, failure(ERROR_CODES.notFound, 404, 'not found'))
+          return
+        }
+        if (deps.auth === undefined) {
+          reject(res, rpcId, failure(ERROR_CODES.notFound, 404, 'account authentication is not enabled'))
+          return
+        }
+        const body = await readBody(req, LIMITS.maxRequestBodyBytes)
+        if (body === null) {
+          reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'body too large'))
+          return
+        }
+        const authorization = req.headers[AUTH_HEADER]
+        const authHeader = typeof authorization === 'string' ? authorization : ''
+        const verdict = await deps.auth.verifyHubRequest({
+          // 传**原始头**：认证服务自己解析 `Bearer <lease>`。
+          lease: authHeader,
+          method,
+          path,
+          audience: String(req.headers.host ?? '').toLowerCase(),
+          bodyDigest: sha256Hex(body),
+          headers: proofHeadersOf(req),
+        })
+        if (!verdict.ok) {
+          deps.metrics?.countAuthDenied()
+          audit('ws-ticket-rejected', { code: verdict.code })
+          reject(res, rpcId, failure(ERROR_CODES.unauthorized, 401, verdict.reason))
+          return
+        }
+        await enforceSingleController(verdict.claims.clientId)
+        const grant = issueWsTicket({
+          deviceId: verdict.claims.clientId,
+          role: verdict.claims.activeRole,
+        })
+        deps.metrics?.countAuthAccepted()
+        sendJson(res, 200, { ok: true, ticket: grant.ticket, expiresAt: grant.expiresAt }, protocolHeader)
+        return
+      }
+
       // ── rpc：Bearer → 设备→Peer → 官方信封 → sharedFetch ────────────────
       if (path === GUARD_ROUTES.rpc) {
         if (method !== 'POST') {
@@ -734,17 +951,54 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
           return
         }
         const token = bearer.slice(BEARER_SCHEME.length + 1)
-        const identity = await deps.tokens.verify(token)
+
+        let identity: { deviceId: string; role: RoleName } | null
+        let body: Buffer | null = null
+
+        if (deps.auth !== undefined) {
+          // 账号认证模式：**租约 + 客户端签名**。必须读到正文才能核对摘要，
+          // 所以先做长度门控（`readBody` 已经按 maxRequestBodyBytes 截断），
+          // 验签失败时不进入任何业务解析。
+          body = await readBody(req, LIMITS.maxRequestBodyBytes)
+          if (body === null) {
+            reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'body too large'))
+            return
+          }
+          const verdict = await deps.auth.verifyHubRequest({
+            // 传**原始头**：认证服务自己解析 `Bearer <lease>`。
+            lease: typeof authorization === 'string' ? authorization : '',
+            method,
+            path,
+            audience: String(req.headers.host ?? '').toLowerCase(),
+            bodyDigest: sha256Hex(body),
+            headers: proofHeadersOf(req),
+          })
+          if (!verdict.ok) {
+            deps.metrics?.countAuthDenied()
+            audit('auth-verdict', { path, code: verdict.code })
+            reject(res, rpcId, failure(ERROR_CODES.unauthorized, 401, verdict.reason))
+            return
+          }
+          identity = { deviceId: verdict.claims.clientId, role: verdict.claims.activeRole }
+          await enforceSingleController(verdict.claims.clientId)
+        } else {
+          const legacy = await deps.tokens.verify(token)
+          identity = legacy === null
+            ? null
+            : { deviceId: legacy.deviceId, role: legacy.role as RoleName }
+        }
         if (identity === null) {
           deps.metrics?.countAuthDenied()
           reject(res, rpcId, failure(ERROR_CODES.unauthorized, 401, 'invalid or revoked token'))
           return
         }
         deps.metrics?.countAuthAccepted()
-        const body = await readBody(req, LIMITS.maxRequestBodyBytes)
         if (body === null) {
-          reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'body too large'))
-          return
+          body = await readBody(req, LIMITS.maxRequestBodyBytes)
+          if (body === null) {
+            reject(res, rpcId, failure(ERROR_CODES.badRequest, 400, 'body too large'))
+            return
+          }
         }
         const envelope = parseJson(body.toString('utf8'))
         if (!isPlainObject(envelope)
@@ -828,6 +1082,11 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
     const { route } = createGuardWsRoute({
       authenticate: async (token: string) => {
         try {
+          // 账号认证模式：`?token=` 是一次性升级票据（不是长期租约）。
+          if (deps.auth !== undefined) {
+            const ticket = consumeWsTicket(token)
+            return ticket === null ? null : { deviceId: ticket.deviceId, role: ticket.role }
+          }
           const verdict = await deps.tokens.verify(token)
           return verdict === null ? null : { deviceId: verdict.deviceId, role: verdict.role }
         } catch {
@@ -860,6 +1119,37 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
       try {
         pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname
       } catch {
+        return
+      }
+      // ① 浏览器页面的 mux 升级（方案 A）：官方客户端 `connection.openWebSocket`
+  //    打的是 `/api/remote.mux`（与 `guard-mux.ts` 的 MUX_PATH 同值；本文件
+  //    刻意不 import 它，见 D-3「守卫不起 WebSocket 实现」）。
+  const BROWSER_MUX_PATH = '/api/remote.mux'
+      //    打的是 `/api/remote.mux`。浏览器拿不到自定义签名头，所以这里用
+      //    HttpOnly Cookie 认证，认证通过后复用同一条 mux 管线。
+      if (pathname === BROWSER_MUX_PATH && deps.webAuth !== undefined) {
+        void (async () => {
+          try {
+            const token = deps.webAuth!.readCookie(request)
+            const session = token === undefined ? null : await deps.webAuth!.readSession(token)
+            if (session === null || session === undefined) {
+              socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+              socket.destroy()
+              return
+            }
+            const shape = session as { record?: { accountId?: string }, view?: { role?: string } }
+            const accountId = shape.record?.accountId ?? 'acc_admin'
+            const role = deps.webAuth!.roleOf?.(accountId) ?? 'read-only'
+            const admitted = deps.ws!.admit(request, { deviceId: `web:${accountId}`, role })
+            if ('rejection' in admitted) {
+              socket.destroy()
+              return
+            }
+            deps.ws!.mux.accept(request, socket, head, admitted.peer, `web:${accountId}`)
+          } catch {
+            socket.destroy()
+          }
+        })()
         return
       }
       if (pathname !== route.path) return

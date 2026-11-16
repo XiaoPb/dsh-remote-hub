@@ -47,7 +47,6 @@ import type { StreamEngine } from '../streams.js'
 import type { ApprovalBridge } from '../approval-bridge.js'
 import { dshHome } from '../devices.js'
 import type { DeviceStore } from '../devices.js'
-import type { PairingService } from '../pairing.js'
 import type { TokenService } from '../token.js'
 import { remoteDeviceOf } from '../principal.js'
 import { createOutboundTargetStore, outboundTargetView } from '../outbound-targets.js'
@@ -65,7 +64,6 @@ export interface HubServicesDeps {
   tokens: TokenService
   policy: AccessPolicyHandles
   /** 配对签发（管理面 `admin.issue` 与守卫签发共用同一出口）。 */
-  pairing: PairingService
   /** 把吊销事件传播到流引擎（由 plugin.ts 接线）。 */
   onRevoked: (deviceId: string) => void
   /** 本机管理面（owner 页面同源调用；`/remote/*` 守卫端点之外的第二条通道）。 */
@@ -118,6 +116,21 @@ export async function readCarrierFile(): Promise<{
   if (typeof value.targetId === 'string' && value.targetId !== '') {
     const target = await createOutboundTargetStore(dshHome()).get(value.targetId)
     if (target === undefined || target.origin !== value.origin) return { mode: { mode: 'local' }, at, exists: true }
+    if (target.account === true) {
+      // 账号模式：没有 bearer，凭据是浏览器里的「私钥 + 租约」。
+      return {
+        mode: {
+          mode: 'cloud',
+          origin: target.origin,
+          account: true,
+          targetId: target.id,
+          ...(target.deviceLabel === undefined ? {} : { deviceLabel: target.deviceLabel }),
+        },
+        at,
+        exists: true,
+      }
+    }
+    if (target.token === undefined) return { mode: { mode: 'local' }, at, exists: true }
     let resolvedAt = at
     if (typeof value.token === 'string') {
       resolvedAt = await writeCarrierFile({
@@ -160,6 +173,8 @@ export async function writeCarrierFile(mode: Record<string, unknown>): Promise<n
     ? {
       mode: 'cloud',
       origin: String(mode.origin ?? ''),
+      // 账号模式：没有 bearer，凭据在浏览器；这里只留「是账号目标」+ targetId。
+      ...(mode.account === true ? { account: true } : {}),
       ...(typeof mode.targetId === 'string' && mode.targetId !== '' ? { targetId: mode.targetId } : {}),
       ...(typeof mode.targetId !== 'string' && typeof mode.token === 'string' ? { token: mode.token } : {}),
       ...(typeof mode.deviceLabel === 'string' && mode.deviceLabel !== ''
@@ -184,7 +199,6 @@ export interface AdminDeps {
   /** 设备表（`admin.devices` 只读清单）。 */
   devices: DeviceStore
   /** 配对签发服务（`admin.issue`；与守卫直连签发同一出口）。 */
-  pairing: PairingService
   /** 枚举本机局域网 IPv4（可注入，便于测试）。 */
   lanAddresses?: () => readonly string[]
   guard: {
@@ -626,33 +640,6 @@ export class HubAdminService extends TypertRemoteService {
     return { ok: true, removed: await createOutboundTargetStore(dshHome()).forget(targetId) }
   }
 
-  /**
-   * 签发配对凭据（二维码票据 / 短码）。
-   *
-   * 为什么必须走同源通道：签发端原本只能从本机页面直连守卫
-   * `http://127.0.0.1:8443`，而桌面页面 origin 是 `dsh-app://app`，跨协议 fetch
-   * 会被浏览器拦在 fetch 层 —— 「点击生成二维码」永远失败且没有可见原因。
-   *
-   * 安全：`assertOwnerCaller` 只放行本机 owner 页面；票据/短码只返回给这一条
-   * 同源响应，不落日志、不进 URL。
-   * @param kind - `'ticket'`（二维码）或 `'code'`（短码）。
-   * @param role - 授予远端设备的角色。
-   * @returns 凭据原文、过期时间与角色。
-   */
-  @Remote('admin.issue')
-  async issue(
-    kind: string,
-    role: string,
-  ): Promise<{ ok: true; kind: 'ticket' | 'code'; value: string; expiresAt: number; role: string }> {
-    assertOwnerCaller(this.ctx, 'hub/admin.issue')
-    if (kind !== 'ticket' && kind !== 'code') deny(ERROR_CODES.badRequest, 'kind must be ticket or code')
-    if (!isRoleName(role)) deny(ERROR_CODES.badRequest, 'role is not a known role')
-    const issued = kind === 'ticket'
-      ? this.deps.pairing.issueTicket(role)
-      : this.deps.pairing.issueCode(role)
-    this.deps.metrics.countPairIssued()
-    return { ok: true, kind, value: issued.secret, expiresAt: issued.expiresAt, role: issued.role }
-  }
 }
 
 /** 注册全部 `hub/*` 服务。返回 disposer。 */
@@ -678,7 +665,6 @@ export function registerRemoteServices(ctx: Context, deps: HubServicesDeps): Rem
       tokens: deps.tokens,
       configStore: deps.configStore,
       devices: deps.devices,
-      pairing: deps.pairing,
       guard: deps.guard(),
     })
     : undefined

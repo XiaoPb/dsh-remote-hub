@@ -16,8 +16,26 @@
 import React from 'react'
 
 import { MODE_KEY, readCarrierMode, writeCarrierMode, type CarrierMode } from '@core/carrier-contract.js'
+import {
+  Button,
+  CodeBox,
+  Collapse,
+  EmptyState,
+  Field,
+  Input,
+  KeyValue,
+  Notice,
+  PasswordInput,
+  Pill,
+  Section,
+  Segmented,
+  Select,
+  ThemeStyle,
+  cx,
+  formatRole,
+} from '../rhui/index.js'
+import { RH_CSS } from '../rhui/tokens.js'
 import { encodeQr } from './qr.js'
-import { QrScanner } from './QrScanner.js'
 import { DeviceDeleteDialog } from './DeviceDeleteDialog.js'
 
 /** 一条已配对设备（守卫 `/remote/devices` 返回行）。 */
@@ -30,6 +48,9 @@ export interface CloudDeviceRow {
   revokedAt?: string | null
   /** 被单控策略挤下线的时间（仍保留配对，可再次连接）。 */
   displacedAt?: string | null
+  /** 归属账号（plan-optimization §9.3）：与设置页同一字段。 */
+  accountId?: string | null
+  username?: string | null
 }
 
 /** 主控端本地保存的已配对出站目标（令牌仅保存在本地主控档案，不渲染到 DOM）。 */
@@ -113,6 +134,45 @@ export function outboundTargetLabel(target: OutboundTarget, targets: readonly Ou
   return `${label} · ${fingerprint}`
 }
 
+/**
+ * 卡片标题：一行就能放下的短标识。
+ *
+ * 优先用设备名（人类可读），但长度超过 40 字符的「名字」实际是旧版写入的地址串
+ * （如 `http://127.0.0.1:8850 · controller 127.0.0.1:3091`），窄卡片里会被逐字折行，
+ * 这种情况退回显示 origin。
+ * @param target - 对端目标。
+ * @returns 标题文本。
+ */
+export function outboundTargetTitle(target: OutboundTarget): string {
+  const origin = normalizeOrigin(target.origin) ?? target.origin
+  const label = target.deviceLabel
+  if (label === undefined || label === null || label === '') return origin
+  if (label.length > 40 || label.includes(' · ')) return origin
+  return label
+}
+
+/**
+ * 卡片副标题：同源目标的区分信息（设备名 / 指纹）。
+ *
+ * 标题行固定显示 `origin`（一行放得下），区分信息放副标题，避免长标签把卡片标题撑成
+ * 多行（窄列下会被逐字折行）。同源重复时只多给 6 位指纹（不再重复一遍地址），
+ * 这样副标题在 360px 宽的卡片里也能保持一行。
+ * @param target - 对端目标。
+ * @param targets - 全部已保存目标（用于判断同源重复）。
+ * @returns 副标题文本（可能为空串）。
+ */
+export function outboundTargetMeta(target: OutboundTarget, targets: readonly OutboundTarget[]): string {
+  const origin = normalizeOrigin(target.origin) ?? target.origin
+  const peers = targets.filter(item => (normalizeOrigin(item.origin) ?? item.origin) === origin)
+  const fingerprint = outboundTargetIdentity(target).slice(-6)
+  const device = target.deviceLabel === undefined || target.deviceLabel === null
+    || target.deviceLabel === '' || target.deviceLabel === origin
+    ? ''
+    : target.deviceLabel
+  if (peers.length >= 2) return device === '' ? `#${fingerprint}` : `${device} · #${fingerprint}`
+  return device
+}
+
 /** Persist the local escape before reloading; archive failure does not block disconnect. */
 export async function runDetachPersistence(input: {
   saveTargets(): boolean
@@ -186,15 +246,6 @@ export interface GuardStatus {
 /** 角色（与 core/roles.ts 同名）。 */
 export type RoleName = 'read-only' | 'control' | 'full'
 
-/** 一次签发结果。 */
-export interface IssuedPairing {
-  kind: 'ticket' | 'code'
-  /** 票据原文或 8 位短码。 */
-  value: string
-  role: string
-  expiresAt: number
-}
-
 /** 守卫运行指标（/remote/stats；缺字段时页面按 '—' 降级）。 */
 export interface HubMetrics {
   startedAt: string
@@ -226,26 +277,16 @@ export interface RemoteHubPageState {
   devices: readonly CloudDeviceRow[]
   /** 被控端：状态读取中。 */
   loading: boolean
-  /** 被控端：本机签发凭据；缺省时隐藏签发区。 */
-  pairIssueToken?: string
-  /** 签发时选定的角色。 */
-  role: RoleName
-  /** 最近一次签发（票据→二维码 / 短码→文本）。 */
-  /** 最近一次签发的票据（二维码 + 链接来源）。 */
-  issued: IssuedPairing | null
-  /** 最近一次签发的短码（独立于票据）。 */
-  issuedCode: IssuedPairing | null
-  /** ① 票据/短码过期后自动重签（默认开）。 */
-  autoReissue: boolean
-  /** 同源管理通道是否可用（桌面端签发/管理唯一路径）。 */
+  /** 同源管理通道是否可用（宿主注入了管理 transport）。 */
   adminAvailable?: boolean
   /** 本机局域网候选地址（`http://<ip>:<port>`，供其他设备填写）。 */
   lanCandidates?: readonly string[]
-  /** 推荐地址（二维码 / 链接使用；无候选时回退 origin）。 */
+  /** 推荐地址（告诉对方填哪个地址）。 */
   listenAddress?: string
-  /** 主控端：连接表单。 */
+  /** 主控端：连接表单（目标地址）。 */
   originDraft: string
-  secretDraft: string
+  /** 对端账号登录草稿（账号认证模式，跨源）。 */
+  accountDraft: { username: string; password: string; code: string; role: RoleName }
   /** ② 设备筛选。 */
   deviceFilter: 'all' | 'inbound'
   /** ③ 守卫运行指标（null = 宿主不支持/未加载）。 */
@@ -261,7 +302,7 @@ export interface RemoteHubPageState {
   /** ④ 最近一次保存结果（ok / error 文案）。 */
   configSavedAt: number | null
   /** 进行中的异步操作。 */
-  busy: null | 'connect' | 'issue' | 'revoke' | 'delete' | 'refresh' | 'detach'
+  busy: null | 'connect' | 'account' | 'revoke' | 'delete' | 'refresh' | 'detach'
   /** 错误信息。 */
   error: string | null
   /** 注入状态（诊断区展示；不含凭据本身）。 */
@@ -279,409 +320,29 @@ export interface RemoteHubPageState {
 /** 页面动作。 */
 export interface RemoteHubPageActions {
   onRefresh(): void
-  onRoleChange(role: RoleName): void
-  onIssue(kind: 'ticket' | 'code'): void
   onForgetDevice?(deviceId: string): void
   onForgetOutbound?(target: OutboundTarget): void
   onRevoke(deviceId: string): void
   onRevokeAll(): void
   onOriginChange(value: string): void
-  onSecretChange(value: string): void
-  onScan(): void
   onConnect(): void
+  /** 修改对端账号草稿字段。 */
+  onAccountChange(field: 'username' | 'password' | 'code' | 'role', value: string): void
+  /** 用对端账号登录并信任本浏览器（跨源）。 */
+  onAccountConnect(): void
   onReconnect(target: OutboundTarget): void
   onDetach(): void
   onCopy(text: string): void
-  /** ① 切换自动重签。 */
-  onAutoReissueChange(enabled: boolean): void
   /** ② 切换设备筛选。 */
   onFilterChange(filter: 'all' | 'inbound'): void
-  /** ④ 修改配置草稿（未保存）。 */  onConfigChange(key: string, value: unknown): void
+  /** ④ 修改配置草稿（未保存）。 */
+  onConfigChange(key: string, value: unknown): void
   /** ④ 保存配置草稿。 */
   onConfigSave(): void
 }
 
 // ── 样式 ─────────────────────────────────────────────────────────────────────
 // 页面尺寸与滚动交给 .rh-root 的响应式样式。
-
-// ── 主题 token（语义化 CSS 变量；不写死任何示意参数，方便外部整体换肤）───────
-//
-// 亮色为默认；暗色走两条路径：
-//  1. `@media (prefers-color-scheme: dark)` 自动跟随系统；
-//  2. 根容器 `data-theme="dark" | "light"` 供宿主/外部主题强制指定。
-// 外部主题只需在任意祖先元素覆盖 `--rh-*` 变量即可整体换肤，组件样式零硬编码色值。
-const THEME_CSS = `
-.rh-root{
-  /* 表面 */
-  --rh-bg: #f6f7f9;
-  --rh-card: #ffffff;
-  --rh-border: rgba(127,127,127,.22);
-  --rh-border-strong: rgba(127,127,127,.40);
-  /* 文字 */
-  --rh-text: #1a1d21;
-  --rh-text-2: rgba(27,32,38,.66);
-  --rh-text-3: rgba(27,32,38,.45);
-  /* 强调（选中态/主按钮） */
-  --rh-accent: #1a1d21;
-  --rh-accent-contrast: #ffffff;
-  --rh-primary: #3b82f6;
-  --rh-primary-contrast: #ffffff;
-  /* 语义色 + 弱背景 */
-  --rh-green: #17945c;
-  --rh-green-bg: rgba(23,148,92,.14);
-  --rh-red: #d64545;
-  --rh-red-bg: rgba(214,69,69,.10);
-  /* 形状 / 间距 / 字体 */
-  --rh-radius: 14px;
-  --rh-radius-sm: 9px;
-  --rh-gap: 16px;
-  --rh-shadow: 0 1px 2px rgba(17,20,24,.04), 0 4px 16px rgba(17,20,24,.05);
-  --rh-font: system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
-  --rh-mono: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-
-  background: var(--rh-bg);
-  color: var(--rh-text);
-  font-family: var(--rh-font);
-}
-.rh-root[data-theme="dark"]{
-  --rh-bg: #17191d;
-  --rh-card: #1f2228;
-  --rh-border: rgba(255,255,255,.14);
-  --rh-border-strong: rgba(255,255,255,.26);
-  --rh-text: #eceef1;
-  --rh-text-2: rgba(236,238,241,.70);
-  --rh-text-3: rgba(236,238,241,.45);
-  --rh-accent: #eceef1;
-  --rh-accent-contrast: #17191d;
-  --rh-green: #3ecf8e;
-  --rh-green-bg: rgba(62,207,142,.16);
-  --rh-red: #f27d7d;
-  --rh-red-bg: rgba(242,125,125,.12);
-  --rh-shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
-}
-@media (prefers-color-scheme: dark){
-  .rh-root:not([data-theme="light"]){
-    --rh-bg: #17191d;
-    --rh-card: #1f2228;
-    --rh-border: rgba(255,255,255,.14);
-    --rh-border-strong: rgba(255,255,255,.26);
-    --rh-text: #eceef1;
-    --rh-text-2: rgba(236,238,241,.70);
-    --rh-text-3: rgba(236,238,241,.45);
-    --rh-accent: #eceef1;
-    --rh-accent-contrast: #17191d;
-    --rh-green: #3ecf8e;
-    --rh-green-bg: rgba(62,207,142,.16);
-    --rh-red: #f27d7d;
-    --rh-red-bg: rgba(242,125,125,.12);
-    --rh-shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.25);
-  }
-}
-/* ===== 参考《云端设备布局设计参考》组件体系（全部经 --rh-* token）===== */
-/* 页面外壳：背景铺满 + 可滚动。
- * 宿主 main 槽位的容器高度/overflow 不可控，所以 .rh-root 自己成为滚动容器：
- * height:100vh（视口高）+ overflow-y:auto，内容超出即内部滚动，背景始终铺满。
- * 若宿主容器比视口矮，height:100% 的回退规则兜底。 */
-.rh-root{
-  width: 100%;
-  height: 100vh;
-  box-sizing: border-box;
-  padding: 28px 32px 56px;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-.rh-root .rh-shell{ max-width: 1080px; margin: 0 auto; }
-.rh-root .rh-page-head{
-  position: sticky; top: -28px; z-index: 20; background: var(--rh-bg);
-  padding: 28px 0 12px; border-bottom: 1px solid var(--rh-border);
-}
-.rh-root .rh-page-title{ min-width: 0; overflow-wrap: anywhere; }
-.rh-root .rh-page-head .rh-lead{ margin: 0; }
-.rh-root h1{ margin: 0 0 4px; font-size: 24px; font-weight: 700; letter-spacing: -.3px;
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.rh-root .rh-lead{ margin: 0 0 6px; font-size: 14px; color: var(--rh-text-2); }
-/* 区块头（标题 + 右侧操作胶囊） */
-.rh-root .rh-section-head{ display: flex; align-items: center; justify-content: space-between;
-  gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
-.rh-root .rh-section-head .rh-title{ font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.rh-root .rh-section-head .rh-right{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-/* 卡片分区 */
-.rh-root .rh-card{
-  margin: 18px 0; padding: 20px 22px;
-  background: var(--rh-card);
-  border: 1px solid var(--rh-border);
-  border-radius: var(--rh-radius);
-  box-shadow: var(--rh-shadow);
-}
-.rh-root .rh-card-title{ margin: 0 0 4px; font-size: 15px; font-weight: 600; }
-.rh-root .rh-sub{ margin: 0 0 10px; font-size: 12.5px; color: var(--rh-text-2); }
-/* 胶囊 / 圆点 */
-.rh-root .rh-pill{
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 5px 12px; border-radius: 999px; font-size: 12.5px;
-  background: var(--rh-card); border: 1px solid var(--rh-border-strong);
-  color: var(--rh-text); white-space: nowrap;
-}
-.rh-root .rh-pill.small{ padding: 2px 9px; font-size: 11.5px; }
-.rh-root .rh-pill.solid{ background: var(--rh-accent); color: var(--rh-accent-contrast); border-color: var(--rh-accent); }
-.rh-root .rh-pill.on{
-  background: var(--rh-green-bg); border-color: var(--rh-green); color: var(--rh-green);
-}
-.rh-root .rh-pill.off{ color: var(--rh-text-2); }
-.rh-root .rh-pill.danger{ background: var(--rh-red-bg); border-color: var(--rh-red); color: var(--rh-red); }
-.rh-root .rh-dot{ width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
-/* 行 / 栅格 */
-.rh-root .rh-row{ display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; align-items: center; }
-.rh-root .rh-qrwrap{ display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; margin-top: 14px; }
-.rh-root .rh-tokinfo{ flex: 1 1 240px; min-width: 0; }
-/* 令牌信息（参考 .tokinfo / .minirow / .countdown） */
-.rh-root .rh-lbl{ font-size: 12px; color: var(--rh-text-3); }
-.rh-root .rh-val{ font-family: var(--rh-mono); font-size: 16px; font-weight: 600; margin: 4px 0 12px; word-break: break-all; }
-.rh-root .rh-minirow{ display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 12px; }
-.rh-root .rh-minirow .rh-k{ font-size: 11px; color: var(--rh-text-3); }
-.rh-root .rh-minirow .rh-v{ font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
-.rh-root .rh-diagnostic-grid{
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px;
-  box-sizing: border-box; margin: 0;
-}
-.rh-root .rh-diagnostic-grid > div{
-  min-width: 0; padding: 12px 0; border-bottom: 1px solid var(--rh-border);
-}
-.rh-root .rh-diagnostic-grid .rh-k{ font-size: 11px; color: var(--rh-text-3); }
-.rh-root .rh-diagnostic-grid .rh-v{
-  font-size: 12px; line-height: 1.6; margin-top: 4px; font-family: var(--rh-mono);
-  font-weight: 400; overflow-wrap: anywhere; word-break: break-word; min-width: 0;
-}
-.rh-root .rh-dev-meta{ min-width: 0; }
-.rh-root .rh-dev-nm,.rh-root .rh-dev-sub{ overflow-wrap: anywhere; }
-.rh-root [data-testid="outbound-facts"]{ display: grid; grid-template-columns: repeat(auto-fit,minmax(min(160px,100%),1fr)); gap: 8px 16px; font-size: 12px; color: var(--rh-text-2); }
-.rh-root .rh-dev-foot{ flex-wrap: wrap; }
-.rh-root .rh-cfg .rh-crow{ gap: 16px; flex-wrap: wrap; }
-.rh-root .rh-cfg .rh-cl{ min-width: 0; flex: 1 1 200px; }
-.rh-root .rh-cfg select,.rh-root .rh-cfg input{ max-width: 100%; box-sizing: border-box; }
-.rh-root .rh-countdown{ height: 6px; border-radius: 4px; background: var(--rh-border); overflow: hidden; margin-top: 6px; flex: 1 1 120px; min-width: 100px; }
-.rh-root .rh-countdown > i{ display: block; height: 100%; border-radius: 4px; background: var(--rh-accent); transition: width .4s ease; }
-/* 设备卡（参考 .devgrid / .dev） */
-.rh-root .rh-devgrid{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--rh-gap); margin-top: 10px; }
-.rh-root .rh-dev{
-  background: var(--rh-card); border: 1px solid var(--rh-border); border-radius: var(--rh-radius);
-  padding: 14px 16px; box-shadow: var(--rh-shadow);
-  display: flex; flex-direction: column; gap: 8px; min-width: 0;
-}
-.rh-root .rh-dev .rh-dev-top{ display: flex; align-items: center; gap: 10px; }
-.rh-root .rh-dev .rh-dev-ico{ width: 36px; height: 36px; border-radius: 10px; background: var(--rh-bg);
-  display: flex; align-items: center; justify-content: center; font-size: 17px; flex: none; }
-.rh-root .rh-dev .rh-dev-nm{ font-weight: 700; font-size: 14px; word-break: break-all; }
-.rh-root .rh-dev .rh-dev-sub{ font-size: 12px; color: var(--rh-text-3); font-family: var(--rh-mono); word-break: break-all; }
-.rh-root .rh-dev .rh-dev-meta{ flex: 1; min-width: 0; }
-.rh-root .rh-dev .rh-dev-foot{ display: flex; align-items: center; gap: 8px; margin-top: auto; flex-wrap: wrap; }
-.rh-root .rh-dev.revoked .rh-dev-meta{ opacity: .6; }
-/* 已配对但离线：弱化状态，不削弱操作按钮的对比度。 */
-.rh-root .rh-dev.offline .rh-dev-ico{ filter: grayscale(1); }
-.rh-root .rh-dev.offline .rh-dev-nm{ color: var(--rh-text-2); }
-/* 设备分组（参考 .group-head） */
-.rh-root .rh-group{ margin-top: 16px; }
-.rh-root .rh-group:first-of-type{ margin-top: 6px; }
-.rh-root .rh-group-head{ display: flex; align-items: center; gap: 10px; margin-bottom: 4px; flex-wrap: wrap; }
-.rh-root .rh-group-head .rh-gtitle{ font-size: 14px; font-weight: 700; }
-.rh-root .rh-group-head .rh-ghint{ font-size: 12px; color: var(--rh-text-3); }
-/* 空状态（参考 .empty） */
-.rh-root .rh-empty{ text-align: center; padding: 40px 20px; color: var(--rh-text-3); font-size: 13px; }
-.rh-root .rh-empty .rh-ic{ font-size: 36px; margin-bottom: 8px; }
-.rh-root .rh-empty .rh-empty-title{ font-weight: 600; color: var(--rh-text); margin-bottom: 4px; }
-/* 表单控件（参考 .input / .select / .switch） */
-.rh-root input.rh-input{
-  flex: 1 1 260px; min-width: 200px; height: 34px; padding: 0 12px; font-size: 13px;
-  border-radius: var(--rh-radius-sm); border: 1px solid var(--rh-border-strong);
-  background: var(--rh-card); color: var(--rh-text); font-family: inherit;
-}
-.rh-root input.rh-input::placeholder{ color: var(--rh-text-3); }
-.rh-root button.rh-btn{
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  height: 34px; padding: 0 16px; font-size: 13px; font-weight: 600;
-  border-radius: var(--rh-radius-sm); border: 1px solid var(--rh-border-strong);
-  background: var(--rh-card); color: var(--rh-text); cursor: pointer; font-family: inherit;
-  transition: opacity .15s ease;
-}
-.rh-root button.rh-btn:hover{ opacity: .85; }
-.rh-root button.rh-btn.primary{ background: var(--rh-primary); border-color: var(--rh-primary); color: var(--rh-primary-contrast); }
-.rh-root button.rh-btn.danger{ background: transparent; border-color: var(--rh-red); color: var(--rh-red); }
-.rh-root button.rh-btn.danger:hover{ background: var(--rh-red-bg); opacity: 1; }
-.rh-root button.rh-btn:disabled{ opacity: .5; cursor: not-allowed; }
-.rh-root button.rh-btn.small{ height: 28px; padding: 0 12px; font-size: 12.5px; font-weight: 500; }
-/* 令牌结果块：二维码 + 信息列（自适应换行，窄屏堆叠） */
-.rh-root .rh-tokenbody{
-  display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 20px;
-  align-items: start; margin-top: 14px;
-}
-.rh-root .rh-tokcol{ min-width: 0; }
-.rh-root .rh-tokcol-qr{ flex: none; }
-.rh-root .rh-codevalue{
-  display: block; width: 100%; box-sizing: border-box;
-  font-family: var(--rh-mono); font-size: 20px; font-weight: 600; letter-spacing: 3px;
-  padding: 10px 14px; border-radius: var(--rh-radius-sm);
-  background: var(--rh-bg); border: 1px solid var(--rh-border-strong); color: var(--rh-text);
-  word-break: break-all; overflow-wrap: anywhere; max-width: 100%;
-}
-.rh-root .rh-codevalue-empty{
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  font-family: inherit; font-size: 13px; font-weight: 400; letter-spacing: 0;
-  color: var(--rh-text-3); border-style: dashed;
-}
-.rh-root .rh-linkvalue{
-  display: block; width: 100%; box-sizing: border-box;
-  font-family: var(--rh-mono); font-size: 12px; line-height: 1.6;
-  padding: 8px 12px; border-radius: var(--rh-radius-sm);
-  background: var(--rh-bg); border: 1px solid var(--rh-border);
-  color: var(--rh-text-2); word-break: break-all; overflow-wrap: anywhere; max-width: 100%;
-}
-.rh-root .rh-qr-placeholder{
-  width: 216px; height: 216px; box-sizing: border-box;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
-  border: 1px dashed var(--rh-border-strong); border-radius: var(--rh-radius);
-  background: var(--rh-bg); color: var(--rh-text-3); font-size: 12px; text-align: center; padding: 12px;
-}
-.rh-root .rh-qr-placeholder .rh-ic{ font-size: 32px; line-height: 1; }
-/* 窄屏：二维码在上、信息在下 */
-@media (max-width: 899px){
-  .rh-root .rh-tokenbody{ grid-template-columns: minmax(0, 1fr); }
-  .rh-root .rh-qr-placeholder{ width: 180px; height: 180px; margin: 0 auto; }
-  .rh-root .rh-tokcol-qr{ display: flex; justify-content: center; }
-}
-.rh-root button.rh-linkbtn{
-  border: 0; background: transparent; color: var(--rh-primary); cursor: pointer;
-  font-size: 12px; font-family: inherit; padding: 0 2px 0 6px; text-decoration: underline;
-}
-/* 错误条（参考 .err） */
-.rh-root .rh-error{
-  display: flex; gap: 10px; align-items: flex-start;
-  background: var(--rh-red-bg); border: 1px solid var(--rh-red); color: var(--rh-red);
-  padding: 12px 14px; border-radius: var(--rh-radius-sm); font-size: 13px; margin: 14px 0 0;
-}
-/* 折叠高级区（参考 .collapse） */
-.rh-root .rh-collapse{ margin-top: 16px; border: 1px dashed var(--rh-border-strong); border-radius: var(--rh-radius-sm); background: var(--rh-bg); }
-.rh-root .rh-collapse summary{ padding: 12px 16px; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--rh-text-2); }
-.rh-root .rh-collapse ul{ list-style: none; margin: 0; padding: 0 16px 14px; font-size: 12px; color: var(--rh-text-2); font-family: var(--rh-mono); }
-.rh-root .rh-collapse li{ padding: 2px 0; word-break: break-all; }
-/* 统计卡（参考 .statgrid / .stat） */
-.rh-root .rh-statgrid{ display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--rh-gap); margin-top: 6px; }
-.rh-root .rh-stat{
-  background: var(--rh-card); border: 1px solid var(--rh-border); border-radius: var(--rh-radius);
-  padding: 16px 18px; box-shadow: var(--rh-shadow); min-width: 0;
-}
-.rh-root .rh-stat .rh-slbl{ font-size: 12px; color: var(--rh-text-3); margin-bottom: 8px; }
-.rh-root .rh-stat .rh-snum{ font-size: 28px; font-weight: 700; letter-spacing: -.5px; line-height: 1; font-family: var(--rh-mono); }
-.rh-root .rh-stat .rh-scap{ font-size: 12px; color: var(--rh-text-2); margin-top: 8px; }
-/* 图表 */
-.rh-root .rh-chartgrid{ display: grid; grid-template-columns: 1.4fr 1fr; gap: var(--rh-gap); margin-top: var(--rh-gap); }
-.rh-root .rh-chartbox{
-  background: var(--rh-card); border: 1px solid var(--rh-border); border-radius: var(--rh-radius);
-  padding: 16px 18px; box-shadow: var(--rh-shadow); min-width: 0;
-}
-.rh-root .rh-chartbox .rh-ct{ font-size: 13px; font-weight: 700; }
-.rh-root .rh-chartbox .rh-cs{ font-size: 12px; color: var(--rh-text-3); margin: 2px 0 12px; }
-.rh-root .rh-heat{ display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px; margin-top: 10px; }
-.rh-root .rh-heat i{ aspect-ratio: 1; border-radius: 2px; background: var(--rh-border); }
-/* 配置行（参考 .cfg） */
-.rh-root .rh-cfg{
-  background: var(--rh-card); border: 1px solid var(--rh-border); border-radius: var(--rh-radius);
-  box-shadow: var(--rh-shadow); overflow: hidden; margin-top: 8px;
-}
-.rh-root .rh-cfg .rh-crow{ display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 18px; border-bottom: 1px solid var(--rh-border); gap: 16px; flex-wrap: wrap; }
-.rh-root .rh-cfg .rh-crow:last-child{ border-bottom: 0; }
-.rh-root .rh-cfg .rh-cl .rh-ct1{ font-weight: 600; font-size: 14px; }
-.rh-root .rh-cfg .rh-cl .rh-cd{ font-size: 12px; color: var(--rh-text-3); margin-top: 2px; }
-.rh-root .rh-cfg .rh-cc{ display: flex; align-items: center; gap: 10px; }
-.rh-root .rh-switch{ width: 42px; height: 24px; border-radius: 999px; background: var(--rh-border-strong);
-  position: relative; flex: none; cursor: pointer; border: 0; padding: 0; transition: background .2s ease; }
-.rh-root .rh-switch.on{ background: var(--rh-green); }
-.rh-root .rh-switch i{ position: absolute; top: 2px; left: 2px; width: 20px; height: 20px;
-  border-radius: 50%; background: var(--rh-card); transition: left .2s ease; }
-.rh-root .rh-switch.on i{ left: 20px; }
-.rh-root select.rh-select, .rh-root input.rh-num{
-  height: 34px; border: 1px solid var(--rh-border-strong); border-radius: var(--rh-radius-sm);
-  padding: 0 12px; font-size: 13px; background: var(--rh-card); color: var(--rh-text);
-  min-width: 120px; font-family: inherit;
-}
-.rh-root .rh-cold{ font-size: 12px; color: var(--rh-text-3); margin-top: 10px; }
-/* 运行日志 */
-.rh-root .rh-loglist{ display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
-.rh-root .rh-logrow{
-  display: grid; grid-template-columns: 68px 44px auto 1fr; gap: 8px;
-  align-items: baseline; padding: 4px 0; border-top: 1px dashed var(--rh-border);
-  color: var(--rh-text-2); min-width: 0;
-}
-.rh-root .rh-logrow:first-child{ border-top: 0; }
-.rh-root .rh-logtime{ font-family: var(--rh-mono); color: var(--rh-text-3); }
-.rh-root .rh-loglevel{ font-weight: 600; }
-.rh-root .rh-log-error .rh-loglevel{ color: var(--rh-red); }
-.rh-root .rh-log-warn .rh-loglevel{ color: var(--rh-text); }
-.rh-root .rh-log-info .rh-loglevel{ color: var(--rh-green); }
-.rh-root .rh-logtitle{ color: var(--rh-text); font-weight: 500; }
-.rh-root .rh-logpath{ font-family: var(--rh-mono); font-size: 11px; color: var(--rh-text-3); word-break: break-all; }
-.rh-root .rh-logdetail{ grid-column: 3 / -1; color: var(--rh-text-3); word-break: break-word; }
-/* 降级卡（宿主不支持 ③④） */
-.rh-root .rh-unsup{ text-align: center; padding: 28px 20px; color: var(--rh-text-3); font-size: 13px; }
-
-/* ===== 响应式（同一 DOM，纯栅格：桌面 → 平板 → 手机）===== */
-@media (max-width: 1023px){
-  .rh-root .rh-statgrid{ grid-template-columns: repeat(2, 1fr); }
-}
-@media (max-width: 639px){
-  .rh-root{ padding: 16px 14px 48px; }
-  .rh-root h1{ font-size: 20px; }
-  .rh-root .rh-shell{ max-width: none; }
-  .rh-root .rh-card{ padding: 14px; }
-  .rh-root .rh-qrwrap{ flex-direction: column; align-items: stretch; }
-  .rh-root .rh-qrwrap svg[data-testid="pair-qr"]{ margin: 0 auto; }
-  .rh-root .rh-devgrid{ grid-template-columns: 1fr; }
-  .rh-root .rh-statgrid{ grid-template-columns: repeat(2, 1fr); }
-  .rh-root .rh-chartgrid{ grid-template-columns: 1fr; }
-  .rh-root .rh-heat{ grid-template-columns: repeat(18, 1fr); }
-  .rh-root button.rh-btn{ min-height: 40px; }
-  .rh-root button.rh-btn.small{ min-height: 36px; }
-  .rh-root input.rh-input{ min-height: 40px; }
-  .rh-root select.rh-select, .rh-root input.rh-num{ min-height: 40px; flex: 1 1 auto; }
-  .rh-root .rh-cfg .rh-cc{ width: 100%; justify-content: flex-end; }
-  .rh-root .rh-minirow{ gap: 14px; }
-}
-/* Only this page scrolls; its heading remains visible while cards pass underneath. */
-.rh-root{ scroll-padding-top: 92px; }
-.rh-root .rh-card{ border-radius: min(var(--rh-radius), 8px); }
-.rh-root button.rh-btn{ touch-action: manipulation; }
-.rh-root button.rh-btn:focus-visible,.rh-root button.rh-linkbtn:focus-visible,
-.rh-root input.rh-input:focus-visible{
-  outline: 2px solid var(--rh-primary); outline-offset: 2px;
-}
-@media (hover: hover){
-  .rh-root button.rh-btn:hover:not(:disabled){ opacity: .85; }
-}
-.rh-root .rh-dev-foot .rh-btn.danger{ margin-left: auto; }
-.rh-root .rh-dev-foot .rh-btn.primary{ order: -1; }
-@media (max-width: 639px){
-  .rh-root{ padding-top: 0; scroll-padding-top: 76px; }
-  .rh-root .rh-page-head{ top: 0; padding: 16px 0 12px; }
-  .rh-root .rh-dev-foot .rh-btn.primary{ min-width: 96px; }
-  .rh-root .rh-card{ margin: 12px 0; }
-  .rh-root .rh-section-head{ align-items: flex-start; }
-  .rh-root .rh-section-head .rh-right{ max-width: 100%; }
-  .rh-root .rh-devgrid{ grid-template-columns: minmax(0, 1fr); }
-  .rh-root .rh-diagnostic-grid{ grid-template-columns: minmax(0, 1fr); }
-  .rh-root .rh-dev-top{ flex-wrap: wrap; }
-  .rh-root .rh-dev-top .rh-pill{ margin-left: auto; }
-  .rh-root button.rh-btn,.rh-root button.rh-btn.small{ min-height: 44px; height: auto; white-space: normal; }
-  .rh-root button.rh-linkbtn{ min-height: 44px; padding: 0 12px; }
-  .rh-root input.rh-input,.rh-root input.rh-num,.rh-root select.rh-select{ font-size: 16px; min-width: 0; }
-  .rh-root input.rh-input{ flex-basis: 100%; }
-  .rh-root .rh-dev-foot .rh-btn.danger{ margin-left: auto; }
-  .rh-root .rh-logrow{ grid-template-columns: 68px minmax(0, 1fr); }
-  .rh-root .rh-logdetail{ grid-column: 1 / -1; }
-}
-@media (prefers-reduced-motion: reduce){
-  .rh-root .rh-btn,.rh-root .rh-countdown > i{ transition: none; }
-}
-`
 
 /** 页面内文案表（集中管理，便于后续接入宿主 i18n；布局不依赖文字长度）。 */
 const STRINGS = {
@@ -697,23 +358,17 @@ const STRINGS = {
   refresh: '刷新状态',
   refreshingBtn: '刷新中…',
   singleCtrl: '单控策略：',
-  singleOn: '已启用（新设备配对会挤掉旧设备）',
+  singleOn: '已启用（新客户端连接会挤掉旧客户端）',
   singleOff: '已关闭（允许多设备同时控制）',
-  paired: '已配对',
-  role: '授权角色：',
-  issueTicket: '生成二维码',
-  issuing: '生成中…',
-  issueCode: '生成短码',
-  ticketHint: '每 15 秒自动轮换 · 配对成功即下发长期设备令牌',
-  pairUnavailable: '未检测到本机签发凭据：本机未启用被控端，或页面不是从本机 127.0.0.1 打开。',
-  devicesTitle: '已配对设备',
+  paired: '已信任',
+  devicesTitle: '可信客户端',
   devicesEmptyLoading: '正在读取…',
-  devicesEmpty: '还没有设备配对到本机。上方生成二维码，用另一台设备连接即可。',
-  revoked: ' · 已清除',
+  devicesEmpty: '还没有可信客户端。在设置页「登录与账号」信任本浏览器，或从其他设备用账号登录后登记公钥。',
+  revoked: ' · 已撤销',
   never: ' · 从未连接',
   recent: ' · 最近 ',
-  revoke: '清除配对',
-  revokeAll: '清除全部配对',
+  revoke: '撤销客户端',
+  revokeAll: '撤销全部客户端',
   lead: '让其他设备连接并控制这台机器，或把整机切换到其它设备。',
   guardOrigin: '守卫地址',
   guardProtocol: '协议版本',
@@ -722,29 +377,18 @@ const STRINGS = {
   netLoopback: '仅本机',
   singleOnShort: '单控已启用',
   singleOffShort: '单控已关闭',
-  issueTitle: '连接令牌',
-  issuedKind: '凭据类型',
-  issuedRole: '授权角色',
-  issuedTicket: '二维码票据',
-  issuedCodeLabel: '配对短码',
-  issuedLinkLabel: '配对链接',
-  issuedNone: '尚未签发',
-  qrPending: '尚未生成二维码',
-  codePending: '点击右侧生成短码',
-  linkPending: '点击右侧生成二维码以获取链接',
-  countdownLabel: '有效期倒计时',
-  scanHint: '用另一台设备扫码，或在下方主控端粘贴链接。',
-  revokedShort: '已清除',
+  revokedShort: '已撤销',
   neverShort: '从未连接',
   notConnectedShort: '未连接',
-  devicesEmptyTitle: '暂无设备配对到本机',
+  devicesEmptyTitle: '暂无可信客户端',
   // ② 设备区
   devicesZoneTitle: '已连接设备',
   filterAll: '全部',
   filterInbound: '连接本机',
   filterOutbound: '本机连接',
-  groupInbound: '连接本机的设备',
-  groupInboundHint: '其它设备正在控制本机（被控端入站）',
+  groupInbound: '可信客户端（在线 / 离线）',
+  groupInboundHint: '已信任的客户端。权限上限与撤销在「设置 → 登录与账号」管理',
+  manageInSettings: '权限与撤销：设置 → 登录与账号',
   groupOutbound: '本机连接的设备',
   groupOutboundHint: '本机作为主控端主动连接',
   statusOnline: '在线',
@@ -752,9 +396,10 @@ const STRINGS = {
   statusOffline: '离线',
   // 三态（2026-11-12）：已连接 / 已配对 / 配对失效
   statusConnected: '已连接',
-  statusPaired: '已配对',
-  statusInvalid: '配对失效',
-  devCreatedAt: '配对于',
+  statusPaired: '已信任（离线）',
+  statusInvalid: '已撤销',
+  devAccount: '归属账号',
+  devCreatedAt: '信任于',
   devRole: '角色',
   devLastSeen: '最近活跃',
   // ③ 统计区
@@ -762,12 +407,12 @@ const STRINGS = {
   statsScope: '本次运行',
   statUptime: '运行时长',
   statActive: '活跃设备',
-  statPaired: '累计配对',
+  statPaired: '累计邀请兑换',
   statRejected: '拒绝尝试',
   statActiveStreams: '活跃连接',
   chartActivity: '连接活动（24h）',
   chartActivitySub: '每小时认证通过数',
-  chartPairing: '配对成功（7d）',
+  chartPairing: '邀请兑换（7d）',
   chartPairingSub: '每日兑换成功数',
   chartHeat: '活跃度热力',
   chartHeatSub: '颜色越深表示该时段连接越密集',
@@ -784,35 +429,27 @@ const STRINGS = {
   cfgBridge: '审批桥接',
   cfgBridgeDesc: '远程操作审批走桌面原生卡片',
   cfgRole: '默认授权角色',
-  cfgRoleDesc: '保存后同步顶部配对权限，并重新生成二维码与短码；不会改变已配对设备的权限',
-  cfgAttempts: '短码最大尝试次数',
-  cfgAttemptsDesc: '超过次数短码立即作废（1–100）',
-  cfgColdNote: '以下参数需重启后生效',
-  cfgNetwork: '网络模式',
+  cfgRoleDesc: '新客户端首次信任时建议授予的上限；不会改变已信任客户端的权限（那些在设置页管理）',
+  cfgAttempts: '登录尝试次数上限',
+  cfgAttemptsDesc: '同一来源在窗口内的失败次数上限（1–100）',
+  cfgColdNote: '以下参数可修改，保存后写入本机配置；需重启 dsh web，重启后生效',
+  cfgRestartPending: '有修改待重启生效',
   cfgPort: '监听端口',
-  cfgQrTtl: '票据有效期',
-  cfgCodeTtl: '短码有效期',
+  cfgPortDesc: '守卫绑定端口（1–65535）。被占用时启动会自动顺延 +1，并在诊断里标注实际端口',
+  cfgNetworkDesc: 'loopback 仅本机可连；lan 允许同网段直连（公网仍需隧道）',
+  cfgTtl: '票据有效期',
   cfgTunnel: '隧道类型',
-  // ① 令牌区
-  autoReissue: '过期自动重签',
-  qrFreshHint: '过期后自动生成新凭据并刷新二维码',
+  // 连接其他设备（主控端）
   clientTitle: '连接其他设备 · 主控端',
   clientSub: '连接成功后整机切换到该设备：侧栏工作区、会话、插件全部显示那台机器的数据。',
   connected: '已连接',
   detach: '断开并切回本机',
   notConnected: '当前指向本机，未连接其他设备。',
   originPlaceholder: '目标设备地址，例如 http://192.168.1.10:8443',
-  secretPlaceholder: '短码（8 位）／票据／完整二维码链接 #dshrh=… 均可',
-  scan: '📷 扫码',
   connect: '连接',
   connecting: '连接中…',
-  secretInvalid: '无法识别：短码为 8 位（不含 I/L/O/U），或粘贴完整二维码链接。',
   originInvalid: '地址格式不正确：需要形如 http://主机:端口，且不带路径。',
   advanced: '连接参数（高级）',
-  qrTitle: '配对二维码',
-  qrTooLong: '二维码内容过长，请改用短码。',
-  copyLink: '复制链接',
-  copyCode: '复制短码',
   // 守卫诊断
   diagTitle: '守卫诊断',
   diagInjection: '注入握手',
@@ -850,8 +487,6 @@ const STRINGS = {
   listenHint: '其他设备连接时填这些地址（局域网 IPv4）',
   listenUnavailable: '未获取到监听地址',
   copyAddress: '复制',
-  issueEquivalent: '二维码、短码、链接三者等价，任选其一交给对方即可',
-  secretHint: '粘贴对方给的短码（8 位）、票据或完整二维码链接',
 } as const
 
 const ROLES: readonly RoleName[] = ['read-only', 'control', 'full']
@@ -901,14 +536,6 @@ export function remainingSeconds(expiresAt: number, now: number): number {
   return Math.max(0, Math.ceil((expiresAt - now) / 1000))
 }
 
-/** 密钥分类：8 位 Crockford 短码 / base64url 票据 / 非法。 */
-export function classifyPairSecret(secret: string): 'code' | 'ticket' | null {
-  const value = secret.trim()
-  if (/^[0-9A-HJKMNP-TV-Z]{8}$/u.test(value)) return 'code'
-  if (/^[A-Za-z0-9_-]{40,120}$/u.test(value)) return 'ticket'
-  return null
-}
-
 /** 校验并规范化 guard 地址；非法返回 undefined。 */
 export function normalizeOrigin(raw: string): string | undefined {
   try {
@@ -920,66 +547,6 @@ export function normalizeOrigin(raw: string): string | undefined {
   } catch {
     return undefined
   }
-}
-
-/**
- * 配对链接的片段标记（二维码内容）。
- *
- * 形如 `http://127.0.0.1:8443#dshrh=<ticket>`：比自定义 scheme 短 ~40 字节
- * （QR 版本 5-L 只有 106 字节容量），且对扫码软件仍然是一个可读 URL。
- */
-export const PAIR_LINK_MARKER = '#dshrh='
-
-/** 构造配对链接（二维码内容）。 */
-export function buildPairLink(origin: string, ticket: string): string {
-  return `${origin.replace(/\/+$/u, '')}${PAIR_LINK_MARKER}${ticket}`
-}
-
-/** 解析配对链接；不是链接时返回 null。 */
-export function parsePairLink(text: string): { origin: string; secret: string } | null {
-  const value = text.trim()
-  const at = value.indexOf(PAIR_LINK_MARKER)
-  if (at <= 0) return null
-  const origin = value.slice(0, at)
-  const secret = value.slice(at + PAIR_LINK_MARKER.length)
-  if (normalizeOrigin(origin) === undefined || classifyPairSecret(secret) === null) return null
-  return { origin, secret }
-}
-
-export function connectionAddressDraft(value: string): { origin: string; secret?: string } {
-  const link = parsePairLink(value)
-  return link === null ? { origin: value } : { origin: link.origin, secret: link.secret }
-}
-
-/** 渲染 QR（白底 + 黑色模块；需显式白底，深色主题下也能扫——唯一允许的硬编码色）。 */
-function renderQr(link: string): React.ReactNode {
-  let matrix: ReturnType<typeof encodeQr>
-  try {
-    matrix = encodeQr(link)
-  } catch {
-    return React.createElement('p', { className: 'rh-lbl' }, STRINGS.qrTooLong)
-  }
-  const cells: React.ReactNode[] = []
-  for (let y = 0; y < matrix.size; y++) {
-    for (let x = 0; x < matrix.size; x++) {
-      if (!matrix.modules[y]?.[x]) continue
-      cells.push(React.createElement('rect', { key: `${x}-${y}`, x, y, width: 1, height: 1 }))
-    }
-  }
-  return React.createElement(
-    'svg',
-    {
-      'data-testid': 'pair-qr',
-      viewBox: `-2 -2 ${matrix.size + 4} ${matrix.size + 4}`,
-      width: 216,
-      height: 216,
-      role: 'img',
-      'aria-label': STRINGS.qrTitle,
-      style: { background: '#fff', borderRadius: 8, display: 'block', flex: 'none', border: '1px solid var(--rh-border)' },
-    },
-    React.createElement('rect', { x: -2, y: -2, width: matrix.size + 4, height: matrix.size + 4, fill: '#fff' }),
-    React.createElement('g', { fill: '#000' }, ...cells),
-  )
 }
 
 // ── 轻量节点助手（参数自动分类：字符串→className、普通对象→props、其余→children）─
@@ -1000,12 +567,18 @@ const el = (tag: string, ...args: unknown[]): React.ReactNode => {
     if (typeof arg === 'object' && !isReactNode(arg) && props === undefined) { props = arg as Record<string, unknown>; continue }
     children.push(arg as React.ReactNode)
   }
-  return React.createElement(tag, { ...(props ?? {}), ...(className ? { className } : {}) }, ...children)
-}
+  return React.createElement(tag, { ...(props ?? {}), ...(className ? { className } : {}) }, ...children)}
 
 /**
- * 纯渲染。
- * 布局完全对照《云端设备布局设计参考》：四区卡片 + 区块头 + 胶囊 + 设备卡栅格。
+ * 云端设备页的纯渲染（区块 1–5，plan-devices §2/§3）。
+ *
+ * 阶段 A 只重排**结构与样式**：所有 `data-testid` 与交互回调原样保留，
+ * 视觉进入 `--rh-*` 设计系统（`client/src/rhui`）。阶段 B 才会删掉邀请区、
+ * 把「连接其他设备」换成账号登录多步流。
+ *
+ * 区块顺序（design-system §9）：页头 → 被控端（本机·接入设备）→ 主控端
+ * （连接其他设备）→ 守卫状态 & 配置 → 统计 & 诊断。
+ *
  * @param state - 页面状态。
  * @param actions - 页面动作。
  * @returns React 节点。
@@ -1014,298 +587,347 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
   const isCloud = state.mode.mode === 'cloud'
   const guardUp = state.guard !== null
   const activeDevices = state.devices.filter(device => device.revokedAt == null)
-  // 签发可用性：有同源管理通道，或本机注入了 pin（回退路径）。
-  const canIssue = state.adminAvailable === true
-    || (state.pairIssueToken !== undefined && state.pairIssueToken !== '')
-  // 二维码 / 链接的目标地址：**必须是其他设备可达的局域网地址**，
-  // 守卫在 loopback 模式下公告的是 127.0.0.1，扫码方会被指向它自己的回环。
-  const pairOrigin = (state.listenAddress !== undefined && state.listenAddress !== '')
-    ? state.listenAddress
-    : (state.guard?.origin ?? '')
-  const link = state.issued !== null && state.issued.kind === 'ticket' && pairOrigin !== ''
-    ? buildPairLink(pairOrigin, state.issued.value)
-    : null
 
-  // 签发结果块：三件套（二维码 / 短码 / 链接）始终渲染，未就绪时显示占位与引导，
-  // 让用户一眼看到「还能生成另外两种」。
-  const issuedBlock = canIssue
-    ? el('div', 'rh-qrwrap', { 'data-testid': 'issued' }, renderIssuedBody(state, actions, link))
-    : null
-
-  // ① 顶部区：连接令牌（签发）+ 二维码 + 已配对设备卡栅格
-  const hostCard = el('section', 'rh-card', { 'data-testid': 'host-section' },
-    el('div', 'rh-section-head', undefined,
-      el('div', 'rh-title', undefined,
-        STRINGS.hostTitle,
-        el('span', `rh-pill ${guardUp ? 'on' : 'danger'}`, { 'data-testid': 'guard-state' },
-          el('span', 'rh-dot'), guardUp ? STRINGS.guardUp : STRINGS.guardDown)),
-      el('div', 'rh-right', undefined,
-        el('button', 'rh-btn small', {
-          type: 'button', 'data-testid': 'refresh',
-          disabled: state.busy !== null,
-          onClick: () => actions.onRefresh(),
-        }, state.loading ? STRINGS.refreshingBtn : STRINGS.refresh))),
-    el('p', 'rh-sub', undefined, STRINGS.hostSub),
-
-    // 状态行：地址 / 协议 / 网络 / 单控（参考 .minirow 参数组）
-    guardUp
-      ? el('div', 'rh-minirow', { 'data-testid': 'guard-status' },
-        el('div', undefined,
-          el('div', 'rh-k', undefined, STRINGS.listenLabel),
-          el('div', 'rh-v', { 'data-testid': 'listen-address' },
-            state.listenAddress !== undefined && state.listenAddress !== ''
-              ? state.listenAddress
-              : (state.guard?.origin ?? '—'))),
-        el('div', undefined,
-          el('div', 'rh-k', undefined, STRINGS.guardProtocol),
-          el('div', 'rh-v', undefined, `v${state.guard?.protocolVersion ?? 1}`)),
-        el('div', undefined,
-          el('div', 'rh-k', undefined, STRINGS.guardNetwork),
-          el('div', 'rh-v', undefined, state.guard?.network === 'lan' ? STRINGS.netLan : STRINGS.netLoopback)),
-        el('div', undefined,
-          el('div', 'rh-k', undefined, STRINGS.singleCtrl),
-          el('div', 'rh-v', { 'data-testid': 'single-controller' },
-            state.guard?.singleController ? STRINGS.singleOnShort : STRINGS.singleOffShort)),
-        el('div', undefined,
-          el('div', 'rh-k', undefined, STRINGS.paired),
-          el('div', 'rh-v', undefined, `${activeDevices.length} 台`)))
-      : el('div', undefined, undefined,
-        el('p', 'rh-sub', { 'data-testid': 'guard-error' },
-          state.loading ? STRINGS.refreshing : (state.guardError ?? STRINGS.noGuard))),
-
-    // 局域网地址列表（供其他设备填写；每个地址都可一键复制）
-    state.lanCandidates !== undefined && state.lanCandidates.length > 0
-      ? el('div', 'rh-row', { 'data-testid': 'lan-addresses', style: { alignItems: 'center' } },
-        el('span', 'rh-lbl', undefined, `${STRINGS.listenHint}：`),
-        ...state.lanCandidates.map(address => el('span', {
-          key: address, className: 'rh-pill small', style: { fontFamily: 'var(--rh-mono)' },
-        },
-        el('code', { style: { fontFamily: 'inherit' } }, address),
-        el('button', 'rh-linkbtn', {
-          type: 'button', 'data-testid': 'copy-address', 'data-address': address,
-          title: STRINGS.copyAddress,
-          onClick: () => actions.onCopy(address),
-        }, STRINGS.copyAddress))))
-      : null,
-
-    // 签发区（角色胶囊组 + 生成按钮 + 签发结果）
-    canIssue
-      ? el('div', undefined, { 'data-testid': 'pair-issue' },
-        el('div', 'rh-section-head', { style: { marginTop: 6 } },
-          el('div', 'rh-title', undefined, STRINGS.issueTitle),
-          el('div', 'rh-right', undefined,
-            ROLES.map(role => el('button',
-              `rh-btn small ${state.role === role ? 'primary' : ''}`, {
-              key: role,
-              type: 'button',
-              'data-testid': 'role',
-              'data-role': role,
-              'data-selected': state.role === role ? 'true' : 'false',
-              disabled: state.busy !== null,
-              onClick: () => actions.onRoleChange(role),
-            }, ROLE_LABEL[role])))),
-        el('div', 'rh-row', undefined,
-          el('button', 'rh-btn primary', {
-            type: 'button', 'data-testid': 'issue-ticket',
-            disabled: state.busy !== null,
-            onClick: () => actions.onIssue('ticket'),
-          }, state.busy === 'issue' ? STRINGS.issuing : STRINGS.issueTicket),
-          el('button', 'rh-btn', {
-            type: 'button', 'data-testid': 'issue-code',
-            disabled: state.busy !== null,
-            onClick: () => actions.onIssue('code'),
-          }, STRINGS.issueCode),
-          el('span', 'rh-lbl', undefined, STRINGS.ticketHint)),
-        el('p', 'rh-lbl', { style: { margin: '2px 0 0' } }, STRINGS.issueEquivalent),
-
-        // 签发结果块：三件套（二维码 / 短码 / 链接）始终可见，未就绪时显示占位与引导。
-        issuedBlock,
-
-        el('label', 'rh-row', { style: { gap: 6, cursor: 'pointer', fontSize: 12.5, color: 'var(--rh-text-2)' } },
-          el('input', undefined, {
-            type: 'checkbox', 'data-testid': 'auto-reissue', checked: state.autoReissue,
-            onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAutoReissueChange(event.currentTarget.checked),
-          }),
-          `${STRINGS.autoReissue} · ${STRINGS.qrFreshHint}`))
-      : el('p', 'rh-sub', { 'data-testid': 'pair-issue-unavailable' }, STRINGS.pairUnavailable),
-  )
-
-  // ② 设备区：筛选 + 入站分组（含清除全部）+ 出站指向卡
-  const devicesCard = el('section', 'rh-card', { 'data-testid': 'devices-section' },
-    el('div', 'rh-section-head', undefined,
-      el('div', 'rh-title', undefined, STRINGS.devicesZoneTitle,
-        el('span', 'rh-pill small', undefined, `${activeDevices.length} 台`)),
-      el('div', 'rh-right', { 'data-testid': 'device-filter' },
-        (['all', 'inbound'] as const).map(filter => el('button',
-          `rh-btn small ${state.deviceFilter === filter ? 'primary' : ''}`, {
-          key: filter,
-          type: 'button', 'data-testid': 'filter',
-          'data-filter': filter,
-          onClick: () => actions.onFilterChange(filter),
-        }, filter === 'all' ? STRINGS.filterAll : STRINGS.filterInbound)))),
-    state.deviceFilter === 'all' || state.deviceFilter === 'inbound'
-      ? el('div', 'rh-group', undefined,
-        el('div', 'rh-group-head', undefined,
-          el('span', 'rh-gtitle', undefined, STRINGS.groupInbound),
-          el('span', 'rh-ghint', undefined, STRINGS.groupInboundHint),
-          activeDevices.length > 0
-            ? el('button', 'rh-btn small danger', {
-              type: 'button', 'data-testid': 'revoke-all', style: { marginLeft: 'auto' },
-              disabled: state.busy !== null,
-              onClick: () => actions.onRevokeAll(),
-            }, STRINGS.revokeAll)
-            : null),
-        state.devices.length === 0
-          ? el('div', 'rh-empty', { 'data-testid': 'devices-empty', style: { border: '1px dashed var(--rh-border-strong)', borderRadius: 'var(--rh-radius-sm)' } },
-            el('div', 'rh-ic', undefined, '📭'),
-            el('div', 'rh-empty-title', undefined,
-              state.loading ? STRINGS.devicesEmptyLoading : STRINGS.devicesEmptyTitle),
-            el('div', undefined, STRINGS.devicesEmpty))
-          : el('div', 'rh-devgrid', { 'data-testid': 'remote-hub-devices' },
-            state.devices.map(device => renderDeviceCard(state, actions, device))))
-      : null,
-    state.deviceFilter === 'all'
-      ? el('div', 'rh-group', undefined,
-        el('div', 'rh-group-head', undefined,
-          el('span', 'rh-gtitle', undefined, STRINGS.groupOutbound),
-          el('span', 'rh-ghint', undefined, STRINGS.groupOutboundHint),
-          el('button', 'rh-btn small primary', {
-            type: 'button', 'data-testid': 'connect-entry', style: { marginLeft: 'auto' },
-            onClick: () => {
-              const target = document?.querySelector('[data-testid="client-section"]')
-              target?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
-            },
-          }, `+ ${STRINGS.filterOutbound}`)),
-        renderOutboundCard(state, actions))
-      : null,
-  )
-
-  // ③ 统计区
-  const statsCard = el('section', 'rh-card', { 'data-testid': 'stats-section' },
-    el('div', 'rh-section-head', undefined,
-      el('div', 'rh-title', undefined, STRINGS.statsTitle),
-      el('div', 'rh-right', undefined, el('span', 'rh-pill small', undefined, STRINGS.statsScope))),
-    state.stats == null
-      ? el('div', 'rh-unsup', { 'data-testid': 'stats-unsupported' },
-        state.statsError ?? STRINGS.statsUnsupported)
-      : renderStatsBody(state))
-
-  // ④ 配置区
-  const configCard = el('section', 'rh-card', { 'data-testid': 'config-section' },
-    el('div', 'rh-section-head', undefined,
-      el('div', 'rh-title', undefined, STRINGS.configTitle),
-      el('div', 'rh-right', undefined, renderConfigSavedPill(state))),
-    state.config == null
-      ? el('div', 'rh-unsup', { 'data-testid': 'config-unsupported' }, STRINGS.configUnsupported)
-      : renderConfigBody(state, actions))
-
-  // 出站分组内容：当前指向 / 连接表单（主控端）——独立卡片供 ② 区引用
-  const clientCard = el('section', 'rh-card', { 'data-testid': 'client-section' },
-    el('div', 'rh-section-head', undefined,
-      el('div', 'rh-title', undefined, STRINGS.clientTitle,
-        isCloud
-          ? el('span', 'rh-pill on', undefined, el('span', 'rh-dot'), STRINGS.connected)
-          : el('span', 'rh-pill off', undefined, el('span', 'rh-dot'), STRINGS.notConnectedShort))),
-    el('p', 'rh-sub', undefined, STRINGS.clientSub),
-    isCloud
-      ? el('div', 'rh-row', { 'data-testid': 'connected-to' },
-        el('span', 'rh-lbl', undefined,
-          `${state.mode.deviceLabel ?? ''} ${state.mode.origin ?? ''}`.trim()),
-        el('button', 'rh-btn small', {
-          type: 'button', 'data-testid': 'detach',
-          onClick: () => actions.onDetach(),
-        }, STRINGS.detach))
-      : el('p', 'rh-lbl', { 'data-testid': 'not-connected' }, STRINGS.notConnected),
-    el('div', 'rh-row', undefined,
-      el('input', 'rh-input', {
-        'data-testid': 'origin-input',
-        'aria-label': '目标设备地址',
-        type: 'url',
-        inputMode: 'url', // 移动端显示 URL 键盘
-        autocomplete: 'url',
-        placeholder: STRINGS.originPlaceholder,
-        value: state.originDraft,
-        onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onOriginChange(event.currentTarget.value),
+  // ── 区块 1：页头（守卫状态 pill + 快捷入口）──────────────────────────────
+  const pageHead = React.createElement('header', { className: 'rh-page-head' },
+    React.createElement('h1', { className: 'rh-page-title rh-h1', 'data-testid': 'page-title' }, STRINGS.title,
+      React.createElement(Pill, {
+        'data-testid': 'mode-badge',
+        tone: isCloud ? 'online' : 'offline',
+        dot: true,
+        children: isCloud
+          ? `☁ ${state.mode.deviceLabel ?? state.mode.origin ?? STRINGS.modeCloud}`
+          : STRINGS.modeLocal,
       })),
-    el('div', 'rh-row', undefined,
-      el('input', 'rh-input', {
-        'data-testid': 'secret-input',
-        'aria-label': '配对短码、票据或链接',
-        type: 'text',
-        inputMode: 'text',
-        autocomplete: 'off', // 敏感信息不自动填充
-        placeholder: STRINGS.secretPlaceholder,
-        value: state.secretDraft,
-        onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onSecretChange(event.currentTarget.value),
-      }),
-      el('button', 'rh-btn', {
-        type: 'button', 'data-testid': 'scan',
-        'aria-label': '打开摄像头扫描二维码',
+    React.createElement('p', { className: 'rh-lead' }, STRINGS.lead))
+
+  // ── 区块 2：被控端（本机 · 接入设备）──────────────────────────────────────
+  const hostCard = React.createElement(Section, {
+    'data-testid': 'host-section',
+    title: React.createElement(React.Fragment, null,
+      STRINGS.hostTitle,
+      React.createElement(Pill, {
+        'data-testid': 'guard-state',
+        tone: guardUp ? 'online' : 'error',
+        dot: true,
+        children: guardUp ? STRINGS.guardUp : STRINGS.guardDown,
+      })),
+    desc: STRINGS.hostSub,
+    actions: React.createElement(React.Fragment, null,
+      React.createElement(Button, {
+        'data-testid': 'refresh',
+        size: 'small',
+        loading: state.loading,
         disabled: state.busy !== null,
-        onClick: () => actions.onScan(),
-      }, STRINGS.scan),
-      el('button', 'rh-btn primary', {
-        type: 'button', 'data-testid': 'connect',
-        disabled: state.busy !== null || normalizeOrigin(state.originDraft) === undefined
-          || (classifyPairSecret(state.secretDraft) === null && parsePairLink(state.secretDraft) === null),
-        onClick: () => actions.onConnect(),
-      }, state.busy === 'connect' ? STRINGS.connecting : STRINGS.connect)),
-    state.secretDraft.trim() !== ''
-      && classifyPairSecret(state.secretDraft) === null
-      && parsePairLink(state.secretDraft) === null
-      ? el('p', 'rh-lbl', { 'data-testid': 'secret-invalid', style: { color: 'var(--rh-red)' } }, STRINGS.secretInvalid)
-      : null,
-    state.originDraft.trim() !== '' && normalizeOrigin(state.originDraft) === undefined
-      ? el('p', 'rh-lbl', { 'data-testid': 'origin-invalid', style: { color: 'var(--rh-red)' } }, STRINGS.originInvalid)
-      : null)
+        children: state.loading ? STRINGS.refreshingBtn : STRINGS.refresh,
+        onClick: () => actions.onRefresh(),
+      })),
+    children: React.createElement(React.Fragment, null,
+      // 状态行：地址 / 协议 / 网络 / 单控（KeyValue 网格）
+      guardUp
+        ? el('div', 'rh-kv', { 'data-testid': 'guard-status' },
+          el('div', undefined,
+            el('div', 'rh-k', undefined, STRINGS.listenLabel),
+            el('div', 'rh-v', { 'data-testid': 'listen-address' },
+              state.listenAddress !== undefined && state.listenAddress !== ''
+                ? state.listenAddress
+                : (state.guard?.origin ?? '—'))),
+          el('div', undefined,
+            el('div', 'rh-k', undefined, STRINGS.guardProtocol),
+            el('div', 'rh-v', undefined, `v${state.guard?.protocolVersion ?? 1}`)),
+          el('div', undefined,
+            el('div', 'rh-k', undefined, STRINGS.guardNetwork),
+            el('div', 'rh-v', undefined, state.guard?.network === 'lan' ? STRINGS.netLan : STRINGS.netLoopback)),
+          el('div', undefined,
+            el('div', 'rh-k', undefined, STRINGS.singleCtrl),
+            el('div', 'rh-v', { 'data-testid': 'single-controller' },
+              state.guard?.singleController ? STRINGS.singleOnShort : STRINGS.singleOffShort)),
+          el('div', undefined,
+            el('div', 'rh-k', undefined, STRINGS.paired),
+            el('div', 'rh-v', undefined, `${activeDevices.length} 台`)))
+        : React.createElement(Notice, { 'data-testid': 'guard-error' },
+          state.loading ? STRINGS.refreshing : (state.guardError ?? STRINGS.noGuard)),
+
+      // 局域网地址列表（供其他设备填写；每个地址都可一键复制）
+      state.lanCandidates !== undefined && state.lanCandidates.length > 0
+        ? React.createElement('div', { className: 'rh-row', 'data-testid': 'lan-addresses', style: { marginTop: 12 } },
+          React.createElement('span', { className: 'rh-k' }, `${STRINGS.listenHint}：`),
+          ...state.lanCandidates.map(address => React.createElement(Pill, { key: address, tone: 'neutral' },
+            React.createElement('code', { className: 'rh-mono' }, address),
+            React.createElement(Button, {
+              'data-testid': 'copy-address',
+              'data-address': address,
+              variant: 'ghost',
+              size: 'small',
+              title: STRINGS.copyAddress,
+              children: STRINGS.copyAddress,
+              onClick: () => actions.onCopy(address),
+            }))))
+        : null,
+
+    ),
+  })
+
+  // ── 区块 3：设备区（筛选 + 入站分组 + 出站指向卡）────────────────────────
+  const devicesCard = React.createElement(Section, {
+    'data-testid': 'devices-section',
+    title: React.createElement(React.Fragment, null,
+      STRINGS.devicesZoneTitle,
+      React.createElement(Pill, { tone: 'neutral', children: `${activeDevices.length} 台` })),
+    actions: React.createElement(Segmented, {
+      'data-testid': 'device-filter',
+      ariaLabel: '设备筛选',
+      value: state.deviceFilter,
+      options: [
+        { value: 'all', label: STRINGS.filterAll, testId: 'filter' },
+        { value: 'inbound', label: STRINGS.filterInbound, testId: 'filter' },
+      ],
+      onChange: value => actions.onFilterChange(value as 'all' | 'inbound'),
+    }),
+    children: React.createElement(React.Fragment, null,
+      state.deviceFilter === 'all' || state.deviceFilter === 'inbound'
+        ? React.createElement('div', { className: 'rh-section' },
+          React.createElement('div', { className: 'rh-section-head' },
+            React.createElement('span', { className: 'rh-cfg-title' }, STRINGS.groupInbound),
+            React.createElement('span', { className: 'rh-cfg-desc' }, STRINGS.groupInboundHint)),
+          state.devices.length === 0
+            ? React.createElement(EmptyState, {
+              'data-testid': 'devices-empty',
+              icon: '📭',
+              title: state.loading ? STRINGS.devicesEmptyLoading : STRINGS.devicesEmptyTitle,
+              desc: STRINGS.devicesEmpty,
+            })
+            : React.createElement('div', { className: 'rh-devgrid', 'data-testid': 'remote-hub-devices' },
+              state.devices.map(device => renderDeviceCard(state, actions, device))))
+        : null,
+      state.deviceFilter === 'all'
+        ? React.createElement('div', { className: 'rh-section' },
+          React.createElement('div', { className: 'rh-section-head' },
+            React.createElement('span', { className: 'rh-cfg-title' }, STRINGS.groupOutbound),
+            React.createElement('span', { className: 'rh-cfg-desc' }, STRINGS.groupOutboundHint),
+            React.createElement(Button, {
+              'data-testid': 'connect-entry',
+              variant: 'primary',
+              size: 'small',
+              style: { marginLeft: 'auto' },
+              children: `+ ${STRINGS.filterOutbound}`,
+              onClick: () => {
+                const target = document?.querySelector('[data-testid="client-section"]')
+                target?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+              },
+            })),
+          (state.outboundTargets ?? []).length === 0
+            ? React.createElement('div', { className: 'rh-dev', 'data-testid': 'outbound-none' },
+              React.createElement('div', { className: 'rh-dev-top' },
+                React.createElement('div', { className: 'rh-dev-ico' }, '🔗'),
+                React.createElement('div', { className: 'rh-dev-meta' },
+                  React.createElement('div', { className: 'rh-dev-nm' }, STRINGS.notConnected),
+                  React.createElement('div', { className: 'rh-dev-sub' }, STRINGS.clientSub))))
+            : React.createElement('p', { className: 'rh-cfg-desc' },
+              `已保存 ${(state.outboundTargets ?? []).length} 个目标，在「${STRINGS.clientTitle}」里选择连接。`))
+        : null),
+  })
+
+  // ── 区块 4：统计区 ────────────────────────────────────────────────────────
+  const statsCard = React.createElement(Section, {
+    'data-testid': 'stats-section',
+    title: STRINGS.statsTitle,
+    actions: React.createElement(Pill, { tone: 'neutral', children: STRINGS.statsScope }),
+    children: state.stats == null
+      ? React.createElement('div', { 'data-testid': 'stats-unsupported', className: 'rh-empty' },
+        state.statsError ?? STRINGS.statsUnsupported)
+      : renderStatsBody(state),
+  })
+
+  // ── 区块 5：配置区 ────────────────────────────────────────────────────────
+  const configCard = React.createElement(Section, {
+    'data-testid': 'config-section',
+    title: STRINGS.configTitle,
+    actions: renderConfigSavedPill(state),
+    children: state.config == null
+      ? React.createElement('div', { 'data-testid': 'config-unsupported', className: 'rh-empty' }, STRINGS.configUnsupported)
+      : renderConfigBody(state, actions),
+  })
+
+  // 账号草稿：旧版调用方可能没有该字段，这里给一个安全的空草稿。
+  const accountDraft = state.accountDraft ?? { username: '', password: '', code: '', role: 'control' as RoleName }
+
+  // 主控端卡片（区块 3 的「连接其他设备」；阶段 B 换成账号登录多步流）
+  // 标题只放名称 + 状态 pill：IP / 已保存目标等**数据**一律进正文，避免挤占标题行。
+  const clientCard = React.createElement(Section, {
+    'data-testid': 'client-section',
+    title: React.createElement(React.Fragment, null,
+      STRINGS.clientTitle,
+      React.createElement(Pill, {
+        tone: isCloud ? 'online' : 'offline',
+        dot: true,
+        children: isCloud ? STRINGS.connected : STRINGS.notConnectedShort,
+      })),
+    desc: STRINGS.clientSub,
+    children: React.createElement(React.Fragment, null,
+      // ── 当前指向（地址/来源进正文，标题行保持干净）─────────────────────────
+      React.createElement('div', {
+        className: 'rh-fact',
+        'data-testid': 'client-target',
+      },
+      React.createElement('span', { className: 'rh-fact-key' }, isCloud ? '已连接' : '当前指向'),
+      React.createElement('span', { className: 'rh-fact-value' },
+        isCloud
+          ? `${state.mode.deviceLabel ?? state.mode.origin ?? STRINGS.modeCloud}`
+          : ''),
+      (state.mode.origin ?? '') === '' || !isCloud
+        ? null
+        : React.createElement('code', { className: 'rh-inline-code' }, state.mode.origin)),
+
+      // ── 已连接时的说明与断开（3D）────────────────────────────────────────
+      isCloud
+        ? React.createElement('div', { className: 'rh-row', 'data-testid': 'connected-to' },
+          React.createElement('span', { className: 'rh-k' },
+            '当前数据面已切换到该设备：侧栏、会话、插件都读取那台机器的数据。'),
+          React.createElement(Button, {
+            'data-testid': 'detach',
+            size: 'small',
+            variant: 'danger',
+            children: STRINGS.detach,
+            onClick: () => actions.onDetach(),
+          }))
+        : React.createElement('p', { className: 'rh-k', 'data-testid': 'not-connected', style: { margin: 0 } }, STRINGS.notConnected),
+
+      // ── 3A 未连接：目标地址 + 连接（已保存目标走 3C 卡片）──────────────────
+      React.createElement(Field, {
+        label: '目标地址',
+        hint: '填写对端 DSH 守卫地址（IP:端口），例如 http://192.168.1.10:8443',
+        children: React.createElement('div', { className: 'rh-row' },
+          React.createElement(Input, {
+            'data-testid': 'origin-input',
+            ariaLabel: '目标设备地址',
+            type: 'url',
+            inputMode: 'url',
+            autoComplete: 'url',
+            placeholder: STRINGS.originPlaceholder,
+            value: state.originDraft,
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onOriginChange(event.currentTarget.value),
+          }),
+          React.createElement(Button, {
+            'data-testid': 'connect',
+            variant: 'primary',
+            disabled: state.busy !== null,
+            loading: state.busy === 'connect',
+            children: state.busy === 'connect' ? STRINGS.connecting : STRINGS.connect,
+            onClick: () => actions.onConnect(),
+          })),
+      }),
+      state.originDraft.trim() !== '' && normalizeOrigin(state.originDraft) === undefined
+        ? React.createElement(Notice, { 'data-testid': 'origin-invalid', tone: 'error' }, STRINGS.originInvalid)
+        : null,
+
+      // ── 已保存目标（3C）：用 keyring 里的绑定直连，无需再输口令 ────────────
+      (state.outboundTargets ?? []).length > 0
+        ? React.createElement('div', { style: { marginTop: 12 } },
+          React.createElement('div', { className: 'rh-k' }, `已保存的目标（${state.outboundTargets.length}）`),
+          renderOutboundCard(state, actions))
+        : null,
+
+      // ── 3B 首次连接：账号登录（MFA 在同一表单内切换，不跳页）───────────────
+      React.createElement('hr', { className: 'rh-divider' }),
+      React.createElement('div', { className: 'rh-row', 'data-testid': 'account-login-hint' },
+        React.createElement('span', { className: 'rh-cfg-title' }, '用目标设备的账号登录'),
+        React.createElement('span', { className: 'rh-k' }, '登录成功后本机公钥会被自动登记，之后重连不再需要 2FA')),
+      React.createElement('div', { className: 'rh-row' },
+        React.createElement(Field, {
+          label: '用户名',
+          children: React.createElement(Input, {
+            'data-testid': 'account-user',
+            ariaLabel: '对端账号',
+            autoComplete: 'username',
+            placeholder: '对端账号',
+            value: accountDraft.username,
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('username', event.currentTarget.value),
+          }),
+        }),
+        React.createElement(Field, {
+          label: '口令',
+          children: React.createElement(PasswordInput, {
+            'data-testid': 'account-password',
+            ariaLabel: '对端口令',
+            autoComplete: 'current-password',
+            placeholder: '对端口令',
+            value: accountDraft.password,
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('password', event.currentTarget.value),
+          }),
+        })),
+      React.createElement('div', { className: 'rh-row' },
+        React.createElement(Field, {
+          label: '动态码（目标要求 2FA 时填写）',
+          children: React.createElement(Input, {
+            'data-testid': 'account-code',
+            ariaLabel: '两步验证码',
+            inputMode: 'numeric',
+            autoComplete: 'one-time-code',
+            placeholder: '6 位验证码（可选）',
+            value: accountDraft.code,
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('code', event.currentTarget.value),
+          }),
+        }),
+        React.createElement(Field, {
+          label: '申请的角色',
+          children: React.createElement(Select, {
+            'data-testid': 'account-role',
+            ariaLabel: '申请的角色',
+            value: accountDraft.role,
+            options: ROLES.map(role => ({ value: role, label: ROLE_LABEL[role] })),
+            onChange: (event: React.ChangeEvent<HTMLSelectElement>) =>
+              actions.onAccountChange('role', event.currentTarget.value),
+          }),
+        })),
+      React.createElement('div', { className: 'rh-row' },
+        React.createElement(Button, {
+          'data-testid': 'account-connect',
+          variant: 'primary',
+          disabled: state.busy !== null
+            || normalizeOrigin(state.originDraft) === undefined
+            || accountDraft.username.trim() === ''
+            || accountDraft.password === '',
+          loading: state.busy === 'account',
+          children: state.busy === 'account' ? '登录中…' : '登录并信任本机',
+          onClick: () => actions.onAccountConnect(),
+        })),
+    ),
+  })
 
   return React.createElement(
     'div',
-    { className: 'rh-root', 'data-testid': 'remote-hub-page', 'data-mode': state.mode.mode },
-    // 主题样式：幂等注入（相同节点不会重复）；外部可预先覆盖 --rh-* 变量。
-    React.createElement('style', { key: 'rh-theme', 'data-rh-theme': '' }, THEME_CSS),
+    { className: 'rh-root rh-scroll', 'data-testid': 'remote-hub-page', 'data-mode': state.mode.mode, 'data-rh-scope': '' },
+    // 设计系统样式表（token + 组件类 + 响应式）：幂等注入；外部可预先覆盖 --rh-*。
+    ThemeStyle(RH_CSS),
 
     // 内容壳：限宽居中（背景由 .rh-root 全幅铺满）
-    el('div', 'rh-shell', undefined,
+    React.createElement('div', { className: 'rh-shell' },
+      pageHead,
+      hostCard,
+      devicesCard,
+      clientCard,
+      statsCard,
+      configCard,
 
-    // 页头
-    el('header', 'rh-page-head', undefined,
-      React.createElement('h1', { className: 'rh-page-title', 'data-testid': 'page-title' }, STRINGS.title,
-        React.createElement('span', {
-          className: `rh-pill ${isCloud ? 'on' : ''}`,
-          ...(isCloud ? {} : { style: { color: 'var(--rh-text-2)' } }),
-          'data-testid': 'mode-badge',
-        }, el('span', 'rh-dot'),
-        isCloud ? `☁ ${state.mode.deviceLabel ?? state.mode.origin ?? STRINGS.modeCloud}` : STRINGS.modeLocal)),
-      el('p', 'rh-lead', undefined, STRINGS.lead)),
+      // 错误条
+      state.error === null
+        ? null
+        : React.createElement(Notice, { 'data-testid': 'page-error', role: 'alert', tone: 'error' },
+          `⚠️ ${state.error}`),
 
-    // 四区（参考文档 ①→②→③→④；主控端连接表单收进 ② 出站分组下方）
-    hostCard,
-    devicesCard,
-    clientCard,
-    statsCard,
-    configCard,
+      // 守卫诊断（故障时默认展开：用户不必打开开发者工具）
+      renderDiagnosticCard(state),
 
-    // 错误条
-    state.error !== null
-      ? el('div', 'rh-error', { role: 'alert', 'data-testid': 'page-error' },
-        React.createElement('span', undefined, '⚠️'), React.createElement('span', null, state.error))
-      : null,
+      // 运行日志（最近 30 条时间线；有错误时默认展开）
+      renderLogCard(state),
 
-    // 守卫诊断（默认展开：故障时用户不必打开开发者工具）
-    renderDiagnosticCard(state),
-
-    // 运行日志（最近 30 条时间线；有错误时默认展开）
-    renderLogCard(state),
-
-    // 高级（折叠收纳，参考 .collapse）
-    React.createElement('details', { className: 'rh-collapse' },
-      React.createElement('summary', undefined, STRINGS.advanced),
-      React.createElement('ul', undefined,
-        React.createElement('li', undefined, `存储键：${MODE_KEY}`),
-        React.createElement('li', undefined, `守卫地址：${state.guard?.origin ?? '（未检测到）'}`),
-        React.createElement('li', undefined, `协议版本：${state.guard?.protocolVersion ?? 1}（X-Hub-Protocol）`))),
-    ),
+      // 高级（折叠收纳）
+      React.createElement(Collapse, { summary: STRINGS.advanced },
+        React.createElement('ul', null,
+          React.createElement('li', null, `存储键：${MODE_KEY}`),
+          React.createElement('li', null, `守卫地址：${state.guard?.origin ?? '（未检测到）'}`),
+          React.createElement('li', null, `协议版本：${state.guard?.protocolVersion ?? 1}（X-Hub-Protocol）`)))),
   )
 }
 
@@ -1366,7 +988,7 @@ function renderDiagnosticCard(state: RemoteHubPageState): React.ReactNode {
     ...(healthy ? {} : { open: true }),
   },
   React.createElement('summary', undefined, STRINGS.diagTitle),
-  el('div', 'rh-minirow rh-diagnostic-grid', { 'data-testid': 'diagnostic-grid', style: { padding: '0 16px', marginTop: 8 } },
+  el('div', 'rh-kv rh-diagnostic-grid', { 'data-testid': 'diagnostic-grid', style: { padding: '0 16px', marginTop: 8 } },
     el('div', undefined,
       el('div', 'rh-k', undefined, STRINGS.diagPageOrigin),
       el('div', 'rh-v', undefined, pageOrigin)),
@@ -1393,8 +1015,8 @@ function renderDiagnosticCard(state: RemoteHubPageState): React.ReactNode {
           ? '—'
           : `${injection.ageSeconds}s`))),
   // 整机接管状态：carrier 是否已把 transport 指向远端。
-  el('div', 'rh-diagnostic-grid', { 'data-testid': 'diagnostic-transport-grid', style: { padding: '0 16px' } }, ...renderTakeoverRow(state)),
-  el('div', 'rh-minirow rh-diagnostic-grid', { 'data-testid': 'diagnostic-request-grid', style: { padding: '0 16px' } },
+  el('div', 'rh-diag', { 'data-testid': 'diagnostic-transport-grid', style: { padding: '0 16px' } }, ...renderTakeoverRow(state)),
+  el('div', 'rh-kv rh-diagnostic-grid', { 'data-testid': 'diagnostic-request-grid', style: { padding: '0 16px' } },
     el('div', undefined,
       el('div', 'rh-k', undefined, STRINGS.diagLastRequest),
       el('div', 'rh-v', { 'data-testid': 'diag-last-request' }, diagnostic === null
@@ -1555,11 +1177,16 @@ function renderDeviceCard(
     el('div', 'rh-dev-meta', undefined,
       el('div', 'rh-dev-nm', undefined, device.label ?? device.deviceId),
       el('div', 'rh-dev-sub', undefined, device.deviceId)),
-    el('span', `rh-pill small ${pillCls}`, {
+    el('span', `rh-pill ${pillCls}`, {
       'data-testid': 'device-status',
       'data-status': status,
     }, el('span', 'rh-dot'), statusLabel)),
-  el('div', 'rh-minirow', { style: { margin: '2px 0' } },
+  el('div', 'rh-kv', { style: { margin: '2px 0' } },
+    device.username === undefined || device.username === null
+      ? null
+      : el('div', undefined,
+        el('div', 'rh-k', undefined, STRINGS.devAccount),
+        el('div', 'rh-v', { 'data-testid': 'device-account' }, `账号 ${device.username}`)),
     device.role
       ? el('div', undefined,
         el('div', 'rh-k', undefined, STRINGS.devRole),
@@ -1576,25 +1203,27 @@ function renderDeviceCard(
         el('div', 'rh-v', undefined, new Date(device.createdAt).toLocaleDateString()))
       : null),
   // 状态由右上角三态标签表达，不再额外堆叠文字说明。
+  // 权限上限与撤销属于**身份管理**：统一在「设置 → 登录与账号」里做，
+  // 运行页只保留状态与连接事实，避免两处都能改权限而语义漂移。
   el('div', 'rh-dev-foot', undefined,
-    !invalid ? el('button', 'rh-btn small danger', {
-      type: 'button', 'data-testid': 'revoke', disabled: state.busy !== null,
-      onClick: () => actions.onRevoke(device.deviceId),
-    }, STRINGS.revoke) : null,
-    actions.onForgetDevice ? el('button', 'rh-btn small danger', {
-      type: 'button', 'data-testid': 'device-delete', disabled: state.busy !== null,
-      onClick: () => actions.onForgetDevice?.(device.deviceId),
-    }, '删除记录 / Delete') : null))
+    el('span', {
+      'data-testid': 'manage-in-settings',
+      style: { fontSize: 'var(--rh-fs-label)', color: 'var(--rh-text-2)' },
+    }, STRINGS.manageInSettings)))
 }
 
-/** Display only recorded pairing facts; legacy missing metadata remains unknown. */
+/** Display only recorded trust facts; legacy missing metadata remains unknown. */
 function renderOutboundFacts(target?: OutboundTarget): React.ReactNode {
-  const time = (value?: number): string => value === undefined ? '未知（旧配对未记录）' : new Date(value).toLocaleString()
-  return el('div', 'rh-minirow', { 'data-testid': 'outbound-facts' },
-    React.createElement('div', null, '授权角色：', target?.role ? (ROLE_LABEL[target.role as RoleName] ?? target.role) : '未知（需重新配对确认）'),
-    React.createElement('div', null, '配对时间：', time(target?.pairedAt)),
-    React.createElement('div', null, '最近连接：', time(target?.lastConnectedAt)),
-    React.createElement('div', null, '配对标识：', target?.deviceId ?? target?.id?.slice(0, 12) ?? '未知'))
+  const time = (value?: number): string => value === undefined ? '未知（旧记录未保存）' : new Date(value).toLocaleString()
+  // 每项是一组「键 / 值」：窄列里换行时整齐地堆成两行，而不是把一句话从中间折断。
+  const fact = (key: string, value: string): React.ReactNode => el('div', 'rh-fact-item', undefined,
+    el('span', 'rh-fact-key', undefined, key),
+    el('span', 'rh-fact-value', undefined, value))
+  return el('div', 'rh-kv', { 'data-testid': 'outbound-facts' },
+    fact('授权角色', target?.role ? (ROLE_LABEL[target.role as RoleName] ?? target.role) : '未知（需重新信任确认）'),
+    fact('信任时间', time(target?.pairedAt)),
+    fact('最近连接', time(target?.lastConnectedAt)),
+    fact('客户端标识', target?.deviceId ?? target?.id?.slice(0, 12) ?? '未知'))
 }
 
 /** 出站分组内容卡（本机指向；不伪造设备列表）。 */
@@ -1612,14 +1241,14 @@ function renderOutboundCard(state: RemoteHubPageState, actions: RemoteHubPageAct
         el('div', 'rh-dev-meta', undefined,
           el('div', 'rh-dev-nm', undefined, state.mode.deviceLabel ?? STRINGS.modeCloud),
           el('div', 'rh-dev-sub', undefined, state.mode.origin ?? '')),
-        el('span', 'rh-pill small on', undefined, el('span', 'rh-dot'), STRINGS.connected)),
+        el('span', 'rh-pill is-online', undefined, el('span', 'rh-dot'), STRINGS.connected)),
       renderOutboundFacts((state.outboundTargets ?? []).find(target => outboundTargetIdentity(target) === currentTarget)),
       el('div', 'rh-dev-foot', undefined,
-        el('button', 'rh-btn small danger', {
+        el('button', 'rh-btn is-small is-danger', {
           type: 'button', 'data-testid': 'detach-inline',
           onClick: () => actions.onDetach(),
         }, STRINGS.detach)))
-    const otherCards = otherTargets.map(target => el('div', 'rh-dev offline', {
+    const otherCards = otherTargets.map(target => el('div', 'rh-dev is-offline', {
       key: outboundTargetIdentity(target),
       'data-testid': 'outbound-paired',
       'data-origin': target.origin,
@@ -1628,16 +1257,16 @@ function renderOutboundCard(state: RemoteHubPageState, actions: RemoteHubPageAct
       el('div', 'rh-dev-top', undefined,
         el('div', 'rh-dev-ico', undefined, '💤'),
         el('div', 'rh-dev-meta', undefined,
-          el('div', 'rh-dev-nm', undefined, outboundTargetLabel(target, state.outboundTargets)),
-          el('div', 'rh-dev-sub', undefined, target.origin)),
-        el('span', 'rh-pill small off', undefined, el('span', 'rh-dot'), STRINGS.statusPaired)),
+          el('div', 'rh-dev-nm', undefined, outboundTargetTitle(target)),
+          el('div', 'rh-dev-sub', undefined, outboundTargetMeta(target, state.outboundTargets))),
+        el('span', 'rh-pill is-offline', undefined, el('span', 'rh-dot'), STRINGS.statusPaired)),
       renderOutboundFacts(target),
-      actions.onForgetOutbound ? el('button', 'rh-btn small danger', {
+      actions.onForgetOutbound ? el('button', 'rh-btn is-small is-danger', {
         type: 'button', 'data-testid': 'outbound-delete', disabled: state.busy !== null,
         onClick: () => actions.onForgetOutbound?.(target),
       }, '删除配对 / Delete') : null,
       el('div', 'rh-dev-foot', undefined,
-        el('button', 'rh-btn small primary', {
+        el('button', 'rh-btn is-small is-primary', {
           type: 'button', 'data-testid': 'reconnect',
           disabled: state.busy !== null,
           onClick: () => actions.onReconnect(target),
@@ -1646,23 +1275,8 @@ function renderOutboundCard(state: RemoteHubPageState, actions: RemoteHubPageAct
   }
 
   const paired = state.outboundTargets ?? []
-  return el('div', 'rh-outbound-list', { 'data-testid': 'outbound-paired-list' },
-    paired.length === 0
-      ? el('div', 'rh-dev', { 'data-testid': 'outbound-none' },
-        el('div', 'rh-dev-top', undefined,
-          el('div', 'rh-dev-ico', undefined, '🔗'),
-          el('div', 'rh-dev-meta', undefined,
-            el('div', 'rh-dev-nm', undefined, STRINGS.notConnected),
-            el('div', 'rh-dev-sub', undefined, STRINGS.clientSub))),
-        el('div', 'rh-dev-foot', undefined,
-          el('button', 'rh-btn small primary', {
-            type: 'button', 'data-testid': 'connect-entry',
-            onClick: () => {
-              document?.querySelector('[data-testid="client-section"]')
-                ?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
-            },
-          }, `+ ${STRINGS.connect}`)))
-      : paired.map(target => el('div', 'rh-dev offline', {
+  return el('div', 'rh-devgrid', { 'data-testid': 'outbound-paired-list' },
+    paired.map(target => el('div', 'rh-dev is-offline', {
         key: outboundTargetIdentity(target),
         'data-testid': 'outbound-paired',
         'data-origin': target.origin,
@@ -1671,17 +1285,17 @@ function renderOutboundCard(state: RemoteHubPageState, actions: RemoteHubPageAct
         el('div', 'rh-dev-top', undefined,
           el('div', 'rh-dev-ico', undefined, '💤'),
           el('div', 'rh-dev-meta', undefined,
-            el('div', 'rh-dev-nm', undefined, outboundTargetLabel(target, state.outboundTargets)),
-            el('div', 'rh-dev-sub', undefined, target.origin)),
-          el('span', 'rh-pill small off', undefined, el('span', 'rh-dot'), STRINGS.statusPaired)),
+            el('div', 'rh-dev-nm', undefined, outboundTargetTitle(target)),
+            el('div', 'rh-dev-sub', undefined, outboundTargetMeta(target, state.outboundTargets))),
+          el('span', 'rh-pill is-offline', undefined, el('span', 'rh-dot'), STRINGS.statusPaired)),
         renderOutboundFacts(target),
         el('div', 'rh-dev-foot', undefined,
-          el('button', 'rh-btn small primary', {
+          el('button', 'rh-btn is-small is-primary', {
             type: 'button', 'data-testid': 'reconnect',
             disabled: state.busy !== null,
             onClick: () => actions.onReconnect(target),
           }, STRINGS.connect),
-          actions.onForgetOutbound ? el('button', 'rh-btn small danger', {
+          actions.onForgetOutbound ? el('button', 'rh-btn is-small is-danger', {
             type: 'button', 'data-testid': 'outbound-delete', disabled: state.busy !== null,
             onClick: () => actions.onForgetOutbound?.(target),
           }, '删除配对 / Delete') : null))))
@@ -1791,14 +1405,14 @@ function renderStatsBody(state: RemoteHubPageState): React.ReactNode {
 
 /** 保存状态胶囊。 */
 function renderConfigSavedPill(state: RemoteHubPageState): React.ReactNode {
-  if (state.configSaving) return el('span', 'rh-pill small', undefined, STRINGS.configSavingLbl)
+  if (state.configSaving) return el('span', 'rh-pill', undefined, STRINGS.configSavingLbl)
   const dirty = state.configDraft !== null
     && JSON.stringify(state.configDraft) !== JSON.stringify(state.config)
   if (dirty) {
-    return el('span', 'rh-pill small danger', { 'data-testid': 'config-dirty' }, STRINGS.configUnsaved)
+    return el('span', 'rh-pill is-error', { 'data-testid': 'config-dirty' }, STRINGS.configUnsaved)
   }
   return state.configSavedAt !== null
-    ? el('span', 'rh-pill small on', { 'data-testid': 'config-saved' }, STRINGS.configSaved)
+    ? el('span', 'rh-pill is-online', { 'data-testid': 'config-saved' }, STRINGS.configSaved)
     : null
 }
 
@@ -1807,11 +1421,11 @@ function renderConfigBody(state: RemoteHubPageState, actions: RemoteHubPageActio
   const draft = state.configDraft ?? {}
   const value = (key: string): unknown => draft[key]
   const boolRow = (key: 'singleController' | 'bridgeApprovals', title: string, desc: string, testid: string) =>
-    el('div', 'rh-crow', undefined,
-      el('div', 'rh-cl', undefined,
-        el('div', 'rh-ct1', undefined, title),
-        el('div', 'rh-cd', undefined, desc)),
-      el('div', 'rh-cc', undefined,
+    el('div', 'rh-cfg-row', undefined,
+      el('div', 'rh-cfg-label', undefined,
+        el('div', 'rh-cfg-title', undefined, title),
+        el('div', 'rh-cfg-desc', undefined, desc)),
+      el('div', 'rh-cfg-control', undefined,
         el('button', `rh-switch ${value(key) === true ? 'on' : ''}`, {
           type: 'button', role: 'switch', 'aria-checked': value(key) === true ? 'true' : 'false',
           'data-testid': testid,
@@ -1821,23 +1435,23 @@ function renderConfigBody(state: RemoteHubPageState, actions: RemoteHubPageActio
     el('div', 'rh-cfg', undefined,
       boolRow('singleController', STRINGS.cfgSingle, STRINGS.cfgSingleDesc, 'cfg-single'),
       boolRow('bridgeApprovals', STRINGS.cfgBridge, STRINGS.cfgBridgeDesc, 'cfg-bridge'),
-      el('div', 'rh-crow', undefined,
-        el('div', 'rh-cl', undefined,
-          el('div', 'rh-ct1', undefined, STRINGS.cfgRole),
-          el('div', 'rh-cd', undefined, STRINGS.cfgRoleDesc)),
-        el('div', 'rh-cc', undefined,
+      el('div', 'rh-cfg-row', undefined,
+        el('div', 'rh-cfg-label', undefined,
+          el('div', 'rh-cfg-title', undefined, STRINGS.cfgRole),
+          el('div', 'rh-cfg-desc', undefined, STRINGS.cfgRoleDesc)),
+        el('div', 'rh-cfg-control', undefined,
           el('select', 'rh-select', {
             'data-testid': 'cfg-role', value: String(value('defaultRole') ?? 'control'),
             onChange: (event: React.ChangeEvent<HTMLSelectElement>) =>
               actions.onConfigChange('defaultRole', event.currentTarget.value),
           },
           ROLES.map(role => el('option', { key: role, value: role }, ROLE_LABEL[role]))))),
-      el('div', 'rh-crow', undefined,
-        el('div', 'rh-cl', undefined,
-          el('div', 'rh-ct1', undefined, STRINGS.cfgAttempts),
-          el('div', 'rh-cd', undefined, STRINGS.cfgAttemptsDesc)),
-        el('div', 'rh-cc', undefined,
-          el('input', 'rh-num', {
+      el('div', 'rh-cfg-row', undefined,
+        el('div', 'rh-cfg-label', undefined,
+          el('div', 'rh-cfg-title', undefined, STRINGS.cfgAttempts),
+          el('div', 'rh-cfg-desc', undefined, STRINGS.cfgAttemptsDesc)),
+        el('div', 'rh-cfg-control', undefined,
+          el('input', 'rh-input', {
             type: 'number', min: 1, max: 100, 'data-testid': 'cfg-attempts',
             value: String(value('maxPairAttempts') ?? 5),
             onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -1845,26 +1459,54 @@ function renderConfigBody(state: RemoteHubPageState, actions: RemoteHubPageActio
               if (!Number.isNaN(parsed)) actions.onConfigChange('maxPairAttempts', parsed)
             },
           })))),
-    // 冷项（只读展示 + 需重启标注）
-    el('div', 'rh-cold', undefined, STRINGS.cfgColdNote),
-    el('div', 'rh-minirow', { style: { marginTop: 8 } },
+    // 冷项（可改，但需重启 dsh web 生效）
+    el('div', 'rh-cold', undefined,
+      // 注意：`el` 的第二个参数是 className；纯文本节点必须带一个类名，
+      // 否则文本会被当成 className（2026-11-15 实测）。
+      el('span', 'rh-muted', STRINGS.cfgColdNote),
+      value('restartPending') === true
+        ? el('span', 'rh-pill is-error', { 'data-testid': 'restart-pending' }, STRINGS.cfgRestartPending)
+        : null),
+    // 与热项同样的卡片 + 行样式（`rh-cfg` 提供内边距/分隔线/字号继承）。
+    el('div', 'rh-cfg', undefined,
+      el('div', 'rh-cfg-row', undefined,
+        el('div', 'rh-cfg-label', undefined,
+          el('div', 'rh-cfg-title', undefined, '网络模式'),
+          el('div', 'rh-cfg-desc', undefined, STRINGS.cfgNetworkDesc)),
+        el('div', 'rh-cfg-control', undefined,
+          el('select', 'rh-select', {
+            'data-testid': 'cfg-network',
+            value: String(value('network') ?? 'loopback'),
+            onChange: (event: React.ChangeEvent<HTMLSelectElement>) =>
+              actions.onConfigChange('network', event.currentTarget.value),
+          },
+          el('option', { value: 'loopback' }, STRINGS.netLoopback),
+          el('option', { value: 'lan' }, STRINGS.netLan)))),
+      el('div', 'rh-cfg-row', undefined,
+        el('div', 'rh-cfg-label', undefined,
+          el('div', 'rh-cfg-title', undefined, STRINGS.cfgPort),
+          el('div', 'rh-cfg-desc', undefined, STRINGS.cfgPortDesc)),
+        el('div', 'rh-cfg-control', undefined,
+          el('input', 'rh-input', {
+            type: 'number', min: 1, max: 65_535, 'data-testid': 'cfg-port',
+            value: String(value('guardPort') ?? ''),
+            onChange: (event: React.ChangeEvent<HTMLInputElement>) => {
+              const parsed = Number.parseInt(event.currentTarget.value, 10)
+              if (!Number.isNaN(parsed)) actions.onConfigChange('guardPort', parsed)
+            },
+          })))),
+    el('div', 'rh-kv', { style: { marginTop: 12 } },
       el('div', undefined,
-        el('div', 'rh-k', undefined, STRINGS.cfgNetwork),
-        el('div', 'rh-v', undefined, value('network') === 'lan' ? STRINGS.netLan : STRINGS.netLoopback)),
-      el('div', undefined,
-        el('div', 'rh-k', undefined, STRINGS.cfgPort),
-        el('div', 'rh-v', undefined, String(value('guardPort') ?? '—'))),
-      el('div', undefined,
-        el('div', 'rh-k', undefined, STRINGS.cfgQrTtl),
+        el('div', 'rh-k', undefined, STRINGS.cfgTtl),
         el('div', 'rh-v', undefined, `${Math.round(Number(value('pairQrTtlMs') ?? 0) / 1000)}s`)),
       el('div', undefined,
-        el('div', 'rh-k', undefined, STRINGS.cfgCodeTtl),
+        el('div', 'rh-k', undefined, '票据轮换'),
         el('div', 'rh-v', undefined, `${Math.round(Number(value('pairCodeTtlMs') ?? 0) / 1000)}s`)),
       el('div', undefined,
         el('div', 'rh-k', undefined, STRINGS.cfgTunnel),
         el('div', 'rh-v', undefined, String(value('tunnelKind') ?? '—')))),
     el('div', 'rh-row', undefined,
-      el('button', 'rh-btn primary', {
+      el('button', 'rh-btn is-primary', {
         type: 'button', 'data-testid': 'config-save',
         disabled: state.configSaving,
         onClick: () => actions.onConfigSave(),
@@ -1887,107 +1529,10 @@ function renderConfigBody(state: RemoteHubPageState, actions: RemoteHubPageActio
  * @param link - 票据对应的配对链接（无票据时为 null）。
  * @returns React 节点。
  */
-/** 签发有效期（毫秒）：票据与短码都是 15 秒轮换——用于倒计时进度条比例。 */
-const ISSUE_TTL: Record<IssuedPairing['kind'], number> = { ticket: 15_000, code: 15_000 }
-
-function renderIssuedBody(
-  state: RemoteHubPageState,
-  actions: RemoteHubPageActions,
-  link: string | null,
-): React.ReactNode {
-  const ticket = state.issued !== null && state.issued.kind === 'ticket' ? state.issued : null
-  const code = state.issuedCode !== null && state.issuedCode.kind === 'code' ? state.issuedCode : null
-  // 二维码：票据存在时渲染；否则显示占位提示（引导点击「生成二维码」）。
-  const qr = link !== null
-    ? renderQr(link)
-    : el('div', 'rh-qr-placeholder', { 'data-testid': 'qr-placeholder' },
-      el('div', 'rh-ic', undefined, '▦'),
-      el('div', undefined, STRINGS.qrPending))
-
-  return el('div', 'rh-tokenbody', undefined,
-    // ── 二维码 ────────────────────────────────────────────────────────────
-    el('div', 'rh-tokcol rh-tokcol-qr', undefined, qr),
-
-    // ── 凭据信息（短码 + 链接 + 倒计时）──────────────────────────────────
-    el('div', 'rh-tokcol rh-tokcol-info', undefined,
-      el('div', 'rh-minirow', { style: { marginBottom: 8 } },
-        el('div', undefined,
-          el('div', 'rh-k', undefined, STRINGS.issuedRole),
-          el('div', 'rh-v', undefined,
-            ROLE_LABEL[((ticket ?? code)?.role as RoleName) ?? state.role] ?? ((ticket ?? code)?.role ?? state.role))),
-        el('div', undefined,
-          el('div', 'rh-k', undefined, STRINGS.issuedKind),
-          el('div', 'rh-v', { 'data-testid': 'issued-kind' },
-            ticket !== null ? STRINGS.issuedTicket : code !== null ? STRINGS.issuedCodeLabel : STRINGS.issuedNone))),
-
-      // 短码：就绪时显示真实短码，否则显示占位 + 引导
-      el('div', 'rh-lbl', undefined, STRINGS.issuedCodeLabel),
-      code !== null
-        ? el('code', 'rh-codevalue', { 'data-testid': 'issued-code' }, code.value)
-        : el('div', 'rh-codevalue rh-codevalue-empty', { 'data-testid': 'issued-code-empty' },
-          el('span', undefined, STRINGS.codePending),
-          el('button', 'rh-linkbtn', {
-            type: 'button', 'data-testid': 'issue-code-inline',
-            disabled: state.busy !== null,
-            onClick: () => actions.onIssue('code'),
-          }, STRINGS.issueCode)),
-
-      // 链接：票据存在时显示可复制的完整链接
-      el('div', 'rh-lbl', { style: { marginTop: 12 } }, STRINGS.issuedLinkLabel),
-      link !== null
-        ? el('code', 'rh-linkvalue', { 'data-testid': 'issued-link' }, link)
-        : el('div', 'rh-linkvalue rh-codevalue-empty', { 'data-testid': 'issued-link-empty' },
-          el('span', undefined, STRINGS.linkPending),
-          el('button', 'rh-linkbtn', {
-            type: 'button', 'data-testid': 'issue-ticket-inline',
-            disabled: state.busy !== null,
-            onClick: () => actions.onIssue('ticket'),
-          }, STRINGS.issueTicket)),
-
-      // 倒计时
-      el('div', 'rh-lbl', { style: { marginTop: 12 } }, STRINGS.countdownLabel),
-      el('div', 'rh-countdown', { 'data-testid': 'issued-countdown-bar', role: 'presentation' },
-        React.createElement('i', { style: { width: `${Math.round(issuedRatio(state) * 100)}%` } })),
-      el('div', 'rh-row', { style: { marginTop: 8 } },
-        link !== null
-          ? el('button', 'rh-btn small', {
-            type: 'button', 'data-testid': 'copy-link',
-            onClick: () => actions.onCopy(link),
-          }, STRINGS.copyLink)
-          : null,
-        code !== null
-          ? el('button', 'rh-btn small', {
-            type: 'button', 'data-testid': 'copy-code',
-            onClick: () => actions.onCopy(code.value),
-          }, STRINGS.copyCode)
-          : null,
-        el('span', 'rh-lbl', { 'data-testid': 'issued-countdown' }, countdownText(state)))))
-}
 
 /** 倒计时用的「最近一次签发」（票据优先，其次短码）。 */
-function latestIssue(state: RemoteHubPageState): IssuedPairing | null {
-  if (state.issued !== null) return state.issued
-  return state.issuedCode ?? null
-}
-
 /** 签发倒计时进度（0–1，按签发类型的有效期归一）。 */
-function issuedRatio(state: RemoteHubPageState): number {
-  const latest = latestIssue(state)
-  if (latest === null) return 0
-  const ttl = ISSUE_TTL[latest.kind] ?? 15_000
-  const left = Math.max(0, latest.expiresAt - state.now)
-  return Math.min(1, left / ttl)
-}
-
 /** 倒计时文案（含角色）。 */
-function countdownText(state: RemoteHubPageState): string {
-  const latest = latestIssue(state)
-  if (latest === null) return ''
-  const left = remainingSeconds(latest.expiresAt, state.now)
-  const role = ROLE_LABEL[latest.role as RoleName] ?? latest.role
-  return left > 0 ? `剩余 ${left}s · 角色 ${role}` : '已过期，请重新生成'
-}
-
 /** 时间显示：相对最近。 */
 function formatTime(iso: string): string {
   const at = Date.parse(iso)
@@ -2067,25 +1612,28 @@ export interface RemoteHubPageDeps {
   }>
   /** 清除配对。 */
   revokeDevices: (input: { deviceId?: string; all?: boolean }) => Promise<{ revoked: string[] }>
-  issueTicket: (input: { origin: string; pairIssueToken: string; role: RoleName }) => Promise<{ ticket: string; expiresAt: number; role: string }>
-  issueCode: (input: { origin: string; pairIssueToken: string; role: RoleName }) => Promise<{ code: string; expiresAt: number; role: string }>
-  /**
-   * 同源签发（桌面端唯一可用路径）。
-   *
-   * 桌面页面 origin 是 `dsh-app://app`，无法跨协议 fetch 守卫；签发必须走
-   * `hub/admin.issue` 同源通道。缺省时回退到 `issueTicket` / `issueCode`。
-   */
-  adminIssue?: (input: { kind: 'ticket' | 'code'; role: RoleName }) => Promise<{
-    kind: 'ticket' | 'code'
-    value: string
-    expiresAt: number
-    role: string
-  }>
-  /** 出站连接状态读写（`carrier-mode.json`；磁盘为真源，CLI 配对也能被页面感知）。 */
+  /** 出站连接状态读写（`carrier-mode.json`；磁盘为真源，CLI 连接也能被页面感知）。 */
   carrier?: () => Promise<{ mode: Record<string, unknown>; at: number }>
   carrierWrite?: (mode: Record<string, unknown>) => Promise<number>
   listOutboundTargets?: () => Promise<readonly OutboundTarget[]>
-  saveOutboundTarget?: (target: Omit<OutboundTarget, 'id'> & { token: string }) => Promise<OutboundTarget>
+  /**
+   * 用**对端账号**登录并信任本浏览器（账号认证模式）。
+   *
+   * 内部完成：跨源 `/remote-auth/*`（头会话）→ 登录/二次验证 → 登记客户端公钥
+   * → 保存按 origin 的绑定 → 写入出站档案（account 目标）。页面只负责切 carrier。
+   */
+  connectWithAccount?: (input: {
+    origin: string
+    username: string
+    password: string
+    code: string
+    role: RoleName
+  }) => Promise<{ clientId: string; deviceLabel?: string; role?: string; targetId?: string }>
+  saveOutboundTarget?: (target: Omit<OutboundTarget, 'id'> & {
+    token?: string
+    account?: boolean
+    accountId?: string
+  }) => Promise<OutboundTarget>
   activateOutboundTarget?: (targetId: string) => Promise<number>
   forgetDevice?: (deviceId: string) => Promise<boolean>
   forgetOutboundTarget?: (targetId: string) => Promise<boolean>
@@ -2096,14 +1644,6 @@ export interface RemoteHubPageDeps {
     origin: string
     candidates: readonly string[]
     preferred: string
-  }>
-  connect: (input: { origin: string; secret: string }) => Promise<{
-    token: string
-    role: string
-    deviceId?: string
-    label?: string
-    /** 单控模式下被本次配对踢下线的设备（供 UI 提示）。 */
-    displacedDevices?: { deviceId: string; label: string }[]
   }>
   /** ③ 守卫运行指标（宿主旧版本 reject → 降级卡）。 */
   stats?: () => Promise<HubMetrics>
@@ -2140,25 +1680,17 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
     const [guardError, setGuardError] = React.useState<string | null>(null)
     const [devices, setDevices] = React.useState<readonly CloudDeviceRow[]>([])
     const [loading, setLoading] = React.useState(true)
-    const [role, setRole] = React.useState<RoleName>('control')
     const [deletePrompt, setDeletePrompt] = React.useState<{ message: string; run(): void } | null>(null)
-    const selectedRoleRef = React.useRef(role)
-    selectedRoleRef.current = role
-  /** 同时持有一张票据与一个短码（两者独立有效期，一起展示）。 */
-  const [ticket, setTicket] = React.useState<IssuedPairing | null>(null)
-  const [code, setCode] = React.useState<IssuedPairing | null>(null)
     const [originDraft, setOriginDraft] = React.useState<string>(
       () => (mode.mode === 'cloud' ? (mode.origin ?? '') : ''),
     )
-    const [secretDraft, setSecretDraft] = React.useState<string>('')
-    const [busy, setBusy] = React.useState<null | 'connect' | 'issue' | 'revoke' | 'delete' | 'refresh' | 'detach'>(null)
+    const [accountDraft, setAccountDraft] = React.useState<{ username: string; password: string; code: string; role: RoleName }>(
+      () => ({ username: 'admin', password: '', code: '', role: 'control' }),
+    )
+    const [busy, setBusy] = React.useState<null | 'connect' | 'account' | 'revoke' | 'delete' | 'refresh' | 'detach'>(null)
     const [error, setError] = React.useState<string | null>(null)
     const [now, setNow] = React.useState<number>(() => clock())
-    const [scannerOpen, setScannerOpen] = React.useState(false)
     // 四区扩展状态
-    const [autoReissue, setAutoReissue] = React.useState<boolean>(() => {
-      try { return storage?.getItem('remote-hub:auto-reissue') !== '0' } catch { return true }
-    })
     const [deviceFilter, setDeviceFilter] = React.useState<'all' | 'inbound'>('all')
     const [stats, setStats] = React.useState<HubMetrics | null>(null)
     const [statsError, setStatsError] = React.useState<string | null>(null)
@@ -2324,7 +1856,6 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
       deps.getConfig()
         .then(snapshot => {
           setConfig(snapshot); setConfigDraft(snapshot)
-          setRole(configuredDefaultRole(snapshot.defaultRole))
         })
         .catch(() => { setConfig(null); setConfigDraft(null) })
     }, [])
@@ -2387,11 +1918,6 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
       return () => { cancelled = true; clearTimeout(timer) }
     }, [guard !== null, refresh])
 
-    React.useEffect(() => {
-      if (ticket === null && code === null) return undefined
-      const timer = setInterval(() => { setNow(clock()) }, 1000)
-      return () => { clearInterval(timer) }
-    }, [ticket === null, code === null])
 
     // ③ 指标轮询（60s；守卫不可用时节流不重试）。
     React.useEffect(() => {
@@ -2400,89 +1926,15 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
       return () => { clearInterval(timer) }
     }, [deps.stats, guard === null, refreshStats])
 
-    /**
-     * 15 秒轮换：票据与短码**各自独立**到期后立即换新。
-     *
-     * 为什么是 15 秒：配对凭据只在极短窗口内有效，配对成功那一刻服务端就下发
-     * 长期设备令牌并持久化到设备表，设备此后凭令牌长期访问 —— 凭据过期不会
-     * 让已配对设备掉线，只是页面上展示的码会不断更新。
-     */
-    React.useEffect(() => {
-      if (!autoReissue || busy !== null) return
-      const ticketExpired = ticket !== null && remainingSeconds(ticket.expiresAt, now) <= 0
-      const codeExpired = code !== null && remainingSeconds(code.expiresAt, now) <= 0
-      if (!ticketExpired && !codeExpired) return
-      if (deps.adminIssue === undefined
-        && (deps.injected().pairIssueToken ?? '') === '') return
-      if (ticketExpired) void issueOne('ticket')
-      if (codeExpired) void issueOne('code')
-    }, [ticket, code, autoReissue, now, busy, guard])
 
-    /**
-     * 签发一枚凭据并写入对应状态槽（票据 → ticket，短码 → code）。
-     * @param kind - 凭据类型。
-     * @param roleOverride - 指定角色（缺省用页面当前选择）。
-     */
-    function issueOne(
-      kind: 'ticket' | 'code',
-      roleOverride?: RoleName,
-    ): Promise<void> {
-      const useRole = roleOverride ?? role
-      // 守卫直连回退路径需要 pin + 地址；同源通道不需要。
-      if (deps.adminIssue === undefined
-        && (deps.injected().pairIssueToken ?? '') === '') {
-        return Promise.reject(new Error('本机签发不可用：缺少签发凭据'))
-      }
-      const pairIssueToken = deps.injected().pairIssueToken
-      const origin = guard?.loopbackOrigin
-        ?? deps.injected().loopbackOrigin
-        ?? guard?.origin
-        ?? normalizeOrigin(deps.injected().guardOrigin ?? '')
-      const run = deps.adminIssue !== undefined
-        // 同源通道：桌面端 dsh-app 页面无法跨协议访问守卫。
-        ? deps.adminIssue({ kind, role: useRole }).then(result => ({
-          kind: result.kind, value: result.value, role: result.role, expiresAt: result.expiresAt,
-        }))
-        : kind === 'ticket'
-          ? deps.issueTicket({ origin: origin as string, pairIssueToken: pairIssueToken as string, role: useRole }).then(result => ({
-            kind: 'ticket' as const, value: result.ticket, role: result.role, expiresAt: result.expiresAt,
-          }))
-          : deps.issueCode({ origin: origin as string, pairIssueToken: pairIssueToken as string, role: useRole }).then(result => ({
-            kind: 'code' as const, value: result.code, role: result.role, expiresAt: result.expiresAt,
-          }))
-      return run
-        .then(result => {
-          if (selectedRoleRef.current !== useRole) return
-          if (result.kind === 'ticket') setTicket(result)
-          else setCode(result)
-          setNow(clock())
-          deps.log?.('info', result.kind === 'ticket' ? '二维码已更新' : '短码已更新',
-            `${Math.round((result.expiresAt - clock()) / 1000)}s 有效`, 'hub/admin.issue')
-        })
-        .catch((cause: unknown) => {
-          deps.log?.('warn', kind === 'ticket' ? '二维码刷新失败' : '短码刷新失败', describeGuardFailure(cause))
-        })
-    }
 
     const actions: RemoteHubPageActions = {
       onRefresh() { refresh() },
-      onRoleChange(next) { setRole(next) },
       onCopy(text) {
         const clipboard = (globalThis as {
           navigator?: { clipboard?: { writeText?: (value: string) => Promise<void> } }
         }).navigator?.clipboard
         void clipboard?.writeText?.(text)
-      },
-      onIssue(kind) {
-        setBusy('issue')
-        setError(null)
-        deps.log?.('info', kind === 'ticket' ? '开始签发二维码' : '开始签发短码', `角色 ${ROLE_LABEL[role]}`)
-        void issueOne(kind)
-          .catch((cause: unknown) => {
-            setError(`生成失败：${describeGuardFailure(cause)}`)
-            deps.log?.('error', '签发失败', describeGuardFailure(cause), 'hub/admin.issue')
-          })
-          .finally(() => { setBusy(null) })
       },
       onForgetDevice(deviceId) {
         const remove = deps.forgetDevice
@@ -2528,16 +1980,7 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
           .finally(() => { setBusy(null) })
       },
       onOriginChange(value) {
-        const draft = connectionAddressDraft(value)
-        setOriginDraft(draft.origin)
-        if (draft.secret !== undefined) setSecretDraft(draft.secret)
-        if (error !== null) setError(null)
-      },
-      onSecretChange(value) {
-        setSecretDraft(value)
-        // 粘贴二维码链接时自动填充地址。
-        const parsed = parsePairLink(value)
-        if (parsed !== null) setOriginDraft(parsed.origin)
+        setOriginDraft(value)
         if (error !== null) setError(null)
       },
       onDetach() {
@@ -2603,21 +2046,16 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
           setError(`重连失败，连接状态未更改：${cause instanceof Error ? cause.message : String(cause)}`)
         })
       },
-      onScan() { setScannerOpen(true) },
-      onAutoReissueChange(enabled) {
-        setAutoReissue(enabled)
-        try { storage?.setItem('remote-hub:auto-reissue', enabled ? '1' : '0') } catch { /* 无存储时跳过 */ }
-      },
       onFilterChange(filter) { setDeviceFilter(filter) },
       onConfigChange(key, value) {
         setConfigDraft(previous => ({ ...(previous ?? {}), [key]: value }))
-        if (key === 'defaultRole') setRole(configuredDefaultRole(value))
         setConfigSavedAt(null)
       },
       onConfigSave() {
         if (deps.patchConfig === undefined || configDraft === null) return
         const patch: Record<string, unknown> = {}
-        for (const key of ['singleController', 'bridgeApprovals', 'defaultRole', 'maxPairAttempts']) {
+        // 热项 + 冷项（端口/网络）：冷项也需要提交，否则页面能改却永远存不进去。
+        for (const key of ['singleController', 'bridgeApprovals', 'defaultRole', 'maxPairAttempts', 'guardPort', 'network']) {
           if (Object.hasOwn(configDraft, key)) patch[key] = configDraft[key]
         }
         setConfigSaving(true)
@@ -2626,7 +2064,6 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
           .then(result => {
             setConfig(result)
             setConfigDraft(result)
-            setRole(configuredDefaultRole(result.defaultRole))
             setConfigSavedAt(clock())
             deps.log?.('info', '配置已保存', Object.keys(patch).join(', '), 'hub/admin.configPatch')
           })
@@ -2638,118 +2075,76 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
           .finally(() => { setConfigSaving(false) })
       },
       onConnect() {
-        const link = parsePairLink(secretDraft)
-        connectWith(normalizeOrigin(link?.origin ?? originDraft), link?.secret ?? secretDraft.trim())
+        // 「连接」= 用已保存的 keyring 绑定直连目标；没有已保存目标时等同「登录并信任」。
+        const target = normalizeOrigin(originDraft)
+        if (target === undefined) {
+          setError(STRINGS.originInvalid)
+          return
+        }
+        const saved = (outboundTargets ?? []).find(item => (normalizeOrigin(item.origin) ?? item.origin) === target)
+        if (saved?.id !== undefined && deps.activateOutboundTarget !== undefined) {
+          actions.onReconnect(saved)
+          return
+        }
+        actions.onAccountConnect()
       },
-    }
-
-    /**
-     * 进入页面自动签发**二维码 + 短码**（两者独立 15 秒轮换）。
-     *
-     * 用户不该需要手动点击才能看到可扫的码；三种凭据同时就绪，任选其一交给
-     * 对方即可。之后由「过期自动重签」各自续期。失败静默（运行日志记录原因）。
-     */
-    const autoIssuedRef = React.useRef<RoleName | null>(null)
-    React.useEffect(() => {
-      if (autoIssuedRef.current === role) return
-      if (guard === null) return
-      // 同源管理通道或注入 pin 任一可用即可签发。
-      if (deps.adminIssue === undefined && (deps.injected().pairIssueToken ?? '') === '') return
-      autoIssuedRef.current = role
-      setTicket(null); setCode(null)
-      void issueOne('ticket')
-      void issueOne('code')
-    }, [guard, actions])
-
-    /**
-     * 用给定 origin/secret 建立连接（`onConnect` 与扫码共用）。
-     * @param target - 已规范化的地址；undefined 表示非法。
-     * @param secret - 短码或票据。
-     */
-    function connectWith(target: string | undefined, secret: string): void {
-      if (target === undefined) {
-        setError('目标地址格式不正确。')
-        return
-      }
-      if (classifyPairSecret(secret) === null) {
-        setError('配对凭据格式不正确。')
-        return
-      }
-      setBusy('connect')
-      setError(null)
-      void deps.connect({ origin: target, secret })
-        .then(async result => {
-          const next: CarrierMode = {
-            mode: 'cloud',
-            origin: target,
-            token: result.token,
-            ...(result.label ?? result.deviceId !== undefined
-              ? { deviceLabel: result.label ?? result.deviceId }
-              : {}),
-          }
-          if (deps.saveOutboundTarget === undefined || deps.carrierWrite === undefined) {
-            setError('宿主不支持安全保存配对凭据；配对可能已兑换，请在目标端检查并撤销孤立设备。')
-            return
-          }
-          const paired = await persistNewPairing({
-            saveTarget: () => deps.saveOutboundTarget!({
+      onAccountChange(field, value) {
+        setAccountDraft(current => ({
+          ...current,
+          ...(field === 'role'
+            ? { role: (configuredDefaultRole(value)) }
+            : { [field]: value }),
+        }))
+      },
+      onAccountConnect() {
+        const target = normalizeOrigin(originDraft)
+        if (target === undefined) {
+          setError('目标地址格式不正确。')
+          return
+        }
+        if (deps.connectWithAccount === undefined) {
+          setError('当前宿主不支持跨机账号登录；请升级插件。')
+          return
+        }
+        const { username, password, code, role: accountRole } = accountDraft
+        if (username.trim() === '' || password === '') {
+          setError('请填写对端账号与口令。')
+          return
+        }
+        setBusy('account')
+        setError(null)
+        void deps.connectWithAccount({
+          origin: target,
+          username: username.trim(),
+          password,
+          code: code.trim(),
+          role: accountRole,
+        })
+          .then(async result => {
+            if (deps.carrierWrite === undefined) {
+              setError('宿主不支持安全保存连接状态；账号已信任，但未切换。')
+              return
+            }
+            const label = result.deviceLabel ?? result.clientId
+            // 带上 targetId：磁盘 carrier 状态靠它关联出站档案，重启才能续上。
+            const carrierState = {
+              mode: 'cloud' as const,
               origin: target,
-              token: result.token,
-              ...(next.deviceLabel === undefined ? {} : { deviceLabel: next.deviceLabel }),
-              ...(result.deviceId === undefined ? {} : { deviceId: result.deviceId }),
-              role: result.role,
-              pairedAt: clock(),
-              lastConnectedAt: clock(),
-            }),
-            writeCloudMode: saved => deps.carrierWrite!({
-              mode: 'cloud',
-              origin: saved.origin,
-              targetId: saved.id,
-              ...(saved.deviceLabel === undefined ? {} : { deviceLabel: saved.deviceLabel }),
-            }),
-            setCloudMode: saved => {
-              writeCarrierMode({ ...next, targetId: saved.id }, storage)
-              setOutboundTargets(previous => upsertOutboundTarget(previous, saved))
-            },
+              account: true,
+              ...(result.targetId === undefined ? {} : { targetId: result.targetId }),
+              ...(label === undefined ? {} : { deviceLabel: label }),
+            }
+            const at = await deps.carrierWrite(carrierState)
+            writeCarrierMode(carrierState, storage)
+            lastCarrierAtRef.current = at
+            setAccountDraft(current => ({ ...current, password: '', code: '' }))
+            reload()
           })
-          if (!paired.archiveSaved) {
-            setError('配对已在目标端兑换，但本机 profile 档案保存失败；未切换，请在目标端撤销孤立配对后重试。')
-            return
-          }
-          if (!paired.carrierSaved) {
-            setOutboundTargets(previous => upsertOutboundTarget(previous, paired.target!))
-            setError('配对已保存到本机档案，但 carrier 切换失败；可从已配对卡重试。')
-            return
-          }
-          lastCarrierAtRef.current = -1
-          const displaced = result.displacedDevices ?? []
-          if (displaced.length > 0) {
-            deps.log?.('info', '单控已切换控制端', displaced.map(device => device.label).join('、'))
-          }
-          reload()
-        })
-        .catch((cause: unknown) => {
-          setError(`连接失败：${cause instanceof Error ? cause.message : String(cause)}`)
-        })
-        .finally(() => { setBusy(null) })
-    }
-
-    /**
-     * 扫码命中：解析链接 → 回填表单 → 直接连接。
-     * @param text - 解码出的原始文本。
-     */
-    function applyScan(text: string): void {
-      setScannerOpen(false)
-      const link = parsePairLink(text)
-      const secret = link?.secret ?? text.trim()
-      const target = normalizeOrigin(link?.origin ?? originDraft)
-      if (link !== null) setOriginDraft(link.origin)
-      setSecretDraft(secret)
-      if (target === undefined || classifyPairSecret(secret) === null) {
-        setError('扫到的内容不是本插件的配对二维码（可改用短码手动输入）。')
-        return
-      }
-      connectWith(target, secret)
+          .catch((cause: unknown) => {
+            setError(`登录失败：${cause instanceof Error ? cause.message : String(cause)}`)
+          })
+          .finally(() => { setBusy(null) })
+      },
     }
 
     const page = renderRemoteHubPage({
@@ -2759,15 +2154,8 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
       guardError,
       devices,
       loading,
-      ...(deps.injected().pairIssueToken !== undefined
-        ? { pairIssueToken: deps.injected().pairIssueToken }
-        : {}),
-      role,
-      issued: ticket,
-      issuedCode: code,
-      autoReissue,
       originDraft,
-      secretDraft,
+      accountDraft,
       deviceFilter,
       stats,
       statsError,
@@ -2778,7 +2166,7 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
       busy,
       error,
       injection,
-      adminAvailable: deps.adminIssue !== undefined || deps.diagnostic !== undefined,
+      adminAvailable: deps.diagnostic !== undefined,
       listenAddress,
       lanCandidates,
       diagnostic: deps.diagnostic?.() ?? null,
@@ -2793,14 +2181,7 @@ export function createRemoteHubPageComponent(deps: RemoteHubPageDeps): () => Rea
         onCancel: () => setDeletePrompt(null),
         onConfirm: () => { const run = deletePrompt.run; setDeletePrompt(null); run() },
       }))
-    return scannerOpen
-      ? React.createElement(React.Fragment, null,
-        page,
-        React.createElement(QrScanner, {
-          onResult: (text: string) => { applyScan(text) },
-          onClose: () => { setScannerOpen(false) },
-        }))
-      : page
+    return page
   }
 }
 

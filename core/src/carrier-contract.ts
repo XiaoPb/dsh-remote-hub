@@ -68,6 +68,13 @@ export interface CarrierMode {
   readonly targetId?: string
   /** cloud bearer 仅为旧版兼容/运行时内存输入，不写入 localStorage。 */
   readonly token?: string
+  /**
+   * 账号认证模式：用「租约 + 每请求客户端签名」而不是长期 bearer。
+   *
+   * 为 true 时 `token` 可以缺省；租约与私钥按 origin 存在浏览器 IndexedDB，
+   * carrier 用懒签名器在首次请求时读取。
+   */
+  readonly account?: boolean
   /** cloud 模式：设备展示名（UI 角标用，非敏感）。 */
   readonly deviceLabel?: string
 }
@@ -93,6 +100,7 @@ export function readCarrierMode(storage?: Storage): CarrierMode {
     return {
       mode: 'cloud',
       origin: value.origin,
+      ...(value.account === true ? { account: true } : {}),
       ...(typeof value.targetId === 'string' && value.targetId !== '' ? { targetId: value.targetId } : {}),
       ...(typeof value.token === 'string' && value.token !== '' ? { token: value.token } : {}),
       ...(typeof value.deviceLabel === 'string' && value.deviceLabel !== '' ? { deviceLabel: value.deviceLabel } : {}),
@@ -113,6 +121,7 @@ export function writeCarrierMode(mode: CarrierMode, storage?: Storage): void {
     const hint = {
       mode: 'cloud',
       ...(typeof mode.origin === 'string' ? { origin: mode.origin } : {}),
+      ...(mode.account === true ? { account: true } : {}),
       ...(typeof mode.targetId === 'string' ? { targetId: mode.targetId } : {}),
       ...(typeof mode.deviceLabel === 'string' ? { deviceLabel: mode.deviceLabel } : {}),
     }

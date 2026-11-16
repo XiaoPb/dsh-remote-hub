@@ -6,7 +6,7 @@
 [![Release](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml/badge.svg)](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml)
 [![npm](https://img.shields.io/npm/v/@xiaopb/dsh-remote-hub?label=npm)](https://www.npmjs.com/package/@xiaopb/dsh-remote-hub)
 
-**Dual-role remote takeover for DSH (v0.3.6)**
+**Dual-role remote takeover for DSH (v0.5.0)**
 
 Docs: [Deployment](docs/DEPLOY.md) ｜ [Architecture](docs/ARCHITECTURE.md) ｜ [Design contract](docs/DESIGN.md) ｜ [API permission matrix](docs/API-MATRIX.md) ｜ [Doc index](docs/INDEX.md) ｜ [Changelog](CHANGELOG.md) ｜ [中文](README.md)
 
@@ -68,6 +68,49 @@ The complete per-endpoint matrix is in [API permission matrix](docs/API-MATRIX.m
 
 ---
 
+## Two ways to use it
+
+| | Desktop / client | Browser-direct (0.5.0+) |
+|---|---|---|
+| How | Install the DSH desktop app, pair from "Cloud devices" | Open `http://<host>:<guardPort>/ ` in any browser |
+| Identity | Client keypair, signed per request | HttpOnly session cookie |
+| Auth | Account + 2FA once at trust time; leases rotate silently for 7 days | **Every visit** needs account, password and a 6-digit code |
+| Best for | Your own workstation | Phones, tablets, borrowed machines, no-client environments |
+| Requires | The desktop client | Just a browser |
+
+Both coexist. The full guide is **[docs/BROWSER-GATEWAY.md](docs/BROWSER-GATEWAY.md)**.
+
+### Quick start: browser-direct
+
+**Prerequisite**: the account already has 2FA bound. The browser entry point
+refuses accounts without it, because TOTP can only be bound inside the
+first-login wizard.
+
+1. In the Host's `cordis.patch.yml`, enable `accountAuth.enabled: true` and add
+   `trustedHosts` to the `connection` row (it must contain a non-loopback
+   authority, otherwise "add workspace" opens the **browser's own** folder
+   dialog). See the guide, §4.
+2. Open `http://<host>:<guardPort>/` — you are redirected to the sign-in page.
+3. Enter account, password and the 6-digit code.
+
+![Sign-in page](docs/images/login-page.png)
+
+![Guard UI after sign-in](docs/images/guard-home.png)
+
+**Headless server?** The first-time setup must go through the local web UI over
+an SSH tunnel, because TOTP binding only exists in the first-login wizard. Full
+steps: [docs/BROWSER-GATEWAY.md §3](docs/BROWSER-GATEWAY.md).
+
+### Reverse proxy
+
+The guard is plain HTTP + WebSocket and can sit behind nginx or Caddy. The
+critical requirement is **forwarding the WebSocket upgrade** (`/api/remote.mux`
+is a long-lived connection that client services such as the permission catalog
+depend on), plus preserving the original `Host` header. Ready-to-paste configs:
+[docs/BROWSER-GATEWAY.md §6](docs/BROWSER-GATEWAY.md).
+
+---
+
 ## Features
 
 - **Pair by QR or short code**: a QR ticket and an 8-character Crockford code, both with a **15-second TTL**; a successful pair issues a persistent device token. Headless hosts get a CLI: `dsh-remote-hub-pair`.
@@ -81,6 +124,57 @@ The complete per-endpoint matrix is in [API permission matrix](docs/API-MATRIX.m
 - **Credential placement**: outbound tokens are stored by the controller's local Host (`~/.dsh/remote-hub/outbound-targets.json`, POSIX `0600`/`0700`). The browser keeps only an opaque target ID — **no bearer token** — and the target-side device table stores only `sha256(token)`.
 - **Disconnect is recoverable**: disconnecting switches back to local but preserves the pairing for one-click reconnect.
 - **Cloud path UI (built in)**: remote directory browsing, creating remote folders, and a chat `+` action that appends cloud workspace files to the message. As of 0.3.1 this is **built into this plugin** — no separate companion package. It only registers UI while takeover is active, so local file picking and dsh-hardssh flows are untouched. Browsing requires a `full` pairing.
+
+---
+
+## Account authentication and trusted clients (optional, recommended)
+
+The guard's built-in device token is a static bearer: whoever holds it holds that
+device's authority. This version adds a second Cordis row,
+`@xiaopb/dsh-remote-hub/auth`, so Hub access becomes **password + TOTP to establish
+trust, then a per-request client-key signature**:
+
+```yaml
+- insert:
+    - id: remote-hub
+      name: '@xiaopb/dsh-remote-hub'
+      config:
+        accountAuth:
+          enabled: true      # legacy device tokens stop working immediately
+- insert:
+    - id: remote-hub-auth
+      name: '@xiaopb/dsh-remote-hub/auth'
+```
+
+- **A stolen lease is not enough.** Every Hub request also carries an ECDSA P-256
+  signature over method, path, target authority, timestamp, one-time nonce,
+  client/key id, lease generation and body digest.
+- **Seven-day leases rotate silently** in the background. Replaying a rotated
+  generation is treated as theft and revokes that client.
+- **Trust is per client key**, never derived from the IP, User-Agent or a canvas
+  fingerprint. Those appear in the list for human recognition only.
+- **1Password / Google Authenticator / Authy** work out of the box (RFC 6238 TOTP),
+  with ten one-time backup codes.
+- **Role switches inside a trusted client do not ask for 2FA again**; exceeding the
+  server-side role ceiling is refused instead.
+- **WebSocket upgrades use a 30-second, single-use ticket** so the lease never
+  appears in a URL.
+
+Rollout: open **Login & accounts**, create the first administrator (loopback only),
+bind TOTP, trust this browser, and only then flip `accountAuth.enabled` to `true`
+and restart the Host. Flipping it before you have trusted a client locks every
+existing device out (escape hatch: set it back to `false` and restart).
+
+Honest limits: an attacker who controls an already-trusted browser can act as you
+(revocation and audit are the mitigation, not a guarantee); clearing site data or
+using a browser without IndexedDB loses the private key and requires re-trusting;
+the TOTP secret must be stored to compute codes and therefore relies on the
+`0600` file permission; DSH is still single-tenant across accounts.
+
+The scrypt/TOTP approach was informed by the MIT-licensed
+[`@xgone/dsh-remote`](https://github.com/xgone/dsh-remote); this repository is an
+independent reimplementation and deliberately does not reuse its stateless HMAC
+sessions or its plaintext-legacy-verifier branch.
 
 ---
 
@@ -104,7 +198,7 @@ pnpm run build
 dsh plugin --profile web add link:$PWD
 ```
 
-The package is `@xiaopb/dsh-remote-hub@0.3.6` (the cloud path UI is built in — no other package needed). Requires **Node.js ≥ 24.9.0** and **DSH ≥ 0.2.2-rc.1 < 0.3.0** (published: 0.2.2-rc.1 / rc.2 / rc.3).
+The package is `@xiaopb/dsh-remote-hub@0.5.0` (the cloud path UI is built in — no other package needed). Requires **Node.js ≥ 24.9.0** and **DSH ≥ 0.2.2-rc.1 < 0.3.0** (published: 0.2.2-rc.1 / rc.2 / rc.3).
 
 ---
 
@@ -175,11 +269,27 @@ CI runs exactly these. Releases go through CI/CD only — **no manual local `npm
 
 ---
 
+### Browser-direct limits
+
+- **The native directory picker (`directoryPicker/pick`) is never exposed**:
+  a browser must not make the server pop up an OS file dialog. Browsers use
+  "browse the remote directory" instead, which is a different allowlisted call.
+- **Accounts without 2FA cannot sign in from a browser** (`auth-totp-required`).
+- **Headless servers** cannot perform first-time setup steps that need an OS
+  dialog — there is no window to open.
+- **Do not expose the guard directly to the internet.** `network: lan` accepts
+  private addresses only; for public access use a VPN, or a reverse proxy plus
+  an extra layer of access control.
+- **Always use https.** Passwords and codes are POSTed in clear text; only after
+  the proxy terminates TLS will the cookie carry `Secure`.
+
 ## Documentation
+
 
 | Document | Contents |
 | --- | --- |
 | [README.md](README.md) | 中文版 |
+| [docs/BROWSER-GATEWAY.md](docs/BROWSER-GATEWAY.md) | **Browser-direct**: supported/unsupported, security model, headless first-time setup, reverse proxy |
 | [docs/DEPLOY.md](docs/DEPLOY.md) | Deployment, configuration, tunnel choice, health checks, troubleshooting |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Data paths, identity, authorization, persistence |
 | [docs/DESIGN.md](docs/DESIGN.md) | Role semantics, state ownership, supported boundaries |
