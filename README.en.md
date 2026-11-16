@@ -299,6 +299,32 @@ CI runs exactly these. Releases go through CI/CD only — **no manual local `npm
 
 Internal plans, historical designs, audits and environment-specific acceptance records stay in the ignored `dev/docs/` tree and are never shipped in the release package.
 
+## Acknowledgements
+
+The remote-takeover approach and the authentication primitives in this project
+started from an earlier open-source implementation:
+
+- **[@xgone/dsh-remote](https://github.com/xgone/dsh-remote)** — thanks to
+  [@xgone](https://github.com/xgone) and its contributors.
+
+The account-authentication side (scrypt password derivation, RFC 6238 TOTP,
+backup codes, the browser sign-in page and the account UI) was informed by that
+project. This repository is an **independent rewrite**: it keeps the ideas and
+the MIT attribution, but deliberately does not carry over a few semantics we
+consider unsuitable here —
+
+| Aspect | `@xgone/dsh-remote` | This repository |
+|---|---|---|
+| Sessions | Stateless HMAC, no per-client revocation | Stateful and revocable, leases rotate every 7 days |
+| MFA nonce | Process memory only (lost on restart) | Persisted, with atomic replay protection |
+| Legacy passwords | Plaintext values are comparable | Rejected; only scrypt derivations are accepted |
+| Auth timing | Account + 2FA when trust is established | Same, but browser-direct re-authenticates **every** visit |
+
+If those differences do not matter for your use case, the upstream project is
+worth a look on its own.
+
+---
+
 ## License
 
 [MIT](LICENSE) © 2026 XiaoPb
