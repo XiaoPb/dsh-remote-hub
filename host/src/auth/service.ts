@@ -1320,8 +1320,9 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       if (!isRoleName(role)) {
         throw Object.assign(new Error('invalid role'), { code: AUTH_ERROR_CODES.badRequest })
       }
-      if (target.isAdmin !== false && role !== ROLE_FULL) {
-        throw Object.assign(new Error('the administrator ceiling cannot be lowered'), { code: AUTH_ERROR_CODES.badRequest })
+      // 管理员的上限恒为 full：既不能降（会锁死管理面），也没有「提高」的余地。
+      if (target.isAdmin !== false) {
+        throw Object.assign(new Error('the administrator ceiling cannot be changed'), { code: AUTH_ERROR_CODES.badRequest })
       }
       const raising = !roleAtMost(role, target.roleCeiling ?? 'control')
       if (raising) requireFreshMfa(session)
@@ -1409,7 +1410,13 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
     },
 
     async renameAccount(sessionToken, accountId, username) {
-      const session = await requireAdmin(sessionToken)
+      // 只要求「已完成强制改密」——改名与改密是同一屏的两件事，此时 TOTP 还没绑定，
+      // 所以不能走 requireAdmin（那条路强制要求已绑定两步验证）。
+      const session = await requireReadySession(sessionToken)
+      const self = accountForSession(store, session.record)
+      if (self === null || self.isAdmin === false) {
+        throw Object.assign(new Error('administrator only'), { code: AUTH_ERROR_CODES.forbidden })
+      }
       const target = findAccountById(store, accountId)
       if (target === null) {
         throw Object.assign(new Error('account not found'), { code: AUTH_ERROR_CODES.accountNotFound })
@@ -1434,7 +1441,6 @@ export function createAuthService(deps: AuthServiceDeps): AuthService {
       if (clash !== null && (clash.accountId ?? 'acc_admin') !== accountId) {
         throw Object.assign(new Error('username already taken'), { code: AUTH_ERROR_CODES.accountExists })
       }
-      requireFreshMfa(session)
       const at = now()
       await store.mutate((data) => {
         const apply = (row: AccountRecord): void => {

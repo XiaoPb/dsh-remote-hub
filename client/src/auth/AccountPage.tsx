@@ -621,44 +621,49 @@ function renderSubAccountRow(
     account.lastLoginAt === null
       ? '从未登录'
       : `最近登录 ${formatRelative(account.lastLoginAt, Date.now())}`),
-  React.createElement('div', { className: 'rh-item-actions' },
-    disabled
-      ? React.createElement(Button, {
-        'data-testid': 'sub-account-enable',
+  // 管理员这一行是**只读**的：不支持禁用 / 改上限 / 删除。
+  // 否则一次误操作就能把自己锁在门外（服务端同样拒绝这些请求）。
+  account.isAdmin
+    ? React.createElement('p', { className: 'rh-meta', 'data-testid': 'sub-account-admin-note', style: { margin: '6px 0 0' } },
+      '管理员账号不支持禁用、修改上限或删除；如需更换管理员请先创建一个管理员范围的子账号。')
+    : React.createElement('div', { className: 'rh-item-actions' },
+      disabled
+        ? React.createElement(Button, {
+          'data-testid': 'sub-account-enable',
+          size: 'small',
+          disabled: state.busy,
+          title: `启用子账号 ${account.username}`,
+          children: '启用',
+          onClick: () => request('enable'),
+        })
+        : React.createElement(Button, {
+          'data-testid': 'sub-account-disable',
+          variant: 'danger',
+          size: 'small',
+          disabled: state.busy,
+          title: `禁用子账号 ${account.username}`,
+          children: '禁用',
+          onClick: () => request('disable'),
+        }),
+      React.createElement(Button, {
+        'data-testid': 'sub-account-set-ceiling',
         size: 'small',
-        disabled: state.busy,
-        title: `启用子账号 ${account.username}`,
-        children: '启用',
-        onClick: () => request('enable'),
-      })
-      : React.createElement(Button, {
-        'data-testid': 'sub-account-disable',
+        disabled: state.busy || disabled,
+        title: `修改子账号 ${account.username} 的权限上限`,
+        children: '修改上限',
+        onClick: () => request('ceiling'),
+      }),
+      React.createElement(Button, {
+        'data-testid': 'sub-account-delete',
         variant: 'danger',
         size: 'small',
         disabled: state.busy,
-        title: `禁用子账号 ${account.username}`,
-        children: '禁用',
-        onClick: () => request('disable'),
-      }),
-    React.createElement(Button, {
-      'data-testid': 'sub-account-set-ceiling',
-      size: 'small',
-      disabled: state.busy || disabled,
-      title: `修改子账号 ${account.username} 的权限上限`,
-      children: '修改上限',
-      onClick: () => request('ceiling'),
-    }),
-    React.createElement(Button, {
-      'data-testid': 'sub-account-delete',
-      variant: 'danger',
-      size: 'small',
-      disabled: state.busy,
-      title: `删除子账号 ${account.username}`,
-      children: '删除',
-      onClick: () => request('delete'),
-    })),
-  // 删除二次确认（红色）
-  confirming
+        title: `删除子账号 ${account.username}`,
+        children: '删除',
+        onClick: () => request('delete'),
+      })),
+  // 删除二次确认（红色）；管理员不会进入这个分支。
+  confirming && account.isAdmin !== true
     ? React.createElement('div', { className: 'rh-inline-panel is-danger' },
       React.createElement(Notice, { tone: 'error' },
         `删除 ${account.username} 不可恢复：该账号下所有客户端都会被撤销，已登录的会话立即失效。`),
@@ -897,9 +902,20 @@ export function renderAccountPage(
       })), { title: '两步验证', lead: true })
   }
 
+  // 改名机会只有一次（管理员首次登录），与改密同屏出现，所以声明要提前。
+  const renameAllowed = status?.usernameRenameAllowed === true
+  const renameDraft = state.renameDraft ?? username
+
   if (state.phase === 'change-password') {
     const verdict = evaluatePassword(draft.newPassword, state.policy, username)
     const valid = draft.currentPassword !== '' && verdict.ok && draft.newPassword !== draft.currentPassword
+    // 改名与改密同在首次登录这一屏：默认的 admin 是公开默认值，趁这一次一起换掉。
+    // 机会只有一次，所以不留到最后一步。
+    const renameReady = !renameAllowed || (
+      renameDraft.trim().length >= 3
+      && renameDraft.trim() !== username
+      && !/\s/u.test(renameDraft.trim())
+    )
     return pageRoot('change-password', React.createElement(React.Fragment, null,
       React.createElement(Notice, {
         'data-testid': 'change-password-required',
@@ -912,13 +928,28 @@ export function renderAccountPage(
         children: React.createElement(React.Fragment, null,
           passwordFields(draft, setDraft),
           passwordChecklist(draft.newPassword, state.policy, username),
+          // ── 改名（仅首次登录这一次）────────────────────────────────────────
+          renameAllowed
+            ? React.createElement(React.Fragment, null,
+              React.createElement('hr', { className: 'rh-divider' }),
+              React.createElement(Field, {
+                label: '账号名（仅这一次可以改）',
+                hint: '3–32 个字符，不能包含空格；改名后用新账号名登录，本机数据不受影响。',
+                children: React.createElement(Input, {
+                  'data-testid': 'rename-username',
+                  value: renameDraft,
+                  autoComplete: 'off',
+                  onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onRenameDraftChange?.(event.currentTarget.value),
+                }),
+              }))
+            : null,
           React.createElement(Button, {
             'data-testid': 'change-password-submit',
             variant: 'primary',
             block: true,
             loading: state.busy,
-            disabled: !valid,
-            children: state.busy ? '提交中…' : '保存新口令',
+            disabled: !valid || !renameReady,
+            children: state.busy ? '提交中…' : (renameAllowed ? '保存账号名与新口令' : '保存新口令'),
             onClick: () => actions.onChangePassword(draft.currentPassword, draft.newPassword),
           }),
           state.notice === null ? null : React.createElement(Notice, { tone: 'error', children: state.notice })),
@@ -1027,11 +1058,6 @@ export function renderAccountPage(
   const totpEnabled = status?.totpEnabled === true
   const totp = state.totp ?? null
   const trusted = state.binding !== null
-  const renameOpen = state.renameOpen === true
-  // 只有管理员第一次登录后才有一次改名机会（服务端同样强制）。
-  const renameAllowed = status?.usernameRenameAllowed === true
-  // 草稿默认填当前账号名，方便直接改一个字。
-  const renameDraft = state.renameDraft ?? username
 
   const localAccount = React.createElement(Section, {
     'data-testid': 'local-account',
@@ -1054,87 +1080,6 @@ export function renderAccountPage(
           children: React.createElement('span', { 'data-testid': 'account-client' },
             trusted ? `本浏览器已受信 · ${state.binding?.clientId.slice(0, 12) ?? ''}…` : '本浏览器尚未受信'),
         })),
-      // 改名：**只有管理员第一次登录后**出现这一次（`usernameRenameAllowed`），
-      // 用过就永久消失——不做常规改名入口。
-      renameAllowed
-        ? (renameOpen
-          ? React.createElement('div', { className: 'rh-row', 'data-testid': 'rename-panel' },
-          React.createElement(Field, {
-            label: '新的账号名',
-            hint: '3–32 个字符；改名后登录用它，本机数据与已受信的浏览器不受影响。',
-            children: React.createElement(Input, {
-              'data-testid': 'rename-username',
-              value: renameDraft,
-              autoComplete: 'off',
-              onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onRenameDraftChange?.(event.currentTarget.value),
-            }),
-          }),
-          React.createElement(Button, {
-            'data-testid': 'rename-submit',
-            variant: 'primary',
-            size: 'small',
-            disabled: state.busy || renameDraft.trim().length < 3 || renameDraft.trim() === username,
-            children: '保存账号名',
-            onClick: () => actions.onRenameSubmit?.(renameDraft.trim()),
-          }),
-          React.createElement(Button, {
-            'data-testid': 'rename-cancel',
-            variant: 'ghost',
-            size: 'small',
-            children: '取消',
-            onClick: () => actions.onRenameOpen?.(false),
-          }))
-          : React.createElement('div', { className: 'rh-row' },
-            React.createElement(Button, {
-              'data-testid': 'rename-open',
-              variant: 'ghost',
-              size: 'small',
-              children: '修改账号名（仅首次登录）',
-              onClick: () => actions.onRenameOpen?.(true),
-            })))
-        : null,
-      // 验证面板只在还有改名机会时渲染。
-      renameAllowed && (state.renamePending ?? null) !== null
-        ? null
-        : React.createElement('div', { className: 'rh-inline-panel', 'data-testid': 'rename-verify' },
-          React.createElement('div', { className: 'rh-cfg-title' }, '修改账号名需要重新验证'),
-          React.createElement(Field, {
-            label: '当前口令',
-            children: React.createElement(PasswordInput, {
-              'data-testid': 'rename-verify-password',
-              value: state.renamePending?.password ?? '',
-              onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onRenamePendingChange?.('password', event.currentTarget.value),
-            }),
-          }),
-          React.createElement(Field, {
-            label: '动态码',
-            children: React.createElement(Input, {
-              'data-testid': 'rename-verify-code',
-              inputMode: 'numeric',
-              autoComplete: 'one-time-code',
-              value: state.renamePending?.code ?? '',
-              onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onRenamePendingChange?.('code', event.currentTarget.value),
-            }),
-          }),
-          React.createElement('div', { className: 'rh-row' },
-            React.createElement(Button, {
-              'data-testid': 'rename-verify-submit',
-              variant: 'primary',
-              size: 'small',
-              disabled: state.busy,
-              children: '验证并改名',
-              onClick: () => actions.onRenameConfirm?.(),
-            }),
-            React.createElement(Button, {
-              'data-testid': 'rename-verify-cancel',
-              variant: 'ghost',
-              size: 'small',
-              children: '取消',
-              onClick: () => actions.onRenameCancel?.(),
-            })),
-          state.renamePending?.error == null
-            ? null
-            : React.createElement(Notice, { 'data-testid': 'rename-error', tone: 'error', children: state.renamePending.error })),
       state.enrollment === null
         ? null
         : React.createElement('div', { 'data-testid': 'enrollment-secret', style: { marginTop: 12 } },

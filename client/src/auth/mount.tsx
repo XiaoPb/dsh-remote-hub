@@ -95,7 +95,18 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
     const load = React.useCallback(async () => {
       try {
         const status = await api.status()
-        const binding = await keyring.loadBinding()
+        const storedBinding = await keyring.loadBinding()
+        // 本地残留的绑定必须由服务端确认仍然有效：服务端重置账号、撤销或删除该客户端
+        // 之后，浏览器里的密钥还在，但「本浏览器已受信」已经不成立。此时按未受信
+        // 处理并清掉本地绑定，否则信任区会永久消失（用户再也无法重新受信）。
+        const binding = storedBinding === null ? null
+          : (status.clients ?? []).some(client => client.clientId === storedBinding.clientId
+            && client.revokedAt === null)
+            ? storedBinding
+            : null
+        if (storedBinding !== null && binding === null) {
+          await keyring.clearBinding().catch(() => undefined)
+        }
         // 对端账号独立于本机认证：档案读失败不影响本机账号操作。
         const peers = deps.loadPeers === undefined
           ? []
@@ -186,7 +197,18 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
       },
       onChangePassword(currentPassword, newPassword) {
         patch({ busy: true, notice: null })
-        void api.changePassword({ currentPassword, newPassword })
+        void (async () => {
+          await api.changePassword({ currentPassword, newPassword })
+          // 首次登录这一屏可能同时改了账号名：改密成功后立刻提交改名
+          // （改名需要新鲜 2FA，而刚刚的登录/改密会话正好满足）。
+          const wanted = state.renameDraft?.trim() ?? ''
+          const session = state.status?.session
+          if (state.status?.usernameRenameAllowed === true
+            && session !== undefined && session !== null
+            && wanted.length >= 3 && wanted !== session.username) {
+            await api.accounts({ action: 'rename', accountId: session.accountId, username: wanted })
+          }
+        })()
           .then(() => {
             setDraft(current => ({ ...current, currentPassword: '', newPassword: '' }))
             patch({ busy: false, notice: '口令已更新。' })
