@@ -204,6 +204,37 @@ describe('guard-web：GET / 注入远程标记', () => {
     assert.match(html, /globalThis\.__DSH_REMOTE_HUB__ = Object\.assign\(globalThis\.__DSH_REMOTE_HUB__ \?\? \{\}, \{"mode":"remote-browser"\}\)/u)
   })
 
+  it('未登录访问 / 必须 302 到登录页，而不是发一个点不动的空页面', async () => {
+    const strict = await startGuard(hub.createGuardWeb({
+      hostOrigin: upstream.origin,
+      // 模拟守卫托管的浏览器：readerOf 拿不到会话 = 未登录。
+      readerOf: async () => undefined,
+    }))
+    try {
+      const response = await fetch(`${strict.origin}/`, { redirect: 'manual' })
+      assert.equal(response.status, 302, '未登录必须重定向')
+      assert.equal(response.headers.get('location'), '/remote-web/login')
+      assert.equal(response.headers.get('cache-control'), 'no-store')
+    } finally {
+      await stop(strict.server)
+    }
+  })
+
+  it('已登录访问 / 正常发页面（不重定向）', async () => {
+    const strict = await startGuard(hub.createGuardWeb({
+      hostOrigin: upstream.origin,
+      readerOf: async () => ({ accountId: 'acc_admin', role: 'full' }),
+    }))
+    try {
+      const response = await fetch(`${strict.origin}/`, { redirect: 'manual' })
+      assert.equal(response.status, 200)
+      const html = await response.text()
+      assert.match(html, /__DSH_REMOTE_HUB__/u, '已登录要拿到真正的界面外壳')
+    } finally {
+      await stop(strict.server)
+    }
+  })
+
   it('① __DSH_BOOT__ 数据原样保留（不重建）', async () => {
     const html = await (await fetch(`${guard.origin}/`)).text()
     assert.ok(html.includes(`globalThis.__DSH_BOOT__ = ${FAKE_BOOT}`), 'boot 数据必须逐字保留')

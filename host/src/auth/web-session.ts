@@ -375,6 +375,19 @@ function loginScript(mfaEndpoint: string, channel: string): string {
     return '网络或服务暂时不可用，请稍后重试。'
   }
 
+  // 登录成功后离开登录页。只接受同源相对路径（以单个 / 开头且不以 // 开头），
+  // 任何绝对 URL 都退回 "/"——否则 ?next= 会变成开放重定向。
+  function afterLogin() {
+    var next = ''
+    try {
+      next = new URL(location.href).searchParams.get('next') || ''
+    } catch (error) {
+      next = ''
+    }
+    var safe = /^\/(?![\/\\])/.test(next) ? next : '/'
+    location.replace(safe)
+  }
+
   loginForm.addEventListener('submit', function (event) {
     event.preventDefault()
     setError('')
@@ -399,6 +412,7 @@ function loginScript(mfaEndpoint: string, channel: string): string {
         hint.hidden = false
         hint.textContent = '已登录。'
         notify('complete')
+        afterLogin()
         return
       }
       setError(failureOf(result))
@@ -421,6 +435,7 @@ function loginScript(mfaEndpoint: string, channel: string): string {
         hint.hidden = false
         hint.textContent = '验证通过，已登录。'
         notify('complete')
+        afterLogin()
         return
       }
       setError(failureOf(result))
@@ -609,7 +624,7 @@ export function createWebSession(deps: WebSessionDeps): WebSession {
         '<body>',
         '<main>',
         '<h1>远程访问登录</h1>',
-        '<p class="sub">输入本机账号的用户名与口令，再输入身份验证器上的动态码。</p>',
+        '<p class="sub">用本机 DSH 的账号登录。若该账号已启用两步验证，下一步会要求动态码。</p>',
         `<form data-step="login" method="post" action="" autocomplete="on" novalidate>`,
         `<label for="username">用户名</label>`,
         `<input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required data-testid="${ids.username}">`,

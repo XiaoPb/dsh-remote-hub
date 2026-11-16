@@ -166,6 +166,13 @@ export interface GuardWebDeps {
    * 缺省或未登录时按匿名处理（外壳仍可渲染，只是没有访问行）。
    */
   readerOf?: (req: IncomingMessage) => Promise<{ accountId: string, role: RoleName } | undefined>
+  /**
+   * 未登录访问 `/` 时是否 302 到登录页。
+   *
+   * 默认 `true`（守卫托管浏览器时的正确行为）。只有「认证面不挂在守卫上」
+   * 的纯数据面部署才应关掉——那时没有登录页可跳，发页面由页面自己处理。
+   */
+  unauthenticatedRedirect?: boolean
     | { accountId: string, role: RoleName }
     | undefined
   /**
@@ -685,7 +692,35 @@ export function createGuardWeb(deps: GuardWebDeps = {}): GuardWebHandle {
     }
 
     // `GET /`：官方 index + 远程标记。
+    // `GET /`：先确认**已登录**再发页面。
+    //
+    // 未登录直接渲染官方外壳会得到一个「点什么都 401」的死页面（用户看到的
+    // 就是一片空界面 + 用不了的按钮）。这里用服务端 302 送到登录页，
+    // 不依赖客户端 JS——浏览器禁用脚本、JS 报错、或首屏竞态都不影响。
     if (pathname === GUARD_ROUTES.web) {
+      if (deps.readerOf !== undefined) {
+        let reader: { accountId: string; role: RoleName } | undefined
+        try {
+          reader = await deps.readerOf(req)
+        } catch {
+          reader = undefined
+        }
+        if (reader === undefined || reader.accountId === '') {
+          // 认证面不一定挂在守卫上（例如只做数据面的部署），此时照常发页面，
+          // 由页面自己的登录态判断决定跳哪里——不要把静态面卡死。
+          if (deps.unauthenticatedRedirect !== false) {
+            // 带上原本想访问的路径，登录后能回到这里（登录页只接受同源相对路径）。
+            const next = req.url !== undefined && req.url !== '/' ? `?next=${encodeURIComponent(req.url)}` : ''
+            res.writeHead(302, {
+              location: `/remote-web/login${next}`,
+              'cache-control': 'no-store',
+              'content-length': '0',
+            })
+            res.end()
+            return true
+          }
+        }
+      }
       return await serveIndex(req, res)
     }
 
