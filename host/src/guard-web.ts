@@ -35,6 +35,7 @@ import { request as httpRequest, type IncomingMessage, type ServerResponse } fro
 import type { OutgoingHttpHeaders } from 'node:http'
 
 import { GUARD_ROUTES, maskSecret } from '@core/index.js'
+import type { RoleName } from '@core/index.js'
 
 /**
  * 注入到索引页的全局名（与 `guard.ts` 的 `PAIR_ISSUE_GLOBAL` 同名、不同内容）。
@@ -156,7 +157,7 @@ export interface GuardWebDeps {
    * 由 `plugin.ts` 注入 `webServer.renderIndex(html, peer)` 的绑定。
    * 缺省时回落到 HTTP 反代（需要 `hostToken`）。
    */
-  readIndex?: (accountId: string) => Promise<string | undefined> | string | undefined
+  readIndex?: (accountId: string, role: RoleName) => Promise<string | undefined> | string | undefined
   /**
    * 从请求里解析当前浏览器会话的账号 id。
    *
@@ -164,7 +165,9 @@ export interface GuardWebDeps {
    * `webServer.readResource(request, peer)`），所以这里必须先知道是谁在看。
    * 缺省或未登录时按匿名处理（外壳仍可渲染，只是没有访问行）。
    */
-  readerOf?: (req: IncomingMessage) => Promise<string | undefined> | string | undefined
+  readerOf?: (req: IncomingMessage) => Promise<{ accountId: string, role: RoleName } | undefined>
+    | { accountId: string, role: RoleName }
+    | undefined
   /**
    * 进程内读一个页面资源（`assets/...`、`plugins/...`）。
    *
@@ -179,6 +182,7 @@ export interface GuardWebDeps {
   readAsset?: (
     pathWithQuery: string,
     accountId: string,
+    role: RoleName,
   ) => Promise<{ body: Uint8Array; contentType: string } | undefined> | { body: Uint8Array; contentType: string } | undefined
   /**
    * 结构化审计。**不得**写入任何令牌 / Cookie / 完整 query。
@@ -447,13 +451,16 @@ export function createGuardWeb(deps: GuardWebDeps = {}): GuardWebHandle {
     if (deps.readIndex !== undefined) {
       let html: string | undefined
       let readerAccountId = ''
+      let readerRole: RoleName = 'read-only'
       try {
-        readerAccountId = (await deps.readerOf?.(req)) ?? ''
-      } catch {
-        readerAccountId = ''
-      }
+        const reader = await deps.readerOf?.(req)
+        if (reader !== undefined) {
+          readerAccountId = reader.accountId
+          readerRole = reader.role
+        }
+      } catch { /* 按匿名处理 */ }
       try {
-        html = await deps.readIndex(readerAccountId)
+        html = await deps.readIndex(readerAccountId, readerRole)
       } catch (error) {
         audit('web-index-rewrite-failed', { reason: 'read-index-threw', detail: shortError(error) })
         html = undefined
@@ -699,17 +706,20 @@ export function createGuardWeb(deps: GuardWebDeps = {}): GuardWebHandle {
       // 不需要自启动令牌，也不依赖 `:3080` 的 HTTP 可达性。
       if (deps.readAsset !== undefined) {
         let accountId = ''
+        let role: RoleName = 'read-only'
         try {
-          accountId = (await deps.readerOf?.(req)) ?? ''
-        } catch {
-          accountId = ''
-        }
+          const reader = await deps.readerOf?.(req)
+          if (reader !== undefined) {
+            accountId = reader.accountId
+            role = reader.role
+          }
+        } catch { /* 按匿名处理 */ }
         let asset: { body: Uint8Array, contentType: string } | undefined
         try {
           const rawUrl = req.url ?? '/'
           const queryAt = rawUrl.indexOf('?')
           const query = queryAt >= 0 ? rawUrl.slice(queryAt) : ''
-          asset = await deps.readAsset(pathname.slice(1) + query, accountId)
+          asset = await deps.readAsset(pathname.slice(1) + query, accountId, role)
         } catch {
           asset = undefined
         }

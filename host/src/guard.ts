@@ -620,10 +620,17 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
         }
         const endpoint = path.slice('/api/'.length)
         const body = await readJsonBody(req)
-        const view = session as { accountId?: string, account?: { accountId?: string } }
-        const accountId = typeof view.accountId === 'string'
-          ? view.accountId
-          : (view.account?.accountId ?? 'acc_admin')
+        // `readSession` 返回 `{ record, view }`：账号 id 在 `record` 上，
+        // 不在 `view` 上。取错会退化成「匿名」→ 角色被压到 read-only → 全量 no-allow。
+        const sessionShape = session as {
+          record?: { accountId?: string }
+          view?: { accountId?: string }
+          accountId?: string
+        }
+        const accountId = sessionShape.record?.accountId
+          ?? sessionShape.view?.accountId
+          ?? sessionShape.accountId
+          ?? 'acc_admin'
         // 浏览器会话对应的角色来自该账号当前登记的客户端（取最高上限）。
         const role = deps.webAuth.roleOf?.(accountId) ?? 'read-only'
         const envelope = body !== null && typeof body === 'object' && (body as { type?: string }).type === 'client-request'

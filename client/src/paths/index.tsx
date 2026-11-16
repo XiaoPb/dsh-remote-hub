@@ -172,7 +172,35 @@ function RemoteDirectoryFlow(props: { open: boolean, onCancel(): void, onPicked(
  */
 export function apply(ctx: PathsContext): void {
   // 本机模式：一个插槽都不注册，原生目录选择与 dsh-hardssh 保持原样。
-  if (!cloudPathContext()) return
+  //
+  // 注意：远程标记由守卫注入在 `</body>` 之前，而本模块可能在它之前就装配。
+  // 因此这里**不**在装配瞬间一次判定，而是把注册推迟到标记可见时：
+  // 先同步尝试一次（控制端 / 本机两条路本来就是同步可判的），
+  // 不可判时等 DOM 就绪再试一次——那时所有内联脚本都已执行。
+  if (!cloudPathContext()) {
+    // 守卫把远程标记写在 `</body>` 之前，而本模块可能在它之前装配。
+    // 轮询到标记出现为止（最多约 10 秒），而不是赌某个一次性事件。
+    let tries = 0
+    const retry = (): void => {
+      if (cloudPathContext()) {
+        mountAll(ctx)
+        return
+      }
+      tries += 1
+      if (tries < 50) globalThis.setTimeout?.(retry, 200)
+    }
+    globalThis.setTimeout?.(retry, 0)
+    return
+  }
+  mountAll(ctx)
+}
+
+/**
+ * 真正注册全部云端路径 UI（上下文已确认可用时调用）。
+ *
+ * @param ctx - 主插件 client ctx。
+ */
+function mountAll(ctx: PathsContext): void {
   installPathStyles(globalThis.document)
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay', id: 'remote-permission-notice', priority: -2,

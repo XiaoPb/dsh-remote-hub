@@ -16,7 +16,9 @@ const context = readFileSync(new URL('../client/src/paths/context.ts', import.me
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 
 test('cloud path UI lives inside the main package', () => {
-  assert.match(src, /if \(!cloudPathContext\(\)\) return/, '本机模式下必须直接返回，不注册任何槽位')
+  // 本机模式不注册任何槽位；远程模式下由 mountAll() 统一注册（见 apply 的注释）。
+  assert.match(src, /if \(!cloudPathContext\(\)\)/, '本机模式下不注册任何槽位')
+  assert.match(src, /function mountAll\(ctx: PathsContext\)/, '注册集中在 mountAll')
   assert.match(src, /ctx\.commandUi\.register/)
   assert.match(src, /name: 'cloud-file'/)
   assert.match(src, /priority: -2/)

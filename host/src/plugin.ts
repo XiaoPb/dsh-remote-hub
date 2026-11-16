@@ -917,6 +917,9 @@ function assembleRemoteHub(
       const hostOriginForWeb = resolveHostOrigin(ctx)
       // 浏览器登录面：与 API 客户端共用同一个认证服务，只是把凭据换成 HttpOnly Cookie。
       // `AuthService extends HubAuthPort`，运行时是同一个对象。
+      // 浏览器会话的角色：管理员 full，其余退到最小权限（fail-closed）。
+      const browserAuthRoleOf = (accountId: string): RoleName =>
+        accountId === 'acc_admin' ? 'full' : 'read-only'
       const webSession = auth === undefined ? undefined : createWebSession({
         service: auth as unknown as AuthService,
         // 与客户端租约同寿命：退出登录 / 撤销客户端时两边一起失效。
@@ -929,18 +932,19 @@ function assembleRemoteHub(
       // HTTP 请求。`webServer.renderIndex(html, peer)` 会把插件注入行渲染进去。
       // 每个浏览器会话有自己的远程身份，index 必须按该身份的访问快照渲染。
       // 这里延迟到调用时再造 peer：守卫传进来的是当前会话的 accountId。
-      const readHostIndex = (accountId: string): Promise<string | undefined> => {
-        const peer = dispatcher.peerFor(`web:${accountId}`, 'full')
+      const readHostIndex = (accountId: string, role: RoleName): Promise<string | undefined> => {
+        const peer = dispatcher.peerFor(`web:${accountId === '' ? 'anonymous' : accountId}`, role)
         const reader = buildHostIndexReader(ctx, peer)
         return reader === undefined ? Promise.resolve(undefined) : reader()
       }
       // 静态资源同样走进程内读取（官方 readResource + peer），
       // 这样静态面一个字节都不必经过 `:3080` 的 HTTP，也就不需要自启动令牌。
-      const readHostAsset = (pathWithQuery: string, accountId: string) => {
-        const reader = buildHostAssetReader(ctx, dispatcher.peerFor(
-          `web:${accountId === '' ? 'anonymous' : accountId}`,
-          accountId === '' ? 'read-only' : 'full',
-        ))
+      // 角色与 index 一致：都由守卫按会话算好后传进来，这里不硬编码。
+      // 同一 deviceId 用不同 role 反复 peerFor 会把已建好的 peer 换成低权限版本，
+      // 实测表现为「目录读取被拒」（no-allow）。
+      const readHostAsset = (pathWithQuery: string, accountId: string, role: RoleName) => {
+        const identity = accountId === '' ? 'anonymous' : accountId
+        const reader = buildHostAssetReader(ctx, dispatcher.peerFor(`web:${identity}`, role))
         return reader === undefined ? undefined : reader(pathWithQuery)
       }
       const browserWeb = auth === undefined ? undefined : createGuardWeb({
@@ -953,7 +957,17 @@ function assembleRemoteHub(
           const token = webSession?.readCookie(request)
           if (token === undefined) return undefined
           const session = await (auth as unknown as AuthService).readSession(token)
-          return session?.record?.accountId
+          const accountId = session?.record?.accountId
+          if (accountId === undefined) return undefined
+          // 角色取自会话本身：`AuthSessionView.role` 是 `admin`（映射 full）或
+          // 该账号的上限。不用客户端列表——`TrustedClientView` 不含 accountId，
+          // 按它查会永远匹配不到，退化成 read-only（实测目录读取被拒）。
+          const sessionRole = session?.view?.role
+          const role: RoleName = sessionRole === 'admin' ? 'full'
+            : sessionRole === 'full' || sessionRole === 'control' || sessionRole === 'read-only'
+              ? sessionRole
+              : 'read-only'
+          return { accountId, role }
         },
         audit,
       })
@@ -965,10 +979,7 @@ function assembleRemoteHub(
         readCookie: (request: IncomingMessage) => webSession!.readCookie(request),
         readSession: (token: string) => (auth as unknown as AuthService).readSession(token),
         // 浏览器不登记自己的客户端密钥，角色取账号身份：管理员 full，其余按上限。
-        roleOf: (accountId: string) => {
-          const row = auth!.listTrustedClients?.().find(item => item.accountId === accountId)
-          return row?.roleCeiling ?? (accountId === 'acc_admin' ? 'full' : 'read-only')
-        },
+        roleOf: (accountId: string) => browserAuthRoleOf(accountId),
       }
       guard = await startGuard({
         config,
