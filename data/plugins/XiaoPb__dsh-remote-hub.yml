@@ -2,5 +2,5 @@ url: https://github.com/XiaoPb/dsh-remote-hub
 name: XiaoPb/dsh-remote-hub
 category: remote
 description:
-  en: "Operates another DSH Host through a device-authenticated guard: account login with password/TOTP, read-only/control/full roles enforced in DSH's endpoint allow-list, and sessions, workspaces and files pointed at the remote Host by rewriting __DSH_TRANSPORT__; the guard binds loopback by default."
-  zh: "通过账号守卫操作另一台 DSH Host：口令/两步验证登录，read-only/control/full 角色在 DSH 端点白名单强制，改写 __DSH_TRANSPORT__ 使会话、工作区与文件指向远端；守卫默认只绑回环。"
+  en: "Operates another DSH Host through a device-authenticated guard: account login with password/TOTP, read-only/control/full roles enforced in DSH's endpoint allow-list, and sessions, workspaces and files pointed at the remote Host by rewriting __DSH_TRANSPORT__. The guard binds loopback by default; for cross-network or browser access it can supervise a cloudflared tunnel, which may only target the guard port, with the public hostname declared in publicAuthorities or tunnel requests are refused."
+  zh: "通过账号守卫操作另一台 DSH Host：口令/两步验证登录，read-only/control/full 角色在 DSH 端点白名单强制，改写 __DSH_TRANSPORT__ 使会话、工作区与文件指向远端。守卫默认只绑回环；跨网或浏览器访问时可托管 cloudflared 隧道，隧道只允许指向守卫端口，且公网域名须在 publicAuthorities 声明，否则请求一律被拒。"
