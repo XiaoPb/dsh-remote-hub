@@ -118,3 +118,10 @@ export type {
   PasswordRule,
   TrustedClientView,
 } from '@core/auth.js'
+
+export {
+  createWebSession,
+  parseCookieHeader,
+  readSessionCookie,
+} from './auth/web-session.js'
+export type { WebSession } from './auth/web-session.js'

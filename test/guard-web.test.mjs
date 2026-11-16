@@ -199,7 +199,9 @@ describe('guard-web：GET / 注入远程标记', () => {
     const response = await fetch(`${guard.origin}/`)
     assert.equal(response.status, 200)
     const html = await response.text()
-    assert.match(html, /globalThis\.__DSH_REMOTE_HUB__ = \{"mode":"remote-browser"\}/u)
+    // 必须**合并**而不是赋值：Host 也往同一个全局写配对令牌与设备表，
+    // 直接赋值会把那一片数据覆盖掉。
+    assert.match(html, /globalThis\.__DSH_REMOTE_HUB__ = Object\.assign\(globalThis\.__DSH_REMOTE_HUB__ \?\? \{\}, \{"mode":"remote-browser"\}\)/u)
   })
 
   it('① __DSH_BOOT__ 数据原样保留（不重建）', async () => {
@@ -418,21 +420,26 @@ describe('guard-web：上游故障', () => {
 })
 
 describe('guard-web：注入改写单元', () => {
-  it('标记插在 <head> 之后、boot 之前', () => {
+  it('标记最后注入，且保留 boot 数据', () => {
     const { body, injected } = hub.injectRemoteBrowserMarker(FAKE_INDEX)
     assert.equal(injected, true)
     const markerAt = body.indexOf(hub.REMOTE_BROWSER_MARKUP)
-    const bootAt = body.indexOf('__DSH_BOOT__')
-    assert.ok(markerAt >= 0 && markerAt < bootAt, '标记必须先于 boot 数据可见')
+    assert.ok(markerAt >= 0, '必须注入标记')
+    // 插件工厂在**全部脚本执行完**之后才运行（`apply()` 在 boot 之后），
+    // 所以标记不必先于 boot；但它必须晚于 Host 的 index-inject 行，
+    // 否则那行会覆盖整个 __DSH_REMOTE_HUB__ 对象（实测丢失 mode）。
+    const injectRowAt = body.indexOf('instanceId')
+    assert.ok(injectRowAt < 0 || markerAt > injectRowAt, '标记必须在 Host 注入行之后')
     assert.ok(body.includes(FAKE_BOOT), 'boot 数据必须逐字保留')
   })
 
-  it('没有 <head> 但含 boot 标记 → 退到文档最前面', () => {
-    const html = `<script>globalThis.__DSH_BOOT__ = {}</script>`
+  it('没有 body 时退到 </html> 之前', () => {
+    const html = `<html><script>globalThis.__DSH_BOOT__ = {}</script></html>`
     const { body, injected } = hub.injectRemoteBrowserMarker(html)
     assert.equal(injected, true)
-    assert.ok(body.startsWith('<script>globalThis.__DSH_REMOTE_HUB__'))
-    assert.ok(body.endsWith(html))
+    assert.ok(body.includes('__DSH_REMOTE_HUB__'), '必须注入标记')
+    assert.ok(body.indexOf('__DSH_REMOTE_HUB__') < body.indexOf('</html>'), '必须落在 </html> 之前')
+    assert.ok(body.endsWith('</html>'), '文档结尾保持完整')
   })
 
   it('既无 <head> 也无 boot 标记 → 不注入（原样返回）', () => {

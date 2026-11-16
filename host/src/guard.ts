@@ -130,6 +130,51 @@ export interface GuardDeps {
       { peer: unknown; release: () => Promise<void> } | { rejection: unknown }
   }
   /**
+   * 浏览器入口（方案 A）：官方 Web 的静态外壳 + 反代。
+   *
+   * **必须排在路由白名单检查之前**：`/`、`/assets/*`、`/plugins/*` 都不在
+   * `GUARD_ROUTES` 的精确集合里，晚于白名单就会被 404 掉。
+   * 缺省时不托管浏览器入口（保持只做数据面的旧行为）。
+   */
+  web?: {
+    /** true = 已处理；false = 不是本模块的路径。永不 reject。 */
+    handle(req: IncomingMessage, res: ServerResponse): Promise<boolean>
+  }
+  /**
+   * 浏览器登录面（方案 A）：`/remote-web/login` 与 `/remote-web/mfa`。
+   *
+   * 与数据面的令牌/签名认证并列，专供**浏览器**使用 HttpOnly Cookie。
+   * 缺省时不挂载（API 客户端仍走原有的签名路径）。
+   */
+  webAuth?: {
+    /** 登录页 HTML 与两个端点的路径前缀（例如 /remote-web）。 */
+    basePath: string
+    /** GET 登录页。 */
+    page(): string
+    /** POST 口令步骤。 */
+    login(username: string, password: string): Promise<{
+      ok: boolean
+      mfaRequired?: boolean
+      mfaToken?: string
+      expiresAt?: number
+      code?: string
+      message?: string
+    }>
+    /** POST 动态码步骤；成功时给出完整的 Set-Cookie 行。 */
+    mfa(mfaToken: string, code: string): Promise<{ ok: boolean, setCookie?: string, code?: string, message?: string }>
+    /** 从请求 Cookie 里取出会话令牌（数据面复用）。 */
+    readCookie(req: IncomingMessage): string | undefined
+    /** 会话令牌是否有效（交给认证服务判定）。 */
+    readSession(token: string): Promise<unknown> | unknown
+    /**
+     * 该账号在浏览器模式下的角色上限。
+     *
+     * 浏览器不像控制端那样登记自己的客户端密钥，所以角色取自账号本身
+     * （管理员=full）；返回 `undefined` 时按最小权限处理。
+     */
+    roleOf?(accountId: string): RoleName | undefined
+  }
+  /**
    * 账号认证端口（认证插件 `provide('remoteHubAuth')`）。
    *
    * 给出时：RPC 与 WS 一律走「租约 + 客户端签名 / 一次性升级票据」，
@@ -238,6 +283,22 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 /** 读取请求体，超出上限即拒（防令牌洪泛 / 超大 body）。 */
+
+/**
+ * 读一个 JSON 请求体（浏览器登录面用）。
+ *
+ * 失败时返回 `null` 而不是抛错：调用方按「参数非法」回 400，
+ * 不让畸形 body 变成 500。
+ *
+ * @param req - 请求。
+ * @returns 解析后的对象，或 null。
+ */
+async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | null> {
+  const body = await readBody(req, 64 * 1024)
+  if (body === null) return null
+  const parsed = parseJson(body.toString('utf8'))
+  return isPlainObject(parsed) ? parsed : null
+}
 async function readBody(req: IncomingMessage, limit: number): Promise<Buffer | null> {
   const chunks: Buffer[] = []
   let size = 0
@@ -508,6 +569,76 @@ export async function startGuard(deps: GuardDeps): Promise<GuardHandle> {
       const path = url.pathname
       const method = (req.method ?? 'GET').toUpperCase()
       const rpcId = typeof req.headers['x-rpc-id'] === 'string' ? req.headers['x-rpc-id'] : 'guard'
+
+      // ⓪ 浏览器入口（方案 A）：官方静态外壳与其资源。
+      //    必须在白名单之前——`/` 与 `/assets/*` 不在 GUARD_ROUTES 的精确集合里。
+      if (deps.web !== undefined && await deps.web.handle(req, res)) return
+
+      // ⓪.5 浏览器登录面（方案 A）：登录页 + 口令 + 动态码。
+      //      它也不在 GUARD_ROUTES 里（那是数据面的路径表），所以同样排在白名单之前。
+      if (deps.webAuth !== undefined) {
+        const webAuth = deps.webAuth
+        const html = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }
+        if (path === webAuth.basePath + '/login' && method === 'GET') {
+          res.writeHead(200, html)
+          res.end(webAuth.page())
+          return
+        }
+        if (path === webAuth.basePath + '/login' && method === 'POST') {
+          const body = await readJsonBody(req)
+          const result = await webAuth.login(String(body?.username ?? ''), String(body?.password ?? ''))
+          res.writeHead(result.ok ? 200 : 401, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+          res.end(JSON.stringify(result))
+          return
+        }
+        if (path === webAuth.basePath + '/mfa' && method === 'POST') {
+          const body = await readJsonBody(req)
+          const result = await webAuth.mfa(String(body?.mfaToken ?? ''), String(body?.code ?? ''))
+          const headers: Record<string, string> = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
+          if (result.ok && typeof result.setCookie === 'string') headers['set-cookie'] = result.setCookie
+          res.writeHead(result.ok ? 200 : 401, headers)
+          res.end(JSON.stringify({ ok: result.ok, code: result.code, message: result.message }))
+          return
+        }
+      }
+
+      // ⓪.6 浏览器数据面（方案 A）：`/api/*` 用 Cookie 认证后以 remote-device 派发。
+      //      **认证必须在读 body 之前**：未认证直接 401，一个字节都不往 Gateway 转。
+      if (deps.webAuth !== undefined && (path === '/api' || path.startsWith('/api/'))) {
+        const webAuth = deps.webAuth
+        const token = webAuth.readCookie(req)
+        const session = token === undefined ? null : await webAuth.readSession(token)
+        if (session === null || session === undefined) {
+          res.writeHead(401, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ ok: false, code: 'auth-unauthorized', message: 'sign in required' }))
+          return
+        }
+        if (method !== 'POST') {
+          res.writeHead(405, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ ok: false, code: 'bad-request', message: 'method not allowed' }))
+          return
+        }
+        const endpoint = path.slice('/api/'.length)
+        const body = await readJsonBody(req)
+        const view = session as { accountId?: string, account?: { accountId?: string } }
+        const accountId = typeof view.accountId === 'string'
+          ? view.accountId
+          : (view.account?.accountId ?? 'acc_admin')
+        // 浏览器会话对应的角色来自该账号当前登记的客户端（取最高上限）。
+        const role = deps.webAuth.roleOf?.(accountId) ?? 'read-only'
+        const envelope = body !== null && typeof body === 'object' && (body as { type?: string }).type === 'client-request'
+          ? body
+          : null
+        if (envelope === null) {
+          res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' })
+          res.end(JSON.stringify({ ok: false, code: 'bad-request', message: 'invalid client-request envelope' }))
+          return
+        }
+        const peer = deps.dispatcher.peerFor(`web:${accountId}`, role)
+        const response = await deps.dispatcher.fetch(endpoint, envelope, peer)
+        await writeFetchResponse(res, response, protocolHeader)
+        return
+      }
 
       // ① 路由白名单：不在表里一律 404（含 /api/*、/remote/stream/*）。
       const known = new Set<string>(Object.values(GUARD_ROUTES))

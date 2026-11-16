@@ -48,8 +48,11 @@ export const REMOTE_BROWSER_GLOBAL = '__DSH_REMOTE_HUB__'
 export const REMOTE_BROWSER_MODE = 'remote-browser'
 
 /** 注入的那一行（整段唯一内容，便于 grep 与测试断言）。 */
+// **必须合并而不是赋值**：Host 自己也会往同一个全局里写 `__DSH_REMOTE_HUB__`
+// （配对签发令牌、设备表、guardOrigin 等）。直接赋值会把那一片数据覆盖掉，
+// 本机页面与远程页面都会少掉配对能力。
 export const REMOTE_BROWSER_MARKUP =
-  `globalThis.${REMOTE_BROWSER_GLOBAL} = {"mode":"${REMOTE_BROWSER_MODE}"};`
+  `globalThis.${REMOTE_BROWSER_GLOBAL} = Object.assign(globalThis.${REMOTE_BROWSER_GLOBAL} ?? {}, {"mode":"${REMOTE_BROWSER_MODE}"});`
 
 /** 官方 index 里的单一数据源标记。 */
 export const BOOT_GLOBAL = '__DSH_BOOT__'
@@ -136,6 +139,48 @@ export interface GuardWebDeps {
    */
   hostOrigin?: string
   /**
+   * 官方 Web 的自启动令牌（`?token=`）。
+   *
+   * 官方 `:3080` 对未带令牌的 `GET /` 回 401，所以守卫反代必须**在服务端**补上它。
+   * 它**绝不**出现在返回给浏览器的任何字节里（不写进 HTML、不回写入 Cookie）：
+   * 浏览器侧的认证由守卫自己的 HttpOnly Cookie 负责，两套凭据互不泄漏。
+   */
+  hostToken?: string
+  /**
+   * 进程内取官方 index 的 HTML（**优先于** HTTP 反代）。
+   *
+   * 官方 `:3080` 对未带 `?token=` 的 `GET /` 回 401，而插件运行在 Host 进程内，
+   * 直接读渲染结果比「先拿到自启动令牌再发 HTTP」干净得多：不碰令牌、
+   * 不依赖网络、也不会把令牌带进任何日志或响应。
+   *
+   * 由 `plugin.ts` 注入 `webServer.renderIndex(html, peer)` 的绑定。
+   * 缺省时回落到 HTTP 反代（需要 `hostToken`）。
+   */
+  readIndex?: (accountId: string) => Promise<string | undefined> | string | undefined
+  /**
+   * 从请求里解析当前浏览器会话的账号 id。
+   *
+   * index 要按**读取者本人的身份**渲染访问快照（官方 liveshare 同款做法：
+   * `webServer.readResource(request, peer)`），所以这里必须先知道是谁在看。
+   * 缺省或未登录时按匿名处理（外壳仍可渲染，只是没有访问行）。
+   */
+  readerOf?: (req: IncomingMessage) => Promise<string | undefined> | string | undefined
+  /**
+   * 进程内读一个页面资源（`assets/...`、`plugins/...`）。
+   *
+   * 官方 `webServer.readResource(request, peer)` 对**未带令牌**的请求同样放行，
+   * 前提是给了 peer 身份 —— liveshare 的 viewer-assets 就是这么做的。
+   * 有了它，静态面完全不必反代到 `:3080`（那条路需要自启动令牌）。
+   *
+   * @param pathWithQuery - 页面相对路径（含 query，例如 `plugins/??a/client.js&rev=x`）。
+   * @param accountId - 当前会话账号；空串表示匿名。
+   * @returns 资源内容与 content-type；不可用时 undefined。
+   */
+  readAsset?: (
+    pathWithQuery: string,
+    accountId: string,
+  ) => Promise<{ body: Uint8Array; contentType: string } | undefined> | { body: Uint8Array; contentType: string } | undefined
+  /**
    * 结构化审计。**不得**写入任何令牌 / Cookie / 完整 query。
    *
    * 只会在两种情况下被调用：`'web-proxy-error'`（上游错误或不可达）
@@ -213,18 +258,30 @@ export function isProxyableAssetPath(pathname: string): boolean {
  * @param html - 上游 index 的 UTF-8 文本。
  * @returns `body` 是最终字节；`injected` 表示是否真的插入了标记。
  */
+/**
+ * 把远程标记插进官方 index（**保持 `__DSH_BOOT__` 原样**）。
+ *
+ * 位置很关键：Host 自己也往同一个全局写 `__DSH_REMOTE_HUB__`（配对令牌、设备表），
+ * 而它走的是 `webserver/index-inject`，渲染在 body 末尾。若我们把标记放在 `<head>`，
+ * 就会被后写的 Host 对象整个覆盖（实测：`mode` 消失）。所以这里插在 **`</body>` 之前**，
+ * 保证最后执行，并用 `Object.assign` 合并而不是赋值。
+ *
+ * @param html - 上游 index 的 UTF-8 文本。
+ * @returns `body` 是最终字节；`injected` 表示是否真的插入了标记。
+ */
 export function injectRemoteBrowserMarker(html: string): { body: string; injected: boolean } {
   const marker = `<script>${REMOTE_BROWSER_MARKUP}</script>`
-  // 位置①：`<head>` 打开标签后（官方 index 一定有 head）。
-  const headOpen = /<head(?:\s[^>]*)?>/iu.exec(html)
-  if (headOpen !== null) {
-    const at = headOpen.index + headOpen[0].length
-    return { body: `${html.slice(0, at)}${marker}${html.slice(at)}`, injected: true }
+  // 位置①：`</body>` 之前 —— 最后执行，不会被子序列写入覆盖。
+  const bodyClose = html.lastIndexOf('</body>')
+  if (bodyClose >= 0) {
+    return { body: `${html.slice(0, bodyClose)}${marker}${html.slice(bodyClose)}`, injected: true }
   }
-  // 位置②：没有 head 的极简页面，退到文档最前面（仍是「先于脚本」）。
-  const bootAt = html.indexOf(BOOT_GLOBAL)
-  if (bootAt >= 0) return { body: `${marker}${html}`, injected: true }
-  // 位置③：既没有 head 也没有 boot 标记 —— 不注入（上游不是官方 index）。
+  // 位置②：没有 body 的页面，退到 `</html>` 之前。
+  const htmlClose = html.lastIndexOf('</html>')
+  if (htmlClose >= 0) {
+    return { body: `${html.slice(0, htmlClose)}${marker}${html.slice(htmlClose)}`, injected: true }
+  }
+  // 位置③：既没有 body 也没有 html（上游不是官方 index）—— 不注入。
   return { body: html, injected: false }
 }
 
@@ -249,6 +306,23 @@ function parseHostOrigin(hostOrigin: string | undefined): URL | undefined {
   }
 }
 
+/**
+ * 给上游 URL 补上自启动令牌。
+ *
+ * 官方 `:3080` 对未带令牌的 `GET /` 回 401；令牌只在**服务端之间**传递，
+ * 永不写进返回给浏览器的字节（HTML、Cookie、日志都不含它）。
+ *
+ * @param url - 上游 URL（会被复制，不改原对象）。
+ * @param hostToken - 令牌；缺省时原样返回。
+ * @returns 带令牌的 URL。
+ */
+function withHostToken(url: URL, hostToken: string | undefined): URL {
+  if (hostToken === undefined || hostToken === '') return url
+  const next = new URL(url.toString())
+  next.searchParams.set('token', hostToken)
+  return next
+}
+
 /** 只写一个纯文本错误响应（不带任何内部细节）。 */
 function plainError(res: ServerResponse, status: number, message: string): void {
   if (res.headersSent) {
@@ -264,8 +338,15 @@ function plainError(res: ServerResponse, status: number, message: string): void 
   res.end(body)
 }
 
-/** 构造转发给上游的请求头（白名单 + Host 改写）。 */
-function upstreamRequestHeaders(req: IncomingMessage, upstream: URL): OutgoingHttpHeaders {
+/**
+ * 构造转发给上游的请求头（白名单 + Host 改写）。
+ *
+ * @param req - 客户端请求（只按白名单取字段）。
+ * @param upstream - 上游 URL。
+ * @param hostToken - 官方 Web 的自启动令牌；在服务端补 `?token=`，不外泄。
+ * @returns 上游请求头。
+ */
+function upstreamRequestHeaders(req: IncomingMessage, upstream: URL, hostToken?: string): OutgoingHttpHeaders {
   const headers: OutgoingHttpHeaders = {}
   for (const name of FORWARDED_REQUEST_HEADERS) {
     const value = req.headers[name]
@@ -361,8 +442,41 @@ export function createGuardWeb(deps: GuardWebDeps = {}): GuardWebHandle {
       return true
     }
 
+    // ①.5 进程内优先：插件就在 Host 进程里，直接拿渲染后的 index，
+    //      既不碰自启动令牌，也不依赖 `:3080` 的 HTTP 可达性。
+    if (deps.readIndex !== undefined) {
+      let html: string | undefined
+      let readerAccountId = ''
+      try {
+        readerAccountId = (await deps.readerOf?.(req)) ?? ''
+      } catch {
+        readerAccountId = ''
+      }
+      try {
+        html = await deps.readIndex(readerAccountId)
+      } catch (error) {
+        audit('web-index-rewrite-failed', { reason: 'read-index-threw', detail: shortError(error) })
+        html = undefined
+      }
+      if (html === undefined || html.trim() === '') {
+        // 读不到就落到 HTTP 反代；那条路需要自启动令牌，通常也是 503，
+        // 但至少能让运维从审计里看出「进程内读取失败」而不是静默空页。
+        audit('web-index-rewrite-failed', { reason: 'read-index-empty' })
+      }
+      if (typeof html === 'string' && html.trim() !== '') {
+        const rewritten = injectRemoteBrowserMarker(html).body
+        res.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          // 页面外壳不缓存：免得 boot 里的 rev 与插件清单在升级后错位。
+          'cache-control': 'no-store',
+        })
+        res.end(rewritten)
+        return true
+      }
+    }
+
     // ② 回源：整段读入（index 只有几 KB，且必须改写字节，不能流式）。
-    const upstream = new URL('/', upstreamBase)
+    const upstream = withHostToken(new URL('/', upstreamBase), deps.hostToken)
     let status = 0
     let headers: OutgoingHttpHeaders = {}
     let raw = ''
@@ -371,7 +485,7 @@ export function createGuardWeb(deps: GuardWebDeps = {}): GuardWebHandle {
         (resolve, reject) => {
           const request = httpRequest(upstream, {
             method: 'GET',
-            headers: upstreamRequestHeaders(req, upstream),
+            headers: upstreamRequestHeaders(req, upstream, deps.hostToken),
             // 超时即视为不可达：官方渲染注入表是同步的，1 秒没回就是上游病了。
           }, response => {
             const chunks: Buffer[] = []
@@ -480,9 +594,10 @@ export function createGuardWeb(deps: GuardWebDeps = {}): GuardWebHandle {
         resolve(value)
       }
 
-      const request = httpRequest(upstream, {
+      const withToken = withHostToken(upstream, deps.hostToken)
+      const request = httpRequest(withToken, {
         method,
-        headers: upstreamRequestHeaders(req, upstream),
+        headers: upstreamRequestHeaders(req, withToken, deps.hostToken),
       }, response => {
         const status = response.statusCode ?? 0
         if (status < 200 || status >= 300) {
@@ -579,6 +694,35 @@ export function createGuardWeb(deps: GuardWebDeps = {}): GuardWebHandle {
           res.end()
         }
         return true
+      }
+      // 优先走进程内读取：与 index 同一条路（readResource + peer），
+      // 不需要自启动令牌，也不依赖 `:3080` 的 HTTP 可达性。
+      if (deps.readAsset !== undefined) {
+        let accountId = ''
+        try {
+          accountId = (await deps.readerOf?.(req)) ?? ''
+        } catch {
+          accountId = ''
+        }
+        let asset: { body: Uint8Array, contentType: string } | undefined
+        try {
+          const rawUrl = req.url ?? '/'
+          const queryAt = rawUrl.indexOf('?')
+          const query = queryAt >= 0 ? rawUrl.slice(queryAt) : ''
+          asset = await deps.readAsset(pathname.slice(1) + query, accountId)
+        } catch {
+          asset = undefined
+        }
+        if (asset !== undefined) {
+          res.writeHead(200, {
+            'content-type': asset.contentType,
+            // 带 rev 的资源不可变，可以长缓存（与官方一致）。
+            'cache-control': IMMUTABLE_CACHE_CONTROL,
+            'content-length': String(asset.body.length),
+          })
+          res.end(Buffer.from(asset.body))
+          return true
+        }
       }
       return await serveAsset(req, res)
     }

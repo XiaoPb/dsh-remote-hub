@@ -121,6 +121,18 @@ export function registerDevicePolicy(ctx: Context, deps: DevicePolicyDeps): Acce
     const device = readPrincipal(principal)
     if (device === undefined) return []
     // Defence in depth：已吊销设备的旧 Peer 若还活着，bindings 直接为空 → 全量拒。
+    // 浏览器会话（方案 A）：守卫用 `web:<accountId>` 作合成身份。
+    // 它没有客户端密钥，角色由守卫在**认证后**给出（见 guard 的 webAuth.roleOf），
+    // 所以这里直接采信 principal 上的 role —— 它绝不来自请求方自述。
+    if (device.deviceId.startsWith('web:')) {
+      const actions = allActionsFor(device.role) as readonly RemoteAccessAction[]
+      return [
+        {
+          role: { name: `remote-hub:${device.role}:global`, resource: 'global', actions },
+          resource: { kind: 'global' },
+        } as RemoteAccessBinding,
+      ]
+    }
     const record = deps.devices.get(device.deviceId)
     // 账号模式的客户端不在设备表里（dev_* vs cli_*），回落到 auth 侧查询。
     const client = record === undefined ? deps.authClient?.(device.deviceId) : undefined

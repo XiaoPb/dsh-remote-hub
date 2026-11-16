@@ -21,7 +21,7 @@
  * @module dsh-remote-hub/host/plugin
  */
 import type { Context } from '@deepseek-ai/cordis'
-import { rm } from 'node:fs/promises'
+import { readFile, rm } from 'node:fs/promises'
 import http from 'node:http'
 import net from 'node:net'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
@@ -40,6 +40,17 @@ import { applyLocalPluginManager } from './local-plugin-manager/index.js'
 import { createSensitiveApprovalGate } from './sensitive-approval.js'
 import { createMetricsCollector } from './metrics.js'
 import { createVisibleResourceTracker, registerDevicePolicy } from './policy.js'
+import { createGuardWeb } from './guard-web.js'
+import { createWebSession } from './auth/web-session.js'
+import type { AuthService } from './auth/service.js'
+
+/**
+ * 浏览器会话 Cookie 的寿命。
+ *
+ * 与客户端租约同量级（6 小时）：足够一个工作日，又不至于长期驻留。
+ * 退出登录、撤销客户端都会让会话立刻失效，不依赖这个上限。
+ */
+const WEB_SESSION_TTL_MS = 6 * 60 * 60 * 1_000
 import { createRuntimeConfigStore } from './runtime-config.js'
 import { registerRemoteServices } from './services/index.js'
 import { createStreamEngine, gatewayStreamOpener } from './streams.js'
@@ -533,6 +544,99 @@ export function buildGuardWs(
  * @param ctx - Host Context。
  * @returns `http://127.0.0.1:<port>` 或 undefined。
  */
+/**
+ * 造一个进程内读官方 index 的函数。
+ *
+ * 官方 webServer.renderIndex(html, peer) 负责把各插件注入的行渲染进外壳；
+ * 外壳本身来自 web 产物的 index.html。插件与它同进程，直接读文件即可，
+ * 不必发一次带 ?token= 的 HTTP（那条路会逼我们保管自启动令牌）。
+ *
+ * @param ctx - Host Context。
+ * @returns 读取函数；拿不到 webServer 时返回 undefined。
+ */
+/**
+ * 造一个「进程内读官方 index」的函数。
+ *
+ * 官方 Web 的 index 对**未带自启动令牌**的请求回 401，但官方自己的
+ * liveshare 证明了正确做法：`webServer.readResource(request, peer)` ——
+ * 带上**读取者的 Peer 身份**，index 就会为该身份渲染开场访问快照，
+ * 完全不需要令牌（`webServer` 内部按 peer 放行）。
+ *
+ * 参考：`@deepseek-ai/dsh-experimental-liveshare` 的 viewer-assets
+ * （`readViewerAsset` 用 `http://viewer.invalid/` 作占位 origin，只取 path）。
+ *
+ * @param ctx - Host Context。
+ * @param peer - 读取者的 Peer（浏览器会话对应的 remote-device peer）。
+ * @returns 读取函数；拿不到 webServer 时返回 undefined。
+ */
+function buildHostIndexReader(
+  ctx: Context,
+  peer: unknown,
+): (() => Promise<string | undefined>) | undefined {
+  const webServer = (ctx as unknown as {
+    reflect?: { get?: (name: string, strict?: boolean) => unknown }
+  }).reflect?.get?.('webServer', false) as
+    | {
+      renderIndex?: (html: string, reader?: unknown) => string
+      readResource?: (request: Request, reader?: unknown) => Promise<Response>
+    }
+    | undefined
+  if (webServer === undefined || typeof webServer.readResource !== 'function') return undefined
+  const readResource = webServer.readResource.bind(webServer)
+  const renderIndex = typeof webServer.renderIndex === 'function'
+    ? webServer.renderIndex.bind(webServer)
+    : undefined
+  return async () => {
+    try {
+      // 占位 origin：readResource 只取 pathname，Host 由 webServer 自己判定。
+      const response = await readResource(new Request(new URL('/', 'http://viewer.invalid/')), peer)
+      console.warn(`[dsh-remote-hub] index read: status=${response.status}`)
+      if (!response.ok) return undefined
+      const html = await response.text()
+      console.warn(`[dsh-remote-hub] index raw length=${html.length}`)
+      if (html.trim() === '') return undefined
+      try {
+        return renderIndex === undefined ? html : renderIndex(html, peer)
+      } catch {
+        return html
+      }
+    } catch {
+      return undefined
+    }
+  }
+}
+/**
+ * 造一个进程内读页面资源的函数（官方 readResource + peer）。
+ *
+ * 官方 `webServer.readResource(request, peer)` 在**给了 peer 身份**时不需要
+ * 自启动令牌（liveshare 的 viewer-assets 用的正是这条路）。
+ *
+ * @param ctx - Host Context。
+ * @param peer - 读取者身份的 Peer。
+ * @returns 读取函数；拿不到 webServer 时 undefined。
+ */
+function buildHostAssetReader(ctx: Context, peer: unknown) {
+  const webServer = (ctx as unknown as {
+    reflect?: { get?: (name: string, strict?: boolean) => unknown }
+  }).reflect?.get?.('webServer', false) as
+    | { readResource?: (request: Request, reader?: unknown) => Promise<Response> }
+    | undefined
+  if (webServer === undefined || typeof webServer.readResource !== 'function') return undefined
+  const readResource = webServer.readResource.bind(webServer)
+  return async (pathWithQuery: string) => {
+    try {
+      const target = new URL(pathWithQuery, 'http://viewer.invalid/')
+      const response = await readResource(new Request(target), peer)
+      if (!response.ok) return undefined
+      return {
+        body: new Uint8Array(await response.arrayBuffer()),
+        contentType: response.headers.get('content-type') ?? 'application/octet-stream',
+      }
+    } catch {
+      return undefined
+    }
+  }
+}
 function resolveHostOrigin(ctx: Context): string | undefined {
   const webServer = (ctx as unknown as {
     reflect?: { get?: (name: string, strict?: boolean) => unknown }
@@ -805,6 +909,67 @@ function assembleRemoteHub(
       //   → guard-mux 把 mux 帧翻译成 typertGateway.wireStream.open 调用。
       // 两个官方能力缺失时**不挂载** WS（保持纯 HTTP），不让页面拿到半残能力。
       const ws = buildGuardWs(ctx, audit)
+
+      // 方案 A：浏览器直连。只有账号模式下才托管——
+      //   匿名/配对模式没有「账号」这个概念，登录页无从谈起。
+      // 官方静态资源从 Host 自己的 Web origin 取（resolveHostOrigin 已经能拿到），
+      // 业务数据不经过 `:3080` 的 HTTP，而是在守卫里用 Peer 派发。
+      const hostOriginForWeb = resolveHostOrigin(ctx)
+      // 浏览器登录面：与 API 客户端共用同一个认证服务，只是把凭据换成 HttpOnly Cookie。
+      // `AuthService extends HubAuthPort`，运行时是同一个对象。
+      const webSession = auth === undefined ? undefined : createWebSession({
+        service: auth as unknown as AuthService,
+        // 与客户端租约同寿命：退出登录 / 撤销客户端时两边一起失效。
+        sessionTtlMs: WEB_SESSION_TTL_MS,
+        // Secure 由守卫 origin 的协议决定；TLS 通常由外层反向代理终止，
+        // 因此这里给出的是「直连守卫」的判定，代理场景由 x-forwarded-proto 补。
+        guardOrigin: `http://${config.guardHost}:${config.guardPort}`,
+      })
+      // 进程内取官方 index：插件就跑在 Host 进程里，没必要为了外壳去发一次带令牌的
+      // HTTP 请求。`webServer.renderIndex(html, peer)` 会把插件注入行渲染进去。
+      // 每个浏览器会话有自己的远程身份，index 必须按该身份的访问快照渲染。
+      // 这里延迟到调用时再造 peer：守卫传进来的是当前会话的 accountId。
+      const readHostIndex = (accountId: string): Promise<string | undefined> => {
+        const peer = dispatcher.peerFor(`web:${accountId}`, 'full')
+        const reader = buildHostIndexReader(ctx, peer)
+        return reader === undefined ? Promise.resolve(undefined) : reader()
+      }
+      // 静态资源同样走进程内读取（官方 readResource + peer），
+      // 这样静态面一个字节都不必经过 `:3080` 的 HTTP，也就不需要自启动令牌。
+      const readHostAsset = (pathWithQuery: string, accountId: string) => {
+        const reader = buildHostAssetReader(ctx, dispatcher.peerFor(
+          `web:${accountId === '' ? 'anonymous' : accountId}`,
+          accountId === '' ? 'read-only' : 'full',
+        ))
+        return reader === undefined ? undefined : reader(pathWithQuery)
+      }
+      const browserWeb = auth === undefined ? undefined : createGuardWeb({
+        ...(hostOriginForWeb === undefined ? {} : { hostOrigin: hostOriginForWeb }),
+        // index 按读取者身份渲染（官方 liveshare 同款：readResource(request, peer)）。
+        ...(readHostIndex === undefined ? {} : { readIndex: readHostIndex }),
+        ...(readHostAsset === undefined ? {} : { readAsset: readHostAsset }),
+        // 谁在看：从 HttpOnly Cookie 解析出当前会话的账号。
+        readerOf: async (request: IncomingMessage) => {
+          const token = webSession?.readCookie(request)
+          if (token === undefined) return undefined
+          const session = await (auth as unknown as AuthService).readSession(token)
+          return session?.record?.accountId
+        },
+        audit,
+      })
+      const browserAuth = auth === undefined ? undefined : {
+        basePath: '/remote-web',
+        page: () => webSession!.renderLoginPage(),
+        login: (username: string, password: string) => webSession!.handleLogin(username, password),
+        mfa: (mfaToken: string, code: string) => webSession!.handleMfa(mfaToken, code),
+        readCookie: (request: IncomingMessage) => webSession!.readCookie(request),
+        readSession: (token: string) => (auth as unknown as AuthService).readSession(token),
+        // 浏览器不登记自己的客户端密钥，角色取账号身份：管理员 full，其余按上限。
+        roleOf: (accountId: string) => {
+          const row = auth!.listTrustedClients?.().find(item => item.accountId === accountId)
+          return row?.roleCeiling ?? (accountId === 'acc_admin' ? 'full' : 'read-only')
+        },
+      }
       guard = await startGuard({
         config,
         tokens,
@@ -818,6 +983,9 @@ function assembleRemoteHub(
         ...(ws === undefined ? {} : { ws }),
         ...(auth === undefined ? {} : { auth }),
         ...(authHttp === undefined ? {} : { authHttp }),
+        // 方案 A：浏览器入口。只有账号模式才托管（匿名模式没有登录页可挂）。
+        ...(browserWeb === undefined ? {} : { web: browserWeb }),
+        ...(browserAuth === undefined ? {} : { webAuth: browserAuth }),
       })
       at('guard:up')
       push(() => guard?.dispose())
