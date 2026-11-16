@@ -202,28 +202,71 @@ export function apply(ctx: PathsContext): void {
  *
  * @param ctx - 主插件 client ctx。
  */
+/** 把一步装配的失败记成 trace 条目。 */
+function ofErr(step: string, error: unknown): string {
+  return `${step}:failed ${String(error).slice(0, 100)}`
+}
+
+/** 记录一步装配（实机排查用；失败也留痕）。 */
+function trace(step: string): void {
+  const target = globalThis as { __DSH_PATHS_TRACE__?: string[] }
+  target.__DSH_PATHS_TRACE__ = [...(target.__DSH_PATHS_TRACE__ ?? []), step]
+}
+
+/**
+ * 真正注册全部云端路径 UI（上下文已确认可用时调用）。
+ *
+ * 每一步单独 try/catch：一个插槽注册失败不应连累后面的——
+ * 早先它们串在一起，commandUi 一抛错就把两个 directoryFlow 注册整段跳过，
+ * 表现正是「点了选择工作区还是弹本地文件夹」。
+ *
+ * @param ctx - 主插件 client ctx。
+ */
 function mountAll(ctx: PathsContext): void {
-  ;(globalThis as { __DSH_PATHS_TRACE__?: string[] }).__DSH_PATHS_TRACE__
-    = [...((globalThis as { __DSH_PATHS_TRACE__?: string[] }).__DSH_PATHS_TRACE__ ?? []), 'mountAll']
-  installPathStyles(globalThis.document)
-  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-    name: 'shell.overlay', id: 'remote-permission-notice', priority: -2,
-  }, RemotePermissionNotice))
-  ctx.commandUi.register({
-    name: 'cloud-file',
-    label: () => isChinese() ? '云端文件' : 'Cloud files',
-    description: () => isChinese() ? '选择云端工作区文件并添加到消息' : 'Choose files from the remote workspace',
-    available: session => cloudPathContext() !== null && ctx.sessions.binding(session.sessionId) !== null,
-    ui: { kind: 'action', run: session => globalThis.dispatchEvent(new CustomEvent(OPEN_REMOTE_FILES, { detail: { sessionId: session.sessionId } })) },
-  })
-  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-    name: 'shell.overlay', id: 'remote-files-picker',
-  }, () => h(RemoteFilesDialog, { ctx })))
-  ctx.slots.inject('conversation.hero.workspace.directoryFlow', () => ctx.slots.inject('sidebar.workspaces.directoryFlow', function* () {
-    for (const name of ['conversation.hero.workspace.directoryFlow', 'sidebar.workspaces.directoryFlow']) {
-      yield ctx.slots.register({ name, priority: -2 }, RemoteDirectoryFlow)
-    }
-  }))
+  trace('mountAll')
+  try { installPathStyles(globalThis.document); trace('styles') } catch (error) { trace(ofErr('styles', error)) }
+
+  try {
+    ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+      name: 'shell.overlay', id: 'remote-permission-notice', priority: -2,
+    }, RemotePermissionNotice))
+    trace('notice')
+  } catch (error) {
+    trace(ofErr('notice', error))
+  }
+
+  try {
+    ctx.commandUi.register({
+      name: 'cloud-file',
+      label: () => isChinese() ? '云端文件' : 'Cloud files',
+      description: () => isChinese() ? '选择云端工作区文件并添加到消息' : 'Choose files from the remote workspace',
+      available: session => cloudPathContext() !== null && ctx.sessions.binding(session.sessionId) !== null,
+      ui: { kind: 'action', run: session => globalThis.dispatchEvent(new CustomEvent(OPEN_REMOTE_FILES, { detail: { sessionId: session.sessionId } })) },
+    })
+    trace('commandUi')
+  } catch (error) {
+    trace(ofErr('commandUi', error))
+  }
+
+  try {
+    ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+      name: 'shell.overlay', id: 'remote-files-picker',
+    }, () => h(RemoteFilesDialog, { ctx })))
+    trace('files')
+  } catch (error) {
+    trace(ofErr('files', error))
+  }
+
+  // 目录选择**不再由本插件接管**。
+  //
+  // 官方自带 `directory-picker-auto`：当 `connection.allowsRemoteAuthorities`
+  // 为真（trustedHosts 含非回环 authority）时，它挂 `browse` 后端 +
+  // `dsh-client-ui-directory-picker-browse` 表面，浏览器里就是「浏览远程目录」，
+  // 而不是拉起本地文件夹。本插件再用自己的插槽去抢，反而会把官方选择覆盖掉。
+  //
+  // 插件现在只保留 `cloudPathContext()` 这一条**判断远程会话**的能力，
+  // 供云端文件选择等增强功能使用。
+  trace('directoryFlow:delegated-to-official')
 }
 
 export { cloudPathContext, pathRpc, OPEN_REMOTE_FILES, RemoteFilesDialog, RemoteDirectoryFlow }

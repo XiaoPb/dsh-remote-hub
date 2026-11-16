@@ -22,9 +22,11 @@ test('cloud path UI lives inside the main package', () => {
   assert.match(src, /ctx\.commandUi\.register/)
   assert.match(src, /name: 'cloud-file'/)
   assert.match(src, /priority: -2/)
-  assert.match(src, /conversation\.hero\.workspace\.directoryFlow/)
-  assert.match(src, /sidebar\.workspaces\.directoryFlow/)
+  // 目录选择交给官方 browse 表面：`directory-picker-auto` 在 trustedHosts
+  // 含非回环 authority 时自动挂 browse 后端 + browse 客户端，浏览器里就是
+  // 「浏览远程目录」。本插件不再抢那两个插槽（抢了反而覆盖官方选择）。
   assert.match(src, /directoryPicker\/list/)
+  assert.match(src, /delegated-to-official/)
   assert.equal(pkg.name, '@xiaopb/dsh-remote-hub')
   assert.equal(typeof pkg.workspaces, 'undefined', '不能再依赖伴生 workspace 包')
   assert.equal(pkg.exports['./paths'], undefined, '不应再导出独立 paths 入口')
