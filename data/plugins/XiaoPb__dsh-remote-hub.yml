@@ -2,5 +2,5 @@ url: https://github.com/XiaoPb/dsh-remote-hub
 name: XiaoPb/dsh-remote-hub
 category: remote
 description:
-  en: "Lets one DSH operate another DSH Host. Pairing is by login to the remote guard's account (password, optional TOTP), which registers the controlling machine's public key as a trusted client; read-only/control/full roles are enforced inside DSH's own endpoint allow-list with unknown endpoints denied by default. The controlling side rewrites the official __DSH_TRANSPORT__ so sessions, workspaces, files and plugins show the remote Host. The guard listens on its own port, binds loopback by default, and unpaired devices are rejected."
-  zh: "让一台 DSH 操作另一台 DSH Host。配对方式是登录对端守卫的账号（口令，可选 TOTP），成功后把主控机公钥登记为对端可信客户端；read-only/control/full 三档角色在 DSH 自身的端点白名单里强制执行，未知端点默认拒绝。主控端改写官方 __DSH_TRANSPORT__，会话、工作区、文件与插件都指向远端 Host。守卫独立端口监听，默认只绑回环，未配对设备一律拒绝。"
+  en: "Operates another DSH Host through a device-authenticated guard: account login with password/TOTP, read-only/control/full roles enforced in DSH's endpoint allow-list, and sessions, workspaces and files pointed at the remote Host by rewriting __DSH_TRANSPORT__; the guard binds loopback by default."
+  zh: "通过账号守卫操作另一台 DSH Host：口令/两步验证登录，read-only/control/full 角色在 DSH 端点白名单强制，改写 __DSH_TRANSPORT__ 使会话、工作区与文件指向远端；守卫默认只绑回环。"
