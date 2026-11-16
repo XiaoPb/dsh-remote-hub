@@ -171,6 +171,8 @@ function RemoteDirectoryFlow(props: { open: boolean, onCancel(): void, onPicked(
  * @param ctx - 主插件 client ctx。
  */
 export function apply(ctx: PathsContext): void {
+  ;(globalThis as { __DSH_PATHS_TRACE__?: string[] }).__DSH_PATHS_TRACE__
+    = [...((globalThis as { __DSH_PATHS_TRACE__?: string[] }).__DSH_PATHS_TRACE__ ?? []), 'apply']
   // 本机模式：一个插槽都不注册，原生目录选择与 dsh-hardssh 保持原样。
   //
   // 注意：远程标记由守卫注入在 `</body>` 之前，而本模块可能在它之前就装配。
@@ -201,6 +203,8 @@ export function apply(ctx: PathsContext): void {
  * @param ctx - 主插件 client ctx。
  */
 function mountAll(ctx: PathsContext): void {
+  ;(globalThis as { __DSH_PATHS_TRACE__?: string[] }).__DSH_PATHS_TRACE__
+    = [...((globalThis as { __DSH_PATHS_TRACE__?: string[] }).__DSH_PATHS_TRACE__ ?? []), 'mountAll']
   installPathStyles(globalThis.document)
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay', id: 'remote-permission-notice', priority: -2,
