@@ -26,9 +26,15 @@ const LIGHT_TOKENS = `  /* ── 表面 ─────────────
   --rh-text: var(--dsw-alias-text-primary, #111418);
   --rh-text-2: var(--dsw-alias-text-secondary, #6B7280);
   --rh-text-3: var(--dsw-alias-text-tertiary, #9CA3AF);
-  /* ── 选中态（黑/白反转）────────────────────────────── */
-  --rh-accent: #111418;
-  --rh-accent-fg: #FFFFFF;
+  /* ── 选中态（跟随宿主：分段控件 / 标签的选中底）──────
+   * 默认走宿主的 layer-3 / hover 颜色，不用纯黑；只有宿主完全没提供时才回退到
+   * 浅灰底。--rh-accent 是「选中底」，强调按钮等需要深底的地方用 --rh-strong。 */
+  --rh-accent: var(--dsw-alias-bg-layer-3, #E9EAEE);
+  --rh-accent-fg: var(--dsw-alias-text-primary, #111418);
+  --rh-accent-hover: var(--dsw-alias-bg-layer-hover, #E2E4E9);
+  --rh-strong: #111418;
+  --rh-strong-fg: #FFFFFF;
+  --rh-strong-hover: #1F2228;
   /* ── 语义色 ───────────────────────────────────────── */
   --rh-blue: var(--dsw-alias-brand-primary, #3B82F6);
   --rh-blue-bg: rgba(59,130,246,.1);
@@ -55,8 +61,12 @@ const DARK_TOKENS = `  --rh-bg: #17191d;
   --rh-text: #eceef1;
   --rh-text-2: #a3aab4;
   --rh-text-3: #6d747e;
-  --rh-accent: #eceef1;
-  --rh-accent-fg: #17191d;
+  --rh-accent: var(--dsw-alias-bg-layer-3, #2c3037);
+  --rh-accent-fg: var(--dsw-alias-text-primary, #eceef1);
+  --rh-accent-hover: var(--dsw-alias-bg-layer-hover, #343941);
+  --rh-strong: #eceef1;
+  --rh-strong-fg: #17191d;
+  --rh-strong-hover: #ffffff;
   --rh-blue-bg: rgba(59,130,246,.15);
   --rh-green-bg: rgba(16,185,129,.18);
   --rh-red-bg: rgba(239,68,68,.15);
@@ -224,7 +234,7 @@ ${DARK_TOKENS}
   background: var(--rh-border); color: var(--rh-text-2);
 }
 .rh-step.is-current { color: var(--rh-text); background: var(--rh-surface); border: 1px solid var(--rh-border-strong); }
-.rh-step.is-current .rh-step-no { background: var(--rh-accent); color: var(--rh-accent-fg); }
+.rh-step.is-current .rh-step-no { background: var(--rh-strong); color: var(--rh-strong-fg); }
 .rh-step.is-done { color: var(--rh-green); }
 .rh-step.is-done .rh-step-no { background: var(--rh-green-bg); color: var(--rh-green); }
 .rh-h1 {
@@ -272,7 +282,7 @@ ${DARK_TOKENS}
 .rh-btn.is-danger { background: var(--rh-red-bg); border-color: var(--rh-red); color: var(--rh-red); }
 .rh-btn.is-ghost { background: transparent; border-color: transparent; color: var(--rh-text-2); }
 .rh-btn.is-ghost:hover:not(:disabled) { color: var(--rh-text); background: var(--rh-bg); }
-.rh-btn.is-selected { background: var(--rh-accent); border-color: var(--rh-accent); color: var(--rh-accent-fg); }
+.rh-btn.is-selected { background: var(--rh-accent); border-color: var(--rh-border-strong); color: var(--rh-accent-fg); }
 .rh-btn.is-small { height: 28px; padding: 4px 10px; font-size: var(--rh-fs-label); font-weight: 500; }
 .rh-btn.is-large { height: 40px; padding: 9px 20px; }
 .rh-btn.is-block { width: 100%; }
@@ -380,9 +390,14 @@ ${DARK_TOKENS}
   font-family: inherit; font-size: var(--rh-fs-label); font-weight: 500;
   padding: 5px 12px; border-radius: var(--rh-radius-pill); cursor: pointer; white-space: nowrap;
 }
-.rh-seg-btn:hover:not(:disabled) { color: var(--rh-text); }
+.rh-seg-btn:hover:not(:disabled):not([aria-pressed="true"]) { background: var(--rh-accent-hover); color: var(--rh-text); }
 .rh-seg-btn[aria-pressed="true"] {
-  background: var(--rh-accent); border-color: var(--rh-accent); color: var(--rh-accent-fg);
+  background: var(--rh-accent); border-color: var(--rh-border-strong); color: var(--rh-accent-fg);
+  box-shadow: var(--rh-shadow);
+}
+/* 选中项悬停时保持浅色选中底（不再反转变黑）。 */
+.rh-seg-btn[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--rh-accent-hover); color: var(--rh-accent-fg);
 }
 .rh-seg-btn:disabled { opacity: .4; cursor: not-allowed; }
 .rh-seg-btn:focus-visible { outline: 2px solid var(--rh-blue); outline-offset: 1px; }
@@ -650,7 +665,7 @@ ${DARK_TOKENS}
   text-align: center; padding: 12px;
 }
 .rh-countdown { height: 6px; border-radius: 4px; background: var(--rh-border); overflow: hidden; margin-top: 6px; }
-.rh-countdown > i { display: block; height: 100%; border-radius: 4px; background: var(--rh-accent); transition: width .4s ease; }
+.rh-countdown > i { display: block; height: 100%; border-radius: 4px; background: var(--rh-strong); transition: width .4s ease; }
 .rh-cold { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; color: var(--rh-text-3); font-size: var(--rh-fs-label); }
 .rh-dev .rh-kv { margin: 2px 0; }
 
