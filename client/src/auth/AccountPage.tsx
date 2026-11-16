@@ -46,6 +46,7 @@ import {
   roleOptionLabel,
 } from '../rhui/index.js'
 import { RH_CSS } from '../rhui/tokens.js'
+import { t } from '../rhui/i18n.js'
 import type { ClientBinding } from './keyring.js'
 
 /** 页面阶段（`data-phase` 的取值）。 */
@@ -251,8 +252,7 @@ export function initialDraft(): AccountFormDraft {
   }
 }
 
-/** 页头副标题（所有阶段共用）。 */
-const LEAD = '管理本机 DSH 的登录、安全策略与设备信任；之后每个请求都由本客户端的私钥签名，7 天租约自动轮换。'
+/** 登录流程步骤（从 locale 取文案）。 */
 
 /** 「可信客户端」折叠时默认展示的条数（其余收进「显示全部」）。 */
 const CLIENTS_PREVIEW = 3
@@ -273,20 +273,21 @@ const PEERS_SHOW_ALL_KEY = 'peers-show-all'
  * @param lead - 是否显示副标题。
  * @returns 页头节点。
  */
-function pageHead(title: string = '登录与账号', lead = false): React.ReactElement {
+function pageHead(title?: string, lead = false): React.ReactElement {
+  const resolvedTitle = title ?? t('pageTitle')
   return React.createElement('header', { className: cx('rh-page-head', !lead && 'is-compact') },
     React.createElement('div', { className: 'rh-page-head-row' },
-      React.createElement('h1', { className: 'rh-h1', 'data-testid': 'account-title' }, title),
-      lead ? null : React.createElement('span', { className: 'rh-page-head-hint' }, '账号、两步验证与设备信任')),
-    lead ? React.createElement('p', { className: 'rh-lead' }, LEAD) : null)
+      React.createElement('h1', { className: 'rh-h1', 'data-testid': 'account-title' }, resolvedTitle),
+      lead ? null : React.createElement('span', { className: 'rh-page-head-hint' }, t('pageHint'))),
+    lead ? React.createElement('p', { className: 'rh-lead' }, t('pageLead')) : null)
 }
 
-/** 登录流程的三步（`plan-settings.md §2` 的状态矩阵收敛为一条路径）。 */
-const STEPS: readonly { key: 'login' | 'password' | 'enroll' | 'ready'; label: string }[] = [
-  { key: 'login', label: '账号口令' },
-  { key: 'password', label: '修改口令' },
-  { key: 'enroll', label: '绑定两步验证' },
-  { key: 'ready', label: '账号设置' },
+/** 登录流程步骤（从 locale 取文案）。 */
+const STEPS: readonly { key: 'login' | 'password' | 'enroll' | 'ready'; labelKey: 'stepCredentials' | 'stepPassword' | 'stepEnroll' | 'stepReady' }[] = [
+  { key: 'login', labelKey: 'stepCredentials' },
+  { key: 'password', labelKey: 'stepPassword' },
+  { key: 'enroll', labelKey: 'stepEnroll' },
+  { key: 'ready', labelKey: 'stepReady' },
 ]
 
 /**
@@ -318,7 +319,7 @@ function stepBar(phase: AccountPhase): React.ReactElement | null {
     className: 'rh-steps',
     'data-testid': 'account-steps',
     'data-step': String(current + 1),
-    'aria-label': '登录步骤',
+    'aria-label': t('stepBarLabel'),
   }, STEPS.map((step, index) => React.createElement('li', {
     key: step.key,
     className: cx(
@@ -330,7 +331,7 @@ function stepBar(phase: AccountPhase): React.ReactElement | null {
     'aria-current': index === current ? 'step' : undefined,
   },
   React.createElement('span', { className: 'rh-step-no' }, index < current ? '✓' : String(index + 1)),
-  React.createElement('span', { className: 'rh-step-label' }, step.label))))
+  React.createElement('span', { className: 'rh-step-label' }, t(step.labelKey)))))
 }
 
 /**
@@ -404,7 +405,7 @@ function passwordFields(
 ): React.ReactNode {
   return React.createElement(React.Fragment, null,
     React.createElement(Field, {
-      label: '当前口令',
+      label: t('currentPasswordLabel'),
       children: React.createElement(PasswordInput, {
         'data-testid': 'current-password',
         type: 'password',
@@ -414,8 +415,8 @@ function passwordFields(
       }),
     }),
     React.createElement(Field, {
-      label: '新口令',
-      hint: '至少 8 位，且不同于当前口令',
+      label: t('newPasswordLabel'),
+      hint: t('newPasswordHint'),
       children: React.createElement(PasswordInput, {
         'data-testid': 'new-password',
         type: 'password',
@@ -455,36 +456,36 @@ function renderClientRow(
   React.createElement('div', { className: 'rh-item-head' },
     React.createElement('span', { className: 'rh-item-name' }, typeIcon(client.clientType), ' ', client.label),
     revoked
-      ? React.createElement(Pill, { tone: 'error', children: '已撤销' })
-      : React.createElement(Pill, { tone: online ? 'online' : 'offline', dot: true, children: online ? '在线' : '离线' }),
+      ? React.createElement(Pill, { tone: 'error', children: t('clientStatusRevoked') })
+      : React.createElement(Pill, { tone: online ? 'online' : 'offline', dot: true, children: online ? t('clientStatusOnline') : t('clientStatusOffline') }),
     React.createElement(Pill, { tone: 'purple', children: formatRole(client.activeRole) }),
     React.createElement('span', {
       'data-testid': 'client-role',
       className: 'rh-pill',
-    }, `当前 ${formatRole(client.activeRole)} / 上限 ${formatRole(client.roleCeiling)}`)),
+    }, `${formatRole(client.activeRole)} / ${t('roleCeilingPrefix')}${formatRole(client.roleCeiling)}`)),
   React.createElement('p', { className: 'rh-meta' },
     client.username === undefined || client.username === null
       ? null
       : React.createElement(React.Fragment, null,
-        React.createElement('span', { 'data-testid': 'client-account' }, `账号 ${client.username}`),
+        React.createElement('span', { 'data-testid': 'client-account' }, t('clientAccount', { username: client.username })),
         ' · '),
-    `指纹 `,
-    React.createElement('code', {
-      className: 'rh-inline-code',
-      title: '公钥指纹（仅供人眼核对，不是认证凭据）',
-    }, client.fingerprint),
+    React.createElement('span', { title: t('clientFingerprintTitle') },
+      `${t('clientFingerprint')} `,
+      React.createElement('code', {
+        className: 'rh-inline-code',
+      }, client.fingerprint)),
     ' · ',
-    client.lastSeenAt === null ? '从未活跃' : `最近活跃 ${formatRelative(client.lastSeenAt, Date.now())}`,
+    client.lastSeenAt === null ? t('clientNeverActive') : `${t('clientLastSeen')} ${formatRelative(client.lastSeenAt, Date.now())}`,
     ' · ',
     client.leaseExpiresAt === null || client.leaseExpiresAt === undefined
-      ? '无租约'
-      : `租约 ${formatRelative(client.leaseExpiresAt, Date.now()).replace('前', '后')}到期`),
+      ? t('clientLeaseNone')
+      : `${t('clientLease')} ${formatRelative(client.leaseExpiresAt, Date.now()).replace(t('timeJustNow'), '')} ${t('clientLeaseExpiry')}`),
   React.createElement('div', { className: 'rh-item-actions' },
     // 两个下拉框并排两列（plan-settings §2.7 E）；撤销按钮在右侧独立。
     React.createElement('div', { className: 'rh-select-pair' },
       React.createElement(Select, {
         'data-testid': 'client-role-select',
-        ariaLabel: `客户端 ${client.label} 的当前角色`,
+        ariaLabel: t('clientRoleLabel', { label: client.label }),
         value: client.activeRole,
         disabled: revoked || state.busy,
         options: ROLE_NAMES.map(role => ({ value: role, label: roleOptionLabel(role) })),
@@ -494,10 +495,10 @@ function renderClientRow(
       }),
       React.createElement(Select, {
         'data-testid': 'client-ceiling-select',
-        ariaLabel: `客户端 ${client.label} 的权限上限`,
+        ariaLabel: t('clientCeilingLabel', { label: client.label }),
         value: client.roleCeiling,
         disabled: revoked || state.busy,
-        options: ROLE_NAMES.map(role => ({ value: role, label: `上限 ${roleOptionLabel(role)}` })),
+        options: ROLE_NAMES.map(role => ({ value: role, label: `${t('clientCeilingPrefix')}${roleOptionLabel(role)}` })),
         onChange: (event: React.ChangeEvent<HTMLSelectElement>) => {
           actions.onSetCeiling(client.clientId, event.currentTarget.value as RoleName)
         },
@@ -507,22 +508,21 @@ function renderClientRow(
       variant: 'danger',
       size: 'small',
       disabled: revoked || state.busy,
-      title: `撤销客户端 ${client.label}`,
-      children: '撤销信任',
+      title: t('clientRevokeTitle', { label: client.label }),
+      children: t('clientRevoke'),
       onClick: () => actions.onRevokeClient(client.clientId),
     })),
   pending
     ? React.createElement('div', { className: 'rh-inline-panel', 'data-testid': 'escalation' },
-      React.createElement('div', { className: 'rh-cfg-title' }, '提升权限需要重新验证'),
+      React.createElement('div', { className: 'rh-cfg-title' }, t('escalationTitle')),
       React.createElement('p', { className: 'rh-cfg-desc' },
-        `把客户端上限提升到「${formatRole(escalation.role)}」需要重新输入口令与 2FA 验证码；`
-        + '重新验证只刷新本次登录的 2FA 窗口，不会签发新会话。'),
+        t('escalationDesc', { role: formatRole(escalation.role) })),
       React.createElement('div', { className: 'rh-row', style: { marginTop: 8 } },
         React.createElement(Input, {
           'data-testid': 'escalation-password',
           type: 'password',
           autoComplete: 'current-password',
-          ariaLabel: '当前口令',
+          ariaLabel: t('escalationPasswordLabel'),
           value: escalation.password,
           disabled: state.busy,
           onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
@@ -532,7 +532,7 @@ function renderClientRow(
           'data-testid': 'escalation-code',
           inputMode: 'numeric',
           autoComplete: 'one-time-code',
-          ariaLabel: '6 位验证码',
+          ariaLabel: t('escalationCodeLabel'),
           value: escalation.code,
           disabled: state.busy,
           onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
@@ -551,14 +551,14 @@ function renderClientRow(
           variant: 'primary',
           size: 'small',
           disabled: state.busy || escalation.password === '' || escalation.code === '',
-          children: '验证并提升',
+          children: t('escalationSubmit'),
           onClick: () => actions.onEscalationSubmit(),
         }),
         React.createElement(Button, {
           'data-testid': 'escalation-cancel',
           variant: 'ghost',
           size: 'small',
-          children: '取消',
+          children: t('cancel'),
           onClick: () => actions.onEscalationCancel(),
         })))
     : null)
@@ -615,25 +615,25 @@ function renderSubAccountRow(
   React.createElement('div', { className: 'rh-item-head' },
     React.createElement('span', { className: 'rh-item-name' }, typeIcon('user'), ' ', account.username),
     React.createElement(Pill, { tone: 'purple', children: formatRoleCeiling(account.roleCeiling) }),
-    account.isAdmin ? React.createElement(Pill, { tone: 'info', children: '管理员' }) : null,
-    React.createElement(Pill, { tone: disabled ? 'error' : 'online', dot: true, children: disabled ? '已禁用' : '正常' })),
+    account.isAdmin ? React.createElement(Pill, { tone: 'info', children: 'Admin' }) : null,
+    React.createElement(Pill, { tone: disabled ? 'error' : 'online', dot: true, children: disabled ? t('subDisable') : t('subEnable') })),
   React.createElement('p', { className: 'rh-meta' },
     account.lastLoginAt === null
-      ? '从未登录'
-      : `最近登录 ${formatRelative(account.lastLoginAt, Date.now())}`),
+      ? t('peerNeverConnected')
+      : `${t('peerLastConnected')} ${formatRelative(account.lastLoginAt, Date.now())}`),
   // 管理员这一行是**只读**的：不支持禁用 / 改上限 / 删除。
   // 否则一次误操作就能把自己锁在门外（服务端同样拒绝这些请求）。
   account.isAdmin
     ? React.createElement('p', { className: 'rh-meta', 'data-testid': 'sub-account-admin-note', style: { margin: '6px 0 0' } },
-      '管理员账号不支持禁用、修改上限或删除；如需更换管理员请先创建一个管理员范围的子账号。')
+      t('subAdminNote'))
     : React.createElement('div', { className: 'rh-item-actions' },
       disabled
         ? React.createElement(Button, {
           'data-testid': 'sub-account-enable',
           size: 'small',
           disabled: state.busy,
-          title: `启用子账号 ${account.username}`,
-          children: '启用',
+          title: t('subEnableTitle', { username: account.username }),
+          children: t('subEnable'),
           onClick: () => request('enable'),
         })
         : React.createElement(Button, {
@@ -641,16 +641,16 @@ function renderSubAccountRow(
           variant: 'danger',
           size: 'small',
           disabled: state.busy,
-          title: `禁用子账号 ${account.username}`,
-          children: '禁用',
+          title: t('subDisableTitle', { username: account.username }),
+          children: t('subDisable'),
           onClick: () => request('disable'),
         }),
       React.createElement(Button, {
         'data-testid': 'sub-account-set-ceiling',
         size: 'small',
         disabled: state.busy || disabled,
-        title: `修改子账号 ${account.username} 的权限上限`,
-        children: '修改上限',
+        title: t('subCeilingTitle', { username: account.username }),
+        children: t('subSetCeiling'),
         onClick: () => request('ceiling'),
       }),
       React.createElement(Button, {
@@ -658,27 +658,27 @@ function renderSubAccountRow(
         variant: 'danger',
         size: 'small',
         disabled: state.busy,
-        title: `删除子账号 ${account.username}`,
-        children: '删除',
+        title: t('subDeleteTitle', { username: account.username }),
+        children: t('subDelete'),
         onClick: () => request('delete'),
       })),
   // 删除二次确认（红色）；管理员不会进入这个分支。
   confirming && account.isAdmin !== true
     ? React.createElement('div', { className: 'rh-inline-panel is-danger' },
       React.createElement(Notice, { tone: 'error' },
-        `删除 ${account.username} 不可恢复：该账号下所有客户端都会被撤销，已登录的会话立即失效。`),
+        t('subDeleteWarning', { username: account.username })),
       React.createElement('div', { className: 'rh-row' },
         React.createElement(Button, {
           'data-testid': 'sub-account-confirm',
           variant: 'danger',
           size: 'small',
-          children: '确认删除',
+          children: t('subDeleteConfirm'),
           onClick: () => request('delete'),
         }),
         React.createElement(Button, {
           variant: 'ghost',
           size: 'small',
-          children: '取消',
+          children: t('cancel'),
           onClick: () => actions.onSubCancel?.(),
         })))
     : null,
@@ -687,11 +687,11 @@ function renderSubAccountRow(
     ? null
     : React.createElement('div', { className: 'rh-inline-panel' },
       React.createElement('div', { className: 'rh-cfg-title' },
-        `${SUB_ACTION_LABEL[pending.action]}「${account.username}」需要重新验证`),
+        t('subVerifyTitle', { action: SUB_ACTION_LABEL[pending.action], username: account.username })),
       pending.action === 'ceiling'
         ? React.createElement(Segmented, {
           'data-testid': 'sub-account-new-ceiling',
-          ariaLabel: '新的权限上限',
+          ariaLabel: t('subNewCeilingLabel'),
           value: pending.role ?? account.roleCeiling,
           options: ROLE_OPTIONS.map(option => ({ value: option.value, label: option.label })),
           onChange: value => actions.onSubRequest?.(account.accountId, 'ceiling', value as RoleName),
@@ -700,19 +700,19 @@ function renderSubAccountRow(
       React.createElement('div', { className: 'rh-row', style: { marginTop: 8 } },
         React.createElement(PasswordInput, {
           'data-testid': 'sub-account-verify-password',
-          ariaLabel: '当前口令',
+          ariaLabel: t('subVerifyPasswordLabel'),
           autoComplete: 'current-password',
-          placeholder: '当前口令',
+          placeholder: t('subVerifyPasswordLabel'),
           value: pending.password,
           onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
             actions.onSubPendingChange?.('password', event.currentTarget.value),
         }),
         React.createElement(Input, {
           'data-testid': 'sub-account-verify-code',
-          ariaLabel: '6 位动态码',
+          ariaLabel: t('subVerifyCodeLabel'),
           inputMode: 'numeric',
           autoComplete: 'one-time-code',
-          placeholder: '6 位动态码',
+          placeholder: t('subVerifyCodeLabel'),
           maxLength: 6,
           value: pending.code,
           onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
@@ -728,13 +728,13 @@ function renderSubAccountRow(
           size: 'small',
           loading: state.busy,
           disabled: pending.password === '' || pending.code === '',
-          children: '验证并执行',
+          children: t('subVerifySubmit'),
           onClick: () => actions.onSubConfirm?.(),
         }),
         React.createElement(Button, {
           variant: 'ghost',
           size: 'small',
-          children: '取消',
+          children: t('cancel'),
           onClick: () => actions.onSubCancel?.(),
         }))))
 }
@@ -759,14 +759,21 @@ export function renderAccountPage(
 
   if (state.phase === 'loading') {
     return pageRoot('loading', React.createElement(React.Fragment, null,
-      React.createElement('section', { className: 'rh-card', 'data-testid': 'account-loading', 'aria-busy': 'true' },
-        React.createElement(Skeleton, { lines: 3 }))))
+      React.createElement('section', {
+        className: 'rh-card',
+        'data-testid': 'account-loading',
+        'aria-busy': 'true',
+        'aria-live': 'polite',
+        'aria-label': t('loadingAccount'),
+      },
+        React.createElement(Skeleton, { lines: 3 }),
+        React.createElement('span', { className: 'sr-only' }, t('loadingAccountSr')))))
   }
 
   if (state.phase === 'error') {
     return pageRoot('error', React.createElement(React.Fragment, null,
-      React.createElement(Notice, { tone: 'error', children: React.createElement('span', { 'data-testid': 'account-error' }, state.notice ?? '认证服务不可用') }),
-      React.createElement(Button, { variant: 'primary', children: '重试', onClick: () => actions.onRefresh() })))
+      React.createElement(Notice, { tone: 'error', children: React.createElement('span', { 'data-testid': 'account-error' }, state.notice ?? t('serviceUnavailable')) }),
+      React.createElement(Button, { variant: 'primary', children: t('retry'), onClick: () => actions.onRefresh() })))
   }
 
   if (state.phase === 'bootstrap') {
@@ -774,14 +781,14 @@ export function renderAccountPage(
       React.createElement(Notice, {
         'data-testid': 'bootstrap-hint',
         tone: 'info',
-        children: '还没有账号。首个管理员只能在本机（回环）创建；创建后请立即用认证器完成绑定。',
+        children: t('bootstrapHint'),
       }),
       React.createElement(Section, {
-        title: '首个管理员',
-        desc: '设置用户名与口令。口令策略作用于之后所有账号。',
+        title: t('bootstrapSectionTitle'),
+        desc: t('bootstrapSectionDesc'),
         children: React.createElement(React.Fragment, null,
           React.createElement(Field, {
-            label: '用户名',
+            label: t('subUsernameLabel'),
             htmlFor: 'rh-bootstrap-username',
             children: React.createElement(Input, {
               'data-testid': 'bootstrap-username',
@@ -792,7 +799,7 @@ export function renderAccountPage(
             }),
           }),
           React.createElement(Field, {
-            label: '口令',
+            label: t('newPasswordLabel'),
             htmlFor: 'rh-bootstrap-password',
             children: React.createElement(PasswordInput, {
               'data-testid': 'bootstrap-password',
@@ -811,20 +818,20 @@ export function renderAccountPage(
             loading: state.busy,
             disabled: draft.username.trim() === ''
               || !evaluatePassword(draft.password, state.policy, draft.username.trim()).ok,
-            children: state.busy ? '创建中…' : '创建管理员',
+            children: state.busy ? t('bootstrapSubmitting') : t('bootstrapSubmit'),
             onClick: () => actions.onSubmitBootstrap(draft.username.trim(), draft.password),
           })),
-      })), { title: '创建管理员账号', lead: true })
+      })), { title: t('bootstrapTitle'), lead: true })
   }
 
   if (state.phase === 'login') {
     return pageRoot('login', React.createElement(React.Fragment, null,
       React.createElement(Section, {
-        title: '欢迎回来',
-        desc: '登录这台 DSH，继续管理设备与账号。',
+        title: t('loginSectionTitle'),
+        desc: t('loginSectionDesc'),
         children: React.createElement(React.Fragment, null,
           React.createElement(Field, {
-            label: '用户名',
+            label: t('subUsernameLabel'),
             htmlFor: 'rh-login-username',
             children: React.createElement(Input, {
               'data-testid': 'login-username',
@@ -835,7 +842,7 @@ export function renderAccountPage(
             }),
           }),
           React.createElement(Field, {
-            label: '口令',
+            label: t('currentPasswordLabel'),
             htmlFor: 'rh-login-password',
             children: React.createElement(PasswordInput, {
               'data-testid': 'login-password',
@@ -853,23 +860,23 @@ export function renderAccountPage(
             block: true,
             loading: state.busy,
             disabled: draft.username.trim() === '' || draft.password === '',
-            children: state.busy ? '登录中…' : '登录',
+            children: state.busy ? t('loginSubmitting') : t('loginSubmit'),
             onClick: () => actions.onSubmitLogin(draft.username.trim(), draft.password),
           }),
           state.notice === null
             ? null
             : React.createElement(Notice, { 'data-testid': 'login-notice', tone: 'error', children: state.notice })),
-      })), { title: '登录', lead: true })
+      })), { title: t('loginTitle'), lead: true })
   }
 
   if (state.phase === 'mfa') {
     return pageRoot('mfa', React.createElement(React.Fragment, null,
       React.createElement(Section, {
-        title: '输入动态码',
-        desc: '请输入认证器中的 6 位动态码，或一个一次性备用码。',
+        title: t('mfaSectionTitle'),
+        desc: t('mfaSectionDesc'),
         children: React.createElement(React.Fragment, null,
           React.createElement(Field, {
-            label: '验证码',
+            label: t('mfaCodeLabel'),
             htmlFor: 'rh-mfa-code',
             error: state.notice,
             children: React.createElement(Input, {
@@ -878,7 +885,7 @@ export function renderAccountPage(
               autoComplete: 'one-time-code',
               otp: true,
               value: draft.code,
-              placeholder: '000000',
+              placeholder: t('mfaCodePlaceholder'),
               maxLength: 6,
               error: state.notice !== null,
               autoFocus: true,
@@ -891,15 +898,15 @@ export function renderAccountPage(
             block: true,
             loading: state.busy,
             disabled: draft.code.trim() === '',
-            children: state.busy ? '验证中…' : '验证',
+            children: state.busy ? t('mfaSubmitting') : t('mfaSubmit'),
             onClick: () => actions.onSubmitMfa(draft.code.trim()),
           }),
           React.createElement(Collapse, {
-            summary: '使用备用码',
+            summary: t('mfaBackupCodeToggle'),
             children: React.createElement('p', { className: 'rh-muted', style: { margin: 0 } },
-              '把备用码填进上面的验证码框即可（格式 xxxx-xxxx）。'),
+              t('mfaBackupCodeHint')),
           })),
-      })), { title: '两步验证', lead: true })
+      })), { title: t('mfaTitle'), lead: true })
   }
 
   // 改名机会只有一次（管理员首次登录），与改密同屏出现，所以声明要提前。
@@ -909,8 +916,6 @@ export function renderAccountPage(
   if (state.phase === 'change-password') {
     const verdict = evaluatePassword(draft.newPassword, state.policy, username)
     const valid = draft.currentPassword !== '' && verdict.ok && draft.newPassword !== draft.currentPassword
-    // 改名与改密同在首次登录这一屏：默认的 admin 是公开默认值，趁这一次一起换掉。
-    // 机会只有一次，所以不留到最后一步。
     const renameReady = !renameAllowed || (
       renameDraft.trim().length >= 3
       && renameDraft.trim() !== username
@@ -920,21 +925,20 @@ export function renderAccountPage(
       React.createElement(Notice, {
         'data-testid': 'change-password-required',
         tone: 'warning',
-        children: '这是首次登录，必须先修改初始口令才能继续（只需一次）。改完才能绑定 2FA、信任浏览器与访问 Hub。',
+        children: t('changePasswordRequired'),
       }),
       React.createElement(Section, {
-        title: '修改口令',
-        desc: '仅这一次强制执行；之后可在本页随时修改。',
+        title: t('changePasswordSectionTitle'),
+        desc: t('changePasswordSectionDesc'),
         children: React.createElement(React.Fragment, null,
           passwordFields(draft, setDraft),
           passwordChecklist(draft.newPassword, state.policy, username),
-          // ── 改名（仅首次登录这一次）────────────────────────────────────────
           renameAllowed
             ? React.createElement(React.Fragment, null,
               React.createElement('hr', { className: 'rh-divider' }),
               React.createElement(Field, {
-                label: '账号名（仅这一次可以改）',
-                hint: '3–32 个字符，不能包含空格；改名后用新账号名登录，本机数据不受影响。',
+                label: t('renameLabel'),
+                hint: t('renameHint'),
                 children: React.createElement(Input, {
                   'data-testid': 'rename-username',
                   value: renameDraft,
@@ -949,11 +953,11 @@ export function renderAccountPage(
             block: true,
             loading: state.busy,
             disabled: !valid || !renameReady,
-            children: state.busy ? '提交中…' : (renameAllowed ? '保存账号名与新口令' : '保存新口令'),
+            children: state.busy ? t('changePasswordSubmitting') : (renameAllowed ? t('changePasswordSubmitWithRename') : t('changePasswordSubmit')),
             onClick: () => actions.onChangePassword(draft.currentPassword, draft.newPassword),
           }),
           state.notice === null ? null : React.createElement(Notice, { tone: 'error', children: state.notice })),
-      })), { title: '设置新口令', lead: true })
+      })), { title: t('changePasswordTitle'), lead: true })
   }
 
   // 首次登录第 3 步需要 TOTP 草稿（与 ready 态共用同一份状态）。
@@ -966,11 +970,11 @@ export function renderAccountPage(
       React.createElement(Notice, {
         'data-testid': 'totp-enrollment-required',
         tone: 'warning',
-        children: '首次登录必须先绑定两步验证：之后每次登录、信任浏览器与跨机登记公钥都依赖它。绑定完成后才能进入设置页。',
+        children: t('enrollTotpRequired'),
       }),
       React.createElement(Section, {
-        title: '绑定两步验证',
-        desc: '用认证器 App 扫码，或手动导入下面的密钥；然后填 6 位动态码确认。备用码只显示这一次。',
+        title: t('enrollTotpSectionTitle'),
+        desc: t('enrollTotpSectionDesc'),
         children: enrollment === null
           ? React.createElement(React.Fragment, null,
             React.createElement(Button, {
@@ -978,7 +982,7 @@ export function renderAccountPage(
               variant: 'primary',
               block: true,
               loading: state.busy,
-              children: state.busy ? '生成中…' : '开始绑定',
+              children: state.busy ? t('enrollTotpStarting') : t('enrollTotpStart'),
               onClick: () => actions.onStartTotp(),
             }),
             state.notice === null ? null : React.createElement(Notice, { tone: 'error', children: state.notice }))
@@ -987,21 +991,21 @@ export function renderAccountPage(
               React.createElement('div', { className: 'rh-qr-col' },
                 React.createElement(QrCode, {
                   text: enrollment.otpauth,
-                  tooLong: 'otpauth 链接过长，无法生成二维码；请复制下方链接手动导入。',
-                  label: 'otpauth 绑定二维码',
+                  tooLong: t('totpQrTooLong'),
+                  label: t('totpQrLabel'),
                   'data-testid': 'totp-qr',
                 })),
               React.createElement('div', { className: 'rh-qr-info' },
-                React.createElement('div', { className: 'rh-k' }, '认证器密钥'),
+                React.createElement('div', { className: 'rh-k' }, t('totpSecretLabel')),
                 React.createElement(CodeBox, { 'data-testid': 'totp-secret' }, enrollment.secret),
-                React.createElement('div', { className: 'rh-k', style: { marginTop: 8 } }, 'otpauth 链接'),
+                React.createElement('div', { className: 'rh-k', style: { marginTop: 8 } }, t('totpOtpauthLabel')),
                 React.createElement('details', null,
-                  React.createElement('summary', { className: 'rh-linkish' }, '展开链接'),
+                  React.createElement('summary', { className: 'rh-linkish' }, t('totpOtpauthToggle')),
                   React.createElement(CodeBox, { 'data-testid': 'totp-otpauth' }, enrollment.otpauth)),
-                React.createElement('div', { className: 'rh-k', style: { marginTop: 8 } }, '备用码（只显示这一次，请妥善保存）'),
+                React.createElement('div', { className: 'rh-k', style: { marginTop: 8 } }, t('totpBackupCodesLabel')),
                 React.createElement(CodeBox, { 'data-testid': 'totp-backup-codes' }, enrollment.backupCodes.join('  ')))),
             React.createElement(Field, {
-              label: '6 位动态码',
+              label: t('totpCodeLabel'),
               children: React.createElement(Input, {
                 'data-testid': 'totp-confirm-code',
                 inputMode: 'numeric',
@@ -1016,13 +1020,13 @@ export function renderAccountPage(
               variant: 'primary',
               block: true,
               disabled: state.busy || totpDraft.code === '',
-              children: '确认绑定',
+              children: t('totpConfirm'),
               onClick: () => actions.onConfirmTotp(),
             })),
         ...(state.notice === null || enrollment === null
           ? []
           : [React.createElement(Notice, { key: 'notice', tone: 'error', children: state.notice })]),
-      })), { title: '绑定两步验证', lead: true })
+      })), { title: t('enrollTotpTitle'), lead: true })
   }
 
   // ── ready：区块 A–F（plan-settings.md §2.7）────────────────────────────────
@@ -1065,20 +1069,20 @@ export function renderAccountPage(
     expanded: (state.expanded ?? {})['local-account'] === true,
     onToggle: () => actions.onToggleSection?.('local-account'),
     summary: username === '' ? null : username,
-    title: '本机账号（这台 DSH）',
-    desc: '用于登录这台机器的 DSH Web 与设置页；双因素与口令策略都作用于它。',
+    title: t('localAccountTitle'),
+    desc: t('localAccountDesc'),
     actions: React.createElement(React.Fragment, null,
-      React.createElement(Button, { 'data-testid': 'account-refresh', size: 'small', children: '刷新', onClick: () => actions.onRefresh() }),
-      React.createElement(Button, { 'data-testid': 'account-logout', variant: 'ghost', size: 'small', children: '退出登录', onClick: () => actions.onLogout() })),
+      React.createElement(Button, { 'data-testid': 'account-refresh', size: 'small', children: t('localAccountRefresh'), onClick: () => actions.onRefresh() }),
+      React.createElement(Button, { 'data-testid': 'account-logout', variant: 'ghost', size: 'small', children: t('localAccountLogout'), onClick: () => actions.onLogout() })),
     children: React.createElement(React.Fragment, null,
       React.createElement('div', { className: 'rh-row' },
         React.createElement('span', { 'data-testid': 'account-user', className: 'rh-item-name' },
-          `当前账号：${username === '' ? '—' : username}`),
+          `${t('localAccountUser')}${username === '' ? t('localAccountUserEmpty') : username}`),
         React.createElement(Pill, {
           tone: trusted ? 'online' : 'offline',
           dot: true,
           children: React.createElement('span', { 'data-testid': 'account-client' },
-            trusted ? `本浏览器已受信 · ${state.binding?.clientId.slice(0, 12) ?? ''}…` : '本浏览器尚未受信'),
+            trusted ? `${t('localAccountTrusted')} · ${state.binding?.clientId.slice(0, 12) ?? ''}…` : t('localAccountNotTrusted')),
         })),
       state.enrollment === null
         ? null
@@ -1086,9 +1090,9 @@ export function renderAccountPage(
           React.createElement(Notice, {
             tone: 'warning',
             children: React.createElement(React.Fragment, null,
-              React.createElement('div', null, '用认证器添加这个账号：'),
+              React.createElement('div', null, t('enrollmentQrHint')),
               React.createElement(CodeBox, { style: { margin: '6px 0' }, children: state.enrollment.otpauth }),
-              React.createElement('div', null, `备用码（只显示这一次）：${state.enrollment.backupCodes.join('  ')}`)),
+              React.createElement('div', null, `${t('enrollmentBackupHint')} ${state.enrollment.backupCodes.join('  ')}`)),
           }))),
   })
 
@@ -1098,15 +1102,15 @@ export function renderAccountPage(
     collapsible: true,
     expanded: (state.expanded ?? {})['trust-section'] === true,
     onToggle: () => actions.onToggleSection?.('trust-section'),
-    summary: trusted ? '已受信' : '未受信',
-      title: '信任本浏览器',
-      desc: '信任后访问 Hub 由私钥签名，不再重复输入两步验证码。',
+    summary: trusted ? t('totpEnabled') : t('totpDisabled'),
+      title: t('trustSectionTitle'),
+      desc: t('trustSectionDesc'),
       children: React.createElement(React.Fragment, null,
         totpEnabled
           ? null
-          : React.createElement(Notice, { tone: 'warning', children: '请先绑定两步验证再信任浏览器。' }),
+          : React.createElement(Notice, { tone: 'warning', children: t('trustRequiresTotp') }),
         React.createElement(Field, {
-          label: '客户端名称',
+          label: t('trustLabelField'),
           children: React.createElement(Input, {
             'data-testid': 'trust-label',
             value: draft.label,
@@ -1114,10 +1118,10 @@ export function renderAccountPage(
           }),
         }),
         React.createElement(Field, {
-          label: '允许的最高权限',
+          label: t('trustCeilingField'),
           children: React.createElement(Segmented, {
             'data-testid': 'trust-ceiling',
-            ariaLabel: '允许的最高权限',
+            ariaLabel: t('trustCeilingField'),
             value: draft.ceiling,
             options: ROLE_NAMES.map(role => ({ value: role, label: roleOptionLabel(role) })),
             onChange: value => setDraft({ ...draft, ceiling: value as RoleName }),
@@ -1128,7 +1132,7 @@ export function renderAccountPage(
           variant: 'primary',
           loading: state.busy,
           disabled: draft.label.trim() === '',
-          children: state.busy ? '登记中…' : '信任本浏览器',
+          children: state.busy ? t('trustSubmitting') : t('trustSubmit'),
           onClick: () => actions.onTrustClient(draft.label.trim(), draft.ceiling),
         })),
     })
@@ -1139,24 +1143,24 @@ export function renderAccountPage(
     collapsible: true,
     expanded: (state.expanded ?? {})['totp-section'] === true,
     onToggle: () => actions.onToggleSection?.('totp-section'),
-    summary: totpEnabled ? '已启用' : '未启用',
+    summary: totpEnabled ? t('totpEnabled') : t('totpDisabled'),
     title: React.createElement(React.Fragment, null,
-      '两步验证',
+      t('totpSectionTitle'),
       React.createElement(Pill, {
         tone: totpEnabled ? 'online' : totp === null ? 'offline' : 'warning',
         dot: true,
-        children: totpEnabled ? '已启用' : totp === null ? '未启用' : '绑定中',
+        children: totpEnabled ? t('totpEnabled') : totp === null ? t('totpDisabled') : t('totpEnrolling'),
       })),
-    desc: '信任浏览器与跨机登记公钥都要求先绑定两步验证；绑定后登录需要输入动态码。',
+    desc: t('totpSectionDesc'),
     children: totpEnabled
       ? React.createElement(React.Fragment, null,
-        React.createElement(Notice, { tone: 'warning', children: '关闭两步验证需要当前口令和当前动态码。' }),
+        React.createElement(Notice, { tone: 'warning', children: t('totpDisableWarning') }),
         React.createElement('div', { className: 'rh-row' },
           React.createElement(Input, {
             'data-testid': 'totp-disable-password',
             type: 'password',
-            ariaLabel: '当前口令',
-            placeholder: '当前口令',
+            ariaLabel: t('totpDisablePasswordLabel'),
+            placeholder: t('totpDisablePasswordLabel'),
             value: totpDraft.password,
             onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
               actions.onTotpChange('password', event.currentTarget.value),
@@ -1164,8 +1168,8 @@ export function renderAccountPage(
           React.createElement(Input, {
             'data-testid': 'totp-disable-code',
             inputMode: 'numeric',
-            ariaLabel: '6 位动态码',
-            placeholder: '6 位动态码',
+            ariaLabel: t('totpDisableCodeLabel'),
+            placeholder: t('totpDisableCodeLabel'),
             maxLength: 6,
             value: totpDraft.code,
             onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
@@ -1175,7 +1179,7 @@ export function renderAccountPage(
             'data-testid': 'totp-disable',
             variant: 'danger',
             disabled: state.busy || totpDraft.password === '' || totpDraft.code === '',
-            children: '关闭两步验证',
+            children: t('totpDisable'),
             onClick: () => actions.onDisableTotp(),
           })))
       : totp === null
@@ -1183,29 +1187,29 @@ export function renderAccountPage(
           'data-testid': 'totp-start',
           variant: 'primary',
           disabled: state.busy,
-          children: '开始绑定两步验证',
+          children: t('totpStartBind'),
           onClick: () => actions.onStartTotp(),
         })
         : React.createElement(React.Fragment, null,
           React.createElement('p', { className: 'rh-muted', style: { margin: '0 0 10px' } },
-            '用认证器 App 扫码，或手动导入下面的密钥；然后填 6 位动态码确认。备用码只显示这一次。'),
+            t('totpBindHint')),
           React.createElement('div', { className: 'rh-qr-wrap' },
             React.createElement('div', { className: 'rh-qr-col' },
               React.createElement(QrCode, {
                 'data-testid': 'totp-qr',
                 text: totp.otpauth,
-                label: '两步验证绑定二维码',
-                tooLong: 'otpauth 链接过长，无法生成二维码；请复制下方链接手动导入。',
+                label: t('totpBindQrLabel'),
+                tooLong: t('totpBindQrTooLong'),
               })),
             React.createElement('div', { className: 'rh-qr-copy' },
-              React.createElement('div', { className: 'rh-k' }, '认证器密钥'),
+              React.createElement('div', { className: 'rh-k' }, t('totpBindSecretLabel')),
               React.createElement('div', { style: { margin: '4px 0 10px' } },
                 React.createElement(CodeBox, { 'data-testid': 'totp-secret', children: totp.secret })),
               React.createElement(Collapse, {
-                summary: 'otpauth 链接',
+                summary: t('totpOtpauthLabel'),
                 children: React.createElement('code', { 'data-testid': 'totp-otpauth' }, totp.otpauth),
               }),
-              React.createElement('div', { className: 'rh-k', style: { marginTop: 12 } }, '备用码（只显示这一次，请妥善保存）'),
+              React.createElement('div', { className: 'rh-k', style: { marginTop: 12 } }, t('totpBackupCodesLabel')),
               React.createElement('div', {
                 'data-testid': 'totp-backup-codes',
                 className: 'rh-code',
@@ -1215,8 +1219,8 @@ export function renderAccountPage(
             React.createElement(Input, {
               'data-testid': 'totp-confirm-code',
               inputMode: 'numeric',
-              ariaLabel: '6 位动态码',
-              placeholder: '6 位动态码',
+              ariaLabel: t('totpCodeLabel'),
+              placeholder: t('totpCodePlaceholder'),
               maxLength: 6,
               value: totpDraft.code,
               onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
@@ -1226,13 +1230,13 @@ export function renderAccountPage(
               'data-testid': 'totp-confirm',
               variant: 'primary',
               disabled: state.busy || totpDraft.code === '',
-              children: '确认绑定',
+              children: t('totpConfirmCode'),
               onClick: () => actions.onConfirmTotp(),
             }),
             React.createElement(Button, {
               'data-testid': 'totp-cancel',
               variant: 'ghost',
-              children: '取消',
+              children: t('cancelBind'),
               onClick: () => actions.onCancelTotp(),
             })),
           state.notice === null ? null : React.createElement(Notice, { tone: 'error', children: state.notice }))),
@@ -1243,24 +1247,24 @@ export function renderAccountPage(
     collapsible: true,
     expanded: (state.expanded ?? {})['password-policy-section'] === true,
     onToggle: () => actions.onToggleSection?.('password-policy-section'),
-    summary: state.policy === 'strong' ? '强' : '标准',
-    title: '口令管理',
-    desc: '口令策略切换后立即生效：之后设置/修改口令都按新规则校验（已有口令不受影响）。',
+    summary: state.policy === 'strong' ? t('policyStrong') : t('policyBasic'),
+    title: t('policyTitle'),
+    desc: t('policyDesc'),
     children: React.createElement(React.Fragment, null,
-      React.createElement('div', { className: 'rh-k', style: { marginBottom: 6 } }, '口令策略'),
+      React.createElement('div', { className: 'rh-k', style: { marginBottom: 6 } }, t('policyLabel')),
       React.createElement(Segmented, {
-        ariaLabel: '口令策略',
+        ariaLabel: t('policyLabel'),
         value: state.policy,
         disabled: state.busy,
         options: PASSWORD_POLICIES.map(policy => ({
           value: policy,
-          label: policy === 'strong' ? '仅允许强密码（推荐）' : '允许基础口令',
+          label: policy === 'strong' ? t('policyOptionStrong') : t('policyOptionBasic'),
           testId: `policy-${policy}`,
         })),
         onChange: value => actions.onSetPasswordPolicy(value as PasswordPolicy),
       }),
       React.createElement('hr', { className: 'rh-divider' }),
-      React.createElement('div', { className: 'rh-cfg-title', style: { marginBottom: 8 } }, '修改口令'),
+      React.createElement('div', { className: 'rh-cfg-title', style: { marginBottom: 8 } }, t('changePasswordTitle2')),
       passwordFields(draft, setDraft),
       passwordChecklist(draft.newPassword, state.policy, username),
       React.createElement(Button, {
@@ -1269,7 +1273,7 @@ export function renderAccountPage(
         disabled: state.busy || draft.currentPassword === ''
           || draft.newPassword === draft.currentPassword
           || !evaluatePassword(draft.newPassword, state.policy, username).ok,
-        children: '保存新口令',
+        children: t('savePassword'),
         onClick: () => actions.onChangePassword(draft.currentPassword, draft.newPassword),
       })),
   })
@@ -1279,26 +1283,25 @@ export function renderAccountPage(
     collapsible: true,
     expanded: (state.expanded ?? {})['clients-list'] === true,
     onToggle: () => actions.onToggleSection?.('clients-list'),
-    summary: active.length + ' 台',
-    title: `可信客户端（${active.length}）`,
-    desc: '这些客户端被允许用本机账号访问 Hub；提高上限不会改变浏览器当前角色，受信浏览器需重新信任后才会以新权限运行。已撤销的客户端不再显示（记录一天后自动清除）。',
+    summary: `${active.length}`,
+    title: t('clientsTitle', { count: String(active.length) }),
+    desc: t('clientsDesc'),
     children: active.length === 0
       ? React.createElement('p', { 'data-testid': 'clients-empty', className: 'rh-muted', style: { margin: 0 } },
-        '还没有受信客户端。信任本浏览器后即可免重复 2FA 访问 Hub。')
+        t('clientsEmpty'))
       : React.createElement('div', null,
         visibleClients.map(client => renderClientRow(client, state, actions)),
-        // 超过预览条数时才出现这一行：展开后按钮变成「收起」，不是消失。
         active.length > CLIENTS_PREVIEW
           ? React.createElement('div', { className: 'rh-list-more' },
             React.createElement('span', { className: 'rh-muted' },
               showAllClients
-                ? `共 ${active.length} 台，已全部显示`
-                : `还有 ${active.length - visibleClients.length} 台未显示`),
+                ? t('clientsCountAll', { count: String(active.length) })
+                : t('clientsCountMore', { count: String(active.length - visibleClients.length) })),
             React.createElement(Button, {
               'data-testid': 'clients-show-all',
               variant: 'ghost',
               size: 'small',
-              children: showAllClients ? '收起' : '显示全部',
+              children: showAllClients ? t('collapse') : t('expandAll'),
               onClick: () => actions.onToggleSection?.(CLIENTS_SHOW_ALL_KEY),
             }))
           : null),
@@ -1309,12 +1312,12 @@ export function renderAccountPage(
     collapsible: true,
     expanded: (state.expanded ?? {})['peer-accounts'] === true,
     onToggle: () => actions.onToggleSection?.('peer-accounts'),
-    summary: (state.peers ?? []).length + ' 个',
-    title: `对端账号（${state.peers.length}）`,
-    desc: '本机作为控制端，在其它设备上建立过的信任。用的是对端的账号；与本机账号互不影响。',
+    summary: `${(state.peers ?? []).length}`,
+    title: t('peersTitle', { count: String(state.peers.length) }),
+    desc: t('peersDesc'),
     children: state.peers.length === 0
       ? React.createElement('p', { 'data-testid': 'peers-empty', className: 'rh-muted', style: { margin: 0 } },
-        '还没有对端账号。在「云端设备 → 连接其他设备」里用对端账号登录并信任本机会出现在这里。')
+        t('peersEmpty'))
       : React.createElement('div', null,
         visiblePeers.map(peer => React.createElement('div', {
           key: peer.id,
@@ -1329,30 +1332,29 @@ export function renderAccountPage(
           React.createElement('code', { className: 'rh-inline-code' }, peer.origin),
           ' · ',
           peer.lastConnectedAt === undefined
-            ? '从未连接'
-            : `最近连接 ${formatRelative(peer.lastConnectedAt, Date.now())}`),
+            ? t('peerNeverConnected')
+            : `${t('peerLastConnected')} ${formatRelative(peer.lastConnectedAt, Date.now())}`),
         React.createElement('div', { className: 'rh-item-actions' },
           React.createElement(Button, {
             'data-testid': 'forget-peer',
             variant: 'danger',
             size: 'small',
             disabled: state.busy,
-            title: `移除对端信任 ${peer.label ?? peer.origin}`,
-            children: '移除信任',
+            title: t('peerForgetTitle', { label: peer.label ?? peer.origin }),
+            children: t('peerForget'),
             onClick: () => actions.onForgetPeer(peer.id),
           })))),
-        // 超过预览条数时才出现这一行：展开后按钮变成「收起」。
         sortedPeers.length > CLIENTS_PREVIEW
           ? React.createElement('div', { className: 'rh-list-more' },
             React.createElement('span', { className: 'rh-muted' },
               showAllPeers
-                ? `共 ${sortedPeers.length} 个，已全部显示`
-                : `还有 ${sortedPeers.length - visiblePeers.length} 个未显示`),
+                ? t('peersCountAll', { count: String(sortedPeers.length) })
+                : t('peersCountMore', { count: String(sortedPeers.length - visiblePeers.length) })),
             React.createElement(Button, {
               'data-testid': 'peers-show-all',
               variant: 'ghost',
               size: 'small',
-              children: showAllPeers ? '收起' : '显示全部',
+              children: showAllPeers ? t('collapse') : t('expandAll'),
               onClick: () => actions.onToggleSection?.(PEERS_SHOW_ALL_KEY),
             }))
           : null),
@@ -1369,53 +1371,52 @@ export function renderAccountPage(
     collapsible: true,
     expanded: (state.expanded ?? {})['sub-accounts'] === true,
     onToggle: () => actions.onToggleSection?.('sub-accounts'),
-    summary: (sub?.accounts ?? []).length + ' 个',
-      title: `子账号（${sub.accounts?.length ?? 0}）`,
-      desc: '子账号可以被授予访问本机的权限；管理员可随时禁用或删除。',
+    summary: `${(sub?.accounts ?? []).length}`,
+      title: t('subTitle', { count: String(sub.accounts?.length ?? 0) }),
+      desc: t('subDesc'),
       actions: React.createElement(Button, {
         'data-testid': 'sub-account-create-open',
         variant: 'primary',
         size: 'small',
         disabled: sub.creating || state.busy,
-        children: '+ 新建子账号',
+        children: t('subCreateOpen'),
         onClick: () => actions.onSubCreateOpen?.(true),
       }),
       children: React.createElement(React.Fragment, null,
         sub.error === null ? null : React.createElement(Notice, { 'data-testid': 'sub-account-error', tone: 'error' }, sub.error),
-        // 新建表单（内联展开）
         sub.creating
           ? React.createElement('div', { className: 'rh-inline-panel' },
-            React.createElement('div', { className: 'rh-cfg-title' }, '新建子账号'),
+            React.createElement('div', { className: 'rh-cfg-title' }, t('subCreateTitle')),
             React.createElement('div', { className: 'rh-row' },
               React.createElement(Field, {
-                label: '用户名',
+                label: t('subUsernameLabel'),
                 children: React.createElement(Input, {
                   'data-testid': 'sub-account-username',
-                  ariaLabel: '子账号用户名',
+                  ariaLabel: t('subUsernameAriaLabel'),
                   autoComplete: 'off',
-                  placeholder: '例如 ops-admin',
+                  placeholder: t('subUsernamePlaceholder'),
                   value: sub.draft.username,
                   onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
                     actions.onSubDraftChange?.('username', event.currentTarget.value),
                 }),
               }),
               React.createElement(Field, {
-                label: '口令（留空 = 生成一次性口令）',
+                label: t('subPasswordLabel'),
                 children: React.createElement(PasswordInput, {
                   'data-testid': 'sub-account-password-input',
-                  ariaLabel: '子账号初始口令',
+                  ariaLabel: t('subPasswordAriaLabel'),
                   autoComplete: 'new-password',
-                  placeholder: '可留空',
+                  placeholder: t('subPasswordPlaceholder'),
                   value: sub.draft.password,
                   onChange: (event: React.ChangeEvent<HTMLInputElement>) =>
                     actions.onSubDraftChange?.('password', event.currentTarget.value),
                 }),
               })),
             React.createElement(Field, {
-              label: '权限上限',
+              label: t('subCeilingLabel'),
               children: React.createElement(Segmented, {
                 'data-testid': 'sub-account-ceiling',
-                ariaLabel: '子账号权限上限',
+                ariaLabel: t('subCeilingAriaLabel'),
                 value: sub.draft.roleCeiling,
                 options: ROLE_OPTIONS.map(option => ({ value: option.value, label: option.label })),
                 onChange: value => actions.onSubDraftChange?.('roleCeiling', value),
@@ -1427,36 +1428,34 @@ export function renderAccountPage(
                 variant: 'primary',
                 loading: state.busy,
                 disabled: sub.draft.username.trim() === '',
-                children: state.busy ? '创建中…' : '创建子账号',
+                children: state.busy ? t('subCreateSubmitting') : t('subCreateSubmit'),
                 onClick: () => actions.onSubCreate?.(),
               }),
               React.createElement(Button, {
                 variant: 'ghost',
-                children: '取消',
+                children: t('cancel'),
                 onClick: () => actions.onSubCreateOpen?.(false),
               })))
           : null,
-        // 创建成功：一次性口令只显示一次
         sub.created === null
           ? null
           : React.createElement('div', { className: 'rh-inline-panel' },
-            React.createElement(Notice, { tone: 'success' }, `✓ 已创建 ${sub.created.username}`),
+            React.createElement(Notice, { tone: 'success' }, t('subCreatedSuccess', { username: sub.created.username })),
             sub.created.initialPassword === null
               ? null
               : React.createElement(React.Fragment, null,
-                React.createElement('div', { className: 'rh-k' }, '一次性口令'),
+                React.createElement('div', { className: 'rh-k' }, t('subCreatedOtpLabel')),
                 React.createElement(CodeBox, { 'data-testid': 'sub-account-password' }, sub.created.initialPassword)),
-            React.createElement('p', { className: 'rh-k' }, '只显示这一次，首次登录必须修改。'),
+            React.createElement('p', { className: 'rh-k' }, t('subCreatedOtpNote')),
             React.createElement(Button, {
               size: 'small',
-              children: '我已保存',
+              children: t('saved'),
               onClick: () => actions.onSubCreatedDismiss?.(),
             })),
-        // 列表
         sub.accounts === null
-          ? React.createElement('p', { className: 'rh-muted' }, '正在读取子账号…')
+          ? React.createElement('p', { className: 'rh-muted' }, t('subLoading'))
           : sub.accounts.length === 0
-            ? React.createElement('p', { className: 'rh-muted', style: { margin: 0 } }, '还没有子账号。')
+            ? React.createElement('p', { className: 'rh-muted', style: { margin: 0 } }, t('subEmpty'))
             : React.createElement('div', null, sub.accounts.map(account => renderSubAccountRow(account, state, actions, sub)))),
     })
 

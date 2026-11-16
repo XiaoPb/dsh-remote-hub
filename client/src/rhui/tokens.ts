@@ -25,7 +25,7 @@ const LIGHT_TOKENS = `  /* ── 表面 ─────────────
   /* ── 文字 ─────────────────────────────────────────── */
   --rh-text: var(--dsw-alias-text-primary, #111418);
   --rh-text-2: var(--dsw-alias-text-secondary, #6B7280);
-  --rh-text-3: var(--dsw-alias-text-tertiary, #9CA3AF);
+  --rh-text-3: var(--dsw-alias-text-tertiary, #6B7280); /* 从 #9CA3AF 调深，确保 4.5:1 对比度 */
   /* ── 选中态（跟随宿主：分段控件 / 标签的选中底）──────
    * 默认走宿主的 layer-3 / hover 颜色，不用纯黑；只有宿主完全没提供时才回退到
    * 浅灰底。--rh-accent 是「选中底」，强调按钮等需要深底的地方用 --rh-strong。 */
@@ -60,7 +60,7 @@ const DARK_TOKENS = `  --rh-bg: #17191d;
   --rh-border-strong: #3a4048;
   --rh-text: #eceef1;
   --rh-text-2: #a3aab4;
-  --rh-text-3: #6d747e;
+  --rh-text-3: #9CA3AF; /* 从 #6d747e 调亮，确保暗色模式 4.5:1 对比度 */
   --rh-accent: var(--dsw-alias-bg-layer-3, #2c3037);
   --rh-accent-fg: var(--dsw-alias-text-primary, #eceef1);
   --rh-accent-hover: var(--dsw-alias-bg-layer-hover, #343941);
@@ -300,7 +300,7 @@ ${DARK_TOKENS}
 .rh-field-error { font-size: var(--rh-fs-label); color: var(--rh-red); }
 .rh-input, .rh-textarea, .rh-select {
   width: 100%; min-width: 0; box-sizing: border-box;
-  font-family: inherit; font-size: var(--rh-fs-body); color: var(--rh-text);
+  font-family: inherit; font-size: max(16px, var(--rh-fs-body)); color: var(--rh-text);
   background: var(--rh-surface); border: 1px solid var(--rh-border-strong);
   border-radius: var(--rh-radius-sm); padding: 8px 12px;
 }
@@ -695,10 +695,116 @@ ${DARK_TOKENS}
   .rh-logrow { grid-template-columns: 68px minmax(0, 1fr); }
   .rh-logdetail { grid-column: 1 / -1; }
 }
+/* 320px 窄屏支持 (iPhone SE 等) */
+@media (max-width: 359px) {
+  /* 容器收紧内边距 */
+  .rh-root.rh-scroll,
+  .rh-root.rh-settings {
+    padding: 16px 12px 40px;
+  }
+  
+  .rh-card {
+    padding: 12px;
+    margin-bottom: 12px;
+  }
+  
+  /* 按钮强制换行 */
+  .rh-btn {
+    min-height: 40px;
+    height: auto;
+    white-space: normal;
+    padding: 8px 12px;
+  }
+  
+  .rh-btn.is-small {
+    min-height: 34px;
+    padding: 6px 10px;
+  }
+  
+  /* 双列下拉框改为单列 */
+  .rh-select-pair {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  
+  /* 二维码缩小 */
+  .rh-qr {
+    max-width: 160px;
+  }
+  
+  /* 日志改为单列 */
+  .rh-logrow {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  
+  .rh-logtime,
+  .rh-loglevel,
+  .rh-logtitle {
+    display: inline;
+  }
+  
+  /* 热力图进一步收紧 */
+  .rh-heat {
+    grid-template-columns: repeat(12, 1fr);
+  }
+  
+  /* 统计卡片改为单列 */
+  .rh-statgrid {
+    grid-template-columns: 1fr;
+  }
+  
+  /* 设备卡片网格改为单列 */
+  .rh-devgrid {
+    grid-template-columns: 1fr;
+  }
+}
+/* Screen reader only (visually hidden) */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* Theme switch transition suppression */
+.no-transition,
+.no-transition *,
+.no-transition *::before,
+.no-transition *::after {
+  transition: none !important;
+  animation-duration: 0s !important;
+}
+
 @media (hover: none) {
   .rh-btn { touch-action: manipulation; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .rh-btn, .rh-switch, .rh-switch::after, .rh-skeleton, .rh-spinner { transition: none; animation: none; }
+  .rh-btn,
+  .rh-switch,
+  .rh-switch::after,
+  .rh-skeleton,
+  .rh-spinner,
+  .rh-collapse,
+  .rh-notice,
+  .rh-section-toggle,
+  .rh-caret,
+  .rh-qr,
+  .rh-seg-btn,
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+  
+  /* 禁用平滑滚动 */
+  html,
+  .rh-root {
+    scroll-behavior: auto !important;
+  }
 }
 `

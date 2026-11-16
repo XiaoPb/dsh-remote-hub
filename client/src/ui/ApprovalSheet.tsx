@@ -8,6 +8,7 @@
  * @module dsh-remote-hub/client/ui/ApprovalSheet
  */
 import React, { useEffect, useState } from 'react'
+import { t } from '../rhui/i18n.js'
 
 /** 一条审批请求（与 `host/src/approval-bridge.ts` 的 `ApprovalFrame` 同形）。 */
 export interface ApprovalCardProps {
@@ -64,7 +65,7 @@ export function ApprovalSheet(props: ApprovalCardProps): React.ReactNode {
     // 完整原始参数：原样 JSON，不摘要。
     React.createElement('pre', { 'data-testid': 'approval-args' }, JSON.stringify(props.args, null, 2)),
     React.createElement('div', { 'data-testid': 'approval-countdown' },
-      expired ? '已过期' : `剩余 ${Math.ceil(remaining / 1000)}s`),
+      expired ? t('approvalExpired') : t('approvalRemaining', { seconds: String(Math.ceil(remaining / 1000)) })),
     expired || answered
       ? null
       : React.createElement('div', { 'data-testid': 'approval-actions' },
@@ -77,7 +78,7 @@ export function ApprovalSheet(props: ApprovalCardProps): React.ReactNode {
               setAnswered(true)
               props.onAnswer(outcome)
             },
-          }, outcome === 'allowed-once' ? '允许一次' : '拒绝'),
+          }, outcome === 'allowed-once' ? t('approvalAllow') : t('approvalDeny')),
         ),
       ),
   )

@@ -11,6 +11,7 @@ import React from 'react'
 
 import { Button, Notice, ThemeStyle } from '../rhui/index.js'
 import { RH_CSS } from '../rhui/tokens.js'
+import { t } from '../rhui/i18n.js'
 
 /**
  * 确认框。
@@ -51,11 +52,11 @@ export function DeviceDeleteDialog(props: { message: string; onConfirm(): void; 
     id: 'rh-delete-title',
     className: 'rh-section-title',
     style: { margin: '0 0 12px' },
-  }, '删除设备 / Delete device'),
+  }, t('deleteDeviceTitle')),
   React.createElement('div', { id: 'rh-delete-description' },
     React.createElement(Notice, { tone: 'warning' },
       React.createElement('span', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' } }, props.message))),
   React.createElement('footer', { className: 'rh-row', style: { justifyContent: 'flex-end', marginTop: 20 } },
-    React.createElement(Button, { ref: cancel, variant: 'ghost', onClick: props.onCancel }, '取消 / Cancel'),
-    React.createElement(Button, { 'data-testid': 'device-delete-confirm', variant: 'danger', onClick: props.onConfirm }, '确认删除 / Delete'))))
+    React.createElement(Button, { ref: cancel, variant: 'ghost', onClick: props.onCancel }, t('deleteDeviceCancel')),
+    React.createElement(Button, { 'data-testid': 'device-delete-confirm', variant: 'danger', onClick: props.onConfirm }, t('deleteDeviceConfirm')))))
 }

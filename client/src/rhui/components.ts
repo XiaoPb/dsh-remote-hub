@@ -521,8 +521,14 @@ export interface SegmentedProps<T extends string> extends Testable {
 /**
  * 分段选择（角色 / 口令策略 / 网络模式）。
  *
- * 每个选项渲染成 `<button role="button" aria-pressed>`，保留按钮级 testid 与
- * `data-selected`（现有测试按 `data-testid="policy-strong" data-selected="true"` 断言）。
+ * 每个选项渲染成 `<button role="tab">`，支持方向键导航（ARIA Tabs Pattern）。
+ * 保留按钮级 testid 与 `data-selected`（现有测试按 `data-testid="policy-strong" data-selected="true"` 断言）。
+ *
+ * 键盘导航：
+ * - Tab 进入后，方向键（Left/Right/Up/Down）在选项间移动
+ * - Home/End 跳到首尾
+ * - 选中项 tabindex="0"，其余 tabindex="-1"（roving tabindex）
+ *
  * @param props - 分段控件属性。
  * @returns 节点。
  */
@@ -534,10 +540,51 @@ export function Segmented<T extends string>({
   onChange,
   ...rest
 }: SegmentedProps<T>): React.ReactElement {
+  const handleKeyDown = (event: React.KeyboardEvent, currentIndex: number): void => {
+    let nextIndex = currentIndex
+
+    switch (event.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+        event.preventDefault()
+        nextIndex = (currentIndex + 1) % options.length
+        break
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        event.preventDefault()
+        nextIndex = (currentIndex - 1 + options.length) % options.length
+        break
+      case 'Home':
+        event.preventDefault()
+        nextIndex = 0
+        break
+      case 'End':
+        event.preventDefault()
+        nextIndex = options.length - 1
+        break
+      default:
+        return
+    }
+
+    // 跳过禁用选项
+    let attempts = 0
+    while (options[nextIndex]?.disabled === true && attempts < options.length) {
+      nextIndex = (nextIndex + 1) % options.length
+      attempts++
+    }
+
+    if (options[nextIndex]?.disabled !== true) {
+      onChange(options[nextIndex].value)
+      // 聚焦到新选中的按钮
+      const target = event.currentTarget.parentElement?.children[nextIndex] as HTMLElement | undefined
+      target?.focus()
+    }
+  }
+
   return React.createElement('div', {
     ...rest,
     className: 'rh-seg',
-    role: 'group',
+    role: 'tablist',
     ...(ariaLabel === undefined ? {} : { 'aria-label': ariaLabel }),
   }, options.map((option, index) => {
     const active = option.value === value
@@ -547,14 +594,18 @@ export function Segmented<T extends string>({
       key: option.value ?? index,
       type: 'button',
       className: 'rh-seg-btn',
+      role: 'tab',
       // 顺序有意固定：测试按 `data-testid="policy-strong" data-selected="true"` 的
       // 相邻顺序断言选中态，改顺序会破坏既有契约。
       ...(option.testId === undefined ? {} : { 'data-testid': option.testId }),
       'data-selected': active ? 'true' : 'false',
       ...(option.value === undefined ? {} : { 'data-value': option.value }),
+      'aria-selected': active ? 'true' : 'false',
       'aria-pressed': active ? 'true' : 'false',
+      tabIndex: active ? 0 : -1,
       disabled: disabled || option.disabled === true,
       onClick: () => { onChange(option.value) },
+      onKeyDown: (e) => { handleKeyDown(e, index) },
     }, option.label)
   }))
 }

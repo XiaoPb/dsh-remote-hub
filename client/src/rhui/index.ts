@@ -6,7 +6,10 @@
  *
  * @module dsh-remote-hub/client/rhui
  */
-export { RH_CSS, RH_TOKEN_CSS } from './tokens.js'
+export {
+  RH_CSS, RH_TOKEN_CSS
+} from './tokens.js'
+export { t, detectLocale, getLocale, setLocale, type Locale, type LocaleKey } from './i18n.js'
 export { QrCode, type QrCodeProps } from './qr-code.js'
 export {
   Button,
