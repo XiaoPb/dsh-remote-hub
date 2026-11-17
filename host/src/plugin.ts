@@ -734,11 +734,19 @@ function assembleRemoteHub(
           pairQrTtlMs: config.pairQrTtlMs,
           pairCodeTtlMs: config.pairCodeTtlMs,
           tunnelKind: config.tunnel.kind,
+          // 当前**运行中**的生效值（守卫启动时读到的），用于区分「配置中 / 待重启」。
+          publicAuthoritiesApplied: [...config.publicAuthorities],
         }),
       })
       const cold = await runtimeConfig.overrides()
       if (typeof cold.guardPort === 'number') config.guardPort = cold.guardPort
       if (cold.network === 'lan' || cold.network === 'loopback') config.network = cold.network
+      // 页面上「信任的公网地址」写入的覆盖值优先于 cordis.patch.yml 里的同名字段
+      // （方案 A：页面写入即权威）。围栏在下面装配时读取 config.publicAuthorities。
+      if (Array.isArray(cold.publicAuthorities)) {
+        config.publicAuthorities = cold.publicAuthorities as string[]
+        audit('public-authorities-source', { source: 'overrides', count: config.publicAuthorities.length })
+      }
 
       // 0.1 端口解析：首选配置端口，被占就顺延 +1 直到可用（用户可再改回固定端口）。
       //    隧道与配对链接都用 guard.origin（**实际**端口），所以漂移不会指错。

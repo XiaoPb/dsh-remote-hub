@@ -6,8 +6,7 @@
 
 export const zhCN = {
   // ── 通用 ──────────────────────────────────────────────────────
-  retry: '重试',
-  cancel: '取消',
+  retry: '重试',  cancel: '取消',
   confirm: '确认',
   save: '保存',
   refresh: '刷新',
@@ -19,13 +18,20 @@ export const zhCN = {
   saved: '我已保存',
   close: '关闭',
 
+  // ── 侧栏 / 设置页导航（宿主槽位标签）──────────────────────────
+  navRemoteHub: '云端设备',
+  navAccountSettings: '身份与访问',
+
   // ── 页头 ──────────────────────────────────────────────────────
-  pageTitle: '登录与账号',
-  pageHint: '账号、两步验证与设备信任',
-  pageLead: '管理本机的登录、安全策略与设备信任；之后每个请求都由本客户端的私钥签名，7 天租约自动轮换。',
+  pageTitle: '身份与访问',
+  pageHint: '账号、验证方式与访问来源',
+  pageLead: '管理这台机器的身份与访问：谁能进来、怎么证明是本人、从哪里能进来。之后每个请求都由本客户端的私钥签名，7 天租约自动轮换。',
   loadingAccount: '正在加载账号信息',
   loadingAccountSr: '正在加载账号信息，请稍候...',
   serviceUnavailable: '认证服务不可用',
+  // ── 口令可见性（眼睛按钮的非视觉名称）──────────────────────────
+  showPassword: '显示口令',
+  hidePassword: '隐藏口令',
 
   // ── 步骤条 ────────────────────────────────────────────────────
   stepCredentials: '账号口令',
@@ -132,6 +138,33 @@ export const zhCN = {
 
   // ── 口令策略区块 (D) ──────────────────────────────────────────
   policyTitle: '口令管理',
+  // ── 信任的公网地址（publicAuthorities）───────────────────────
+  accessTitle: '信任的公网地址',
+  accessDesc: '通过域名访问这台机器时，需要在这里声明该域名，否则请求会被拒绝（403）。',
+  accessEmptyTitle: '还没有配置公网地址',
+  accessEmptyDesc: '目前只能从本机（127.0.0.1）访问。如果你通过隧道或域名访问，请在上方添加该域名。',
+  accessAddLabel: '添加地址',
+  accessAddHint: '只填主机名，不要带 http:// 或路径，例如 dsh.example.com',
+  accessAddPlaceholder: '例如 dsh.example.com',
+  accessAddBtn: '添加',
+  accessRemove: '移除',
+  accessRemoveLabel: '移除 {host}',
+  accessPillActive: '配置中',
+  accessPillPending: '待重启',
+  accessSavedNotice: '已保存。需要重启 DSH 后生效。',
+  accessNoRestart: '当前没有待重启的修改。',
+  accessErrEmpty: '请输入地址',
+  accessErrScheme: '不要带 http:// 或 https://，只填主机名',
+  accessErrPath: '不要带路径',
+  accessErrWildcard: '不支持通配符，请逐个添加',
+  accessErrLoopback: '本机地址默认已放行，无需添加',
+  accessErrPrivate: '局域网地址默认已放行，无需添加',
+  accessErrDuplicate: '这个地址已经添加过了',
+  hostCheckTitle: '请求来源检查',
+  hostCheckDomain: '当前访问域名',
+  hostCheckAllowed: '已放行',
+  hostCheckBlocked: '未放行',
+  hostCheckLoopback: '本机访问，无需配置',
   policyDesc: '口令策略切换后立即生效：之后设置/修改口令都按新规则校验（已有口令不受影响）。',
   policyStrong: '强',
   policyBasic: '标准',

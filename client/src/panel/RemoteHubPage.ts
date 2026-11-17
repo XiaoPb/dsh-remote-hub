@@ -380,17 +380,36 @@ const STRINGS = {
   revokedShort: '已撤销',
   neverShort: '从未连接',
   notConnectedShort: '未连接',
-  devicesEmptyTitle: '暂无可信客户端',
+  devicesEmptyTitle: '暂无已配对设备',
   // ② 设备区
-  devicesZoneTitle: '已连接设备',
+  //
+  // 云端设备页的定位（2026-11-17 按反馈重构）：
+  //   **本机作为主控端，去连接别的设备**。
+  //   - 上半部分：连接表单（地址 / 账号 / 口令 / 动态码 放在同一张卡的开头）
+  //   - 下半部分：已配对的设备列表（点一下就能直连）
+  // 「谁连进了本机」（可信客户端 / 被控端）属于**设置页**的职责，
+  // 这里不再重复展示，只在被控端卡里保留一句入口指引。
+  devicesZoneTitle: '已配对的设备',
   filterAll: '全部',
   filterInbound: '连接本机',
   filterOutbound: '本机连接',
   groupInbound: '可信客户端（在线 / 离线）',
   groupInboundHint: '已信任的客户端。权限上限与撤销在「设置 → 登录与账号」管理',
   manageInSettings: '权限与撤销：设置 → 登录与账号',
-  groupOutbound: '本机连接的设备',
-  groupOutboundHint: '本机作为主控端主动连接',
+  groupOutbound: '已配对的设备',
+  groupOutboundHint: '本机作为主控端连接过、已信任公钥的设备，点「连接」即可直接进入',
+  connectFormTitle: '连接新设备',
+  connectFormDesc: '填写对端 DSH 的地址与账号。首次连接需要账号口令（对方要求时再填动态码），之后本机公钥会被记住。',
+  originLabel: '目标地址',
+  // hint 与 placeholder 不能重复说同一件事，否则表单看起来像复读。
+  originHint: '对端 DSH 守卫地址，含 IP 与端口',
+  accountUserLabel: '用户名',
+  accountPasswordLabel: '口令',
+  accountCodeLabel: '动态码',
+  accountCodeHint: '对方要求两步验证时填写；已信任的设备可留空',
+  accountRoleLabel: '申请角色',
+  connectAction: '连接并信任本机',
+  connectingAction: '连接中…',
   statusOnline: '在线',
   statusIdle: '空闲',
   statusOffline: '离线',
@@ -612,7 +631,9 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
         dot: true,
         children: guardUp ? STRINGS.guardUp : STRINGS.guardDown,
       })),
-    desc: STRINGS.hostSub,
+    // 被控端只保留**本机接入信息**（守卫地址/协议/单控 + 给其他设备填写的地址）。
+    // 「哪些设备连进了本机」放在设置页「登录与账号」里管理，这里不重复列。
+    desc: `${STRINGS.hostSub}已信任的接入设备在「设置 → 登录与账号」里管理。`,
     actions: React.createElement(React.Fragment, null,
       React.createElement(Button, {
         'data-testid': 'refresh',
@@ -668,67 +689,153 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
     ),
   })
 
-  // ── 区块 3：设备区（筛选 + 入站分组 + 出站指向卡）────────────────────────
+  // ── 区块 3b：已配对的设备列表（本机主动连接过的目标）──────────────────────
+  const pairedTargets = state.outboundTargets ?? []
   const devicesCard = React.createElement(Section, {
     'data-testid': 'devices-section',
     title: React.createElement(React.Fragment, null,
       STRINGS.devicesZoneTitle,
-      React.createElement(Pill, { tone: 'neutral', children: `${activeDevices.length} 台` })),
-    actions: React.createElement(Segmented, {
-      'data-testid': 'device-filter',
-      ariaLabel: '设备筛选',
-      value: state.deviceFilter,
-      options: [
-        { value: 'all', label: STRINGS.filterAll, testId: 'filter' },
-        { value: 'inbound', label: STRINGS.filterInbound, testId: 'filter' },
-      ],
-      onChange: value => actions.onFilterChange(value as 'all' | 'inbound'),
-    }),
+      React.createElement(Pill, { tone: 'neutral', children: `${pairedTargets.length} 台` })),
+    desc: STRINGS.groupOutboundHint,
     children: React.createElement(React.Fragment, null,
-      state.deviceFilter === 'all' || state.deviceFilter === 'inbound'
-        ? React.createElement('div', { className: 'rh-section' },
-          React.createElement('div', { className: 'rh-section-head' },
-            React.createElement('span', { className: 'rh-cfg-title' }, STRINGS.groupInbound),
-            React.createElement('span', { className: 'rh-cfg-desc' }, STRINGS.groupInboundHint)),
-          state.devices.length === 0
-            ? React.createElement(EmptyState, {
-              'data-testid': 'devices-empty',
-              icon: '📭',
-              title: state.loading ? STRINGS.devicesEmptyLoading : STRINGS.devicesEmptyTitle,
-              desc: STRINGS.devicesEmpty,
-            })
-            : React.createElement('div', { className: 'rh-devgrid', 'data-testid': 'remote-hub-devices' },
-              state.devices.map(device => renderDeviceCard(state, actions, device))))
-        : null,
-      state.deviceFilter === 'all'
-        ? React.createElement('div', { className: 'rh-section' },
-          React.createElement('div', { className: 'rh-section-head' },
-            React.createElement('span', { className: 'rh-cfg-title' }, STRINGS.groupOutbound),
-            React.createElement('span', { className: 'rh-cfg-desc' }, STRINGS.groupOutboundHint),
-            React.createElement(Button, {
-              'data-testid': 'connect-entry',
-              variant: 'primary',
-              size: 'small',
-              style: { marginLeft: 'auto' },
-              children: `+ ${STRINGS.filterOutbound}`,
-              onClick: () => {
-                const target = document?.querySelector('[data-testid="client-section"]')
-                target?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
-              },
-            })),
-          (state.outboundTargets ?? []).length === 0
-            ? React.createElement('div', { className: 'rh-dev', 'data-testid': 'outbound-none' },
-              React.createElement('div', { className: 'rh-dev-top' },
-                React.createElement('div', { className: 'rh-dev-ico' }, '🔗'),
-                React.createElement('div', { className: 'rh-dev-meta' },
-                  React.createElement('div', { className: 'rh-dev-nm' }, STRINGS.notConnected),
-                  React.createElement('div', { className: 'rh-dev-sub' }, STRINGS.clientSub))))
-            : React.createElement('p', { className: 'rh-cfg-desc' },
-              `已保存 ${(state.outboundTargets ?? []).length} 个目标，在「${STRINGS.clientTitle}」里选择连接。`))
-        : null),
+      // 已连接但列表里还没有目标（刚连上、服务端尚未返回）时，也要画出「当前连接」卡，
+      // 否则用户会看到「0 台 + 空态」，误以为根本没连上。
+      pairedTargets.length === 0 && !isCloud
+        ? React.createElement(EmptyState, {
+          'data-testid': 'outbound-none',
+          icon: '🔗',
+          title: state.loading ? STRINGS.refreshing : STRINGS.notConnected,
+          desc: '在上方「连接新设备」里填写对端地址与账号，成功后这里会出现可直接重连的设备。',
+        })
+        : renderPairedDevices(state, actions)),
   })
 
-  // ── 区块 4：统计区 ────────────────────────────────────────────────────────
+  // ── 区块 4：连接新设备（**表单集中在一张卡的开头**）──────────────────────
+  //
+  // 为什么合并：原先「目标地址」在 clientCard、「账号/口令/动态码」在同一张卡的下半段、
+  // 「已保存的目标」还夹在两者之间，用户要滚过两屏才能填完一次连接。
+  // 现在按「地址 → 账号 → 口令 → 动态码 → 角色 → 提交」一条纵向流程排列。
+  //
+  // 已连接时这张卡退化成「当前连接 + 断开」，不再展示表单（不需要再连）。
+  const accountDraft = state.accountDraft ?? { username: '', password: '', code: '', role: 'control' as RoleName }
+  const connectCard = React.createElement(Section, {
+    'data-testid': 'client-section',
+    title: React.createElement(React.Fragment, null,
+      isCloud ? STRINGS.clientTitle : STRINGS.connectFormTitle,
+      React.createElement(Pill, {
+        tone: isCloud ? 'online' : 'offline',
+        dot: true,
+        children: isCloud ? STRINGS.connected : STRINGS.notConnectedShort,
+      })),
+    desc: isCloud
+      ? '当前数据面已切换到该设备：侧栏、会话、插件都读取那台机器的数据。'
+      : STRINGS.connectFormDesc,
+    children: React.createElement(React.Fragment, null,
+      isCloud
+        ? React.createElement('div', { className: 'rh-row', 'data-testid': 'connected-to' },
+          React.createElement(Button, {
+            'data-testid': 'detach',
+            size: 'small',
+            variant: 'danger',
+            children: STRINGS.detach,
+            onClick: () => actions.onDetach(),
+          }))
+        : React.createElement(React.Fragment, null,
+          // 1) 目标地址
+          React.createElement(Field, {
+            label: STRINGS.originLabel,
+            hint: STRINGS.originHint,
+            children: React.createElement(Input, {
+              'data-testid': 'origin-input',
+              ariaLabel: '目标设备地址',
+              type: 'url',
+              inputMode: 'url',
+              autoComplete: 'url',
+              placeholder: STRINGS.originPlaceholder,
+              value: state.originDraft,
+              onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onOriginChange(event.currentTarget.value),
+            }),
+          }),
+          state.originDraft.trim() !== '' && normalizeOrigin(state.originDraft) === undefined
+            ? React.createElement(Notice, { 'data-testid': 'origin-invalid', tone: 'error' }, STRINGS.originInvalid)
+            : null,
+
+          // 2) 账号 / 口令（并排）
+          React.createElement('div', { className: 'rh-row' },
+            React.createElement(Field, {
+              label: STRINGS.accountUserLabel,
+              children: React.createElement(Input, {
+                'data-testid': 'account-user',
+                ariaLabel: '对端账号',
+                autoComplete: 'username',
+                placeholder: '对端账号',
+                value: accountDraft.username,
+                onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('username', event.currentTarget.value),
+              }),
+            }),
+            React.createElement(Field, {
+              label: STRINGS.accountPasswordLabel,
+              children: React.createElement(PasswordInput, {
+                'data-testid': 'account-password',
+                ariaLabel: '对端口令',
+                autoComplete: 'current-password',
+                placeholder: '对端口令',
+                value: accountDraft.password,
+                onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('password', event.currentTarget.value),
+              }),
+            })),
+
+          // 3) 动态码 / 角色（并排）
+          React.createElement('div', { className: 'rh-row' },
+            React.createElement(Field, {
+              label: STRINGS.accountCodeLabel,
+              hint: STRINGS.accountCodeHint,
+              children: React.createElement(Input, {
+                'data-testid': 'account-code',
+                ariaLabel: '两步验证码',
+                inputMode: 'numeric',
+                autoComplete: 'one-time-code',
+                placeholder: '6 位验证码（可选）',
+                value: accountDraft.code,
+                onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('code', event.currentTarget.value),
+              }),
+            }),
+            React.createElement(Field, {
+              label: STRINGS.accountRoleLabel,
+              children: React.createElement(Select, {
+                'data-testid': 'account-role',
+                ariaLabel: STRINGS.accountRoleLabel,
+                value: accountDraft.role,
+                options: ROLES.map(role => ({ value: role, label: ROLE_LABEL[role] })),
+                onChange: (event: React.ChangeEvent<HTMLSelectElement>) =>
+                  actions.onAccountChange('role', event.currentTarget.value),
+              }),
+            })),
+
+          // 4) 提交
+          React.createElement('div', { className: 'rh-row' },
+            React.createElement(Button, {
+              'data-testid': 'account-connect',
+              variant: 'primary',
+              disabled: state.busy !== null
+                || normalizeOrigin(state.originDraft) === undefined
+                || accountDraft.username.trim() === ''
+                || accountDraft.password === '',
+              loading: state.busy === 'account',
+              children: state.busy === 'account' ? STRINGS.connectingAction : STRINGS.connectAction,
+              onClick: () => actions.onAccountConnect(),
+            }),
+            React.createElement(Button, {
+              'data-testid': 'connect',
+              disabled: state.busy !== null,
+              loading: state.busy === 'connect',
+              title: '仅建立传输通道（不登记公钥）',
+              children: state.busy === 'connect' ? STRINGS.connecting : STRINGS.connect,
+              onClick: () => actions.onConnect(),
+            })))),
+  })
+
+  // ── 区块 5：统计区 ────────────────────────────────────────────────────────
   const statsCard = React.createElement(Section, {
     'data-testid': 'stats-section',
     title: STRINGS.statsTitle,
@@ -739,7 +846,7 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
       : renderStatsBody(state),
   })
 
-  // ── 区块 5：配置区 ────────────────────────────────────────────────────────
+  // ── 区块 6：配置区 ────────────────────────────────────────────────────────
   const configCard = React.createElement(Section, {
     'data-testid': 'config-section',
     title: STRINGS.configTitle,
@@ -747,152 +854,6 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
     children: state.config == null
       ? React.createElement('div', { 'data-testid': 'config-unsupported', className: 'rh-empty' }, STRINGS.configUnsupported)
       : renderConfigBody(state, actions),
-  })
-
-  // 账号草稿：旧版调用方可能没有该字段，这里给一个安全的空草稿。
-  const accountDraft = state.accountDraft ?? { username: '', password: '', code: '', role: 'control' as RoleName }
-
-  // 主控端卡片（区块 3 的「连接其他设备」；阶段 B 换成账号登录多步流）
-  // 标题只放名称 + 状态 pill：IP / 已保存目标等**数据**一律进正文，避免挤占标题行。
-  const clientCard = React.createElement(Section, {
-    'data-testid': 'client-section',
-    title: React.createElement(React.Fragment, null,
-      STRINGS.clientTitle,
-      React.createElement(Pill, {
-        tone: isCloud ? 'online' : 'offline',
-        dot: true,
-        children: isCloud ? STRINGS.connected : STRINGS.notConnectedShort,
-      })),
-    desc: STRINGS.clientSub,
-    children: React.createElement(React.Fragment, null,
-      // ── 当前指向（地址/来源进正文，标题行保持干净）─────────────────────────
-      React.createElement('div', {
-        className: 'rh-fact',
-        'data-testid': 'client-target',
-      },
-      React.createElement('span', { className: 'rh-fact-key' }, isCloud ? '已连接' : '当前指向'),
-      React.createElement('span', { className: 'rh-fact-value' },
-        isCloud
-          ? `${state.mode.deviceLabel ?? state.mode.origin ?? STRINGS.modeCloud}`
-          : ''),
-      (state.mode.origin ?? '') === '' || !isCloud
-        ? null
-        : React.createElement('code', { className: 'rh-inline-code' }, state.mode.origin)),
-
-      // ── 已连接时的说明与断开（3D）────────────────────────────────────────
-      isCloud
-        ? React.createElement('div', { className: 'rh-row', 'data-testid': 'connected-to' },
-          React.createElement('span', { className: 'rh-k' },
-            '当前数据面已切换到该设备：侧栏、会话、插件都读取那台机器的数据。'),
-          React.createElement(Button, {
-            'data-testid': 'detach',
-            size: 'small',
-            variant: 'danger',
-            children: STRINGS.detach,
-            onClick: () => actions.onDetach(),
-          }))
-        : React.createElement('p', { className: 'rh-k', 'data-testid': 'not-connected', style: { margin: 0 } }, STRINGS.notConnected),
-
-      // ── 3A 未连接：目标地址 + 连接（已保存目标走 3C 卡片）──────────────────
-      React.createElement(Field, {
-        label: '目标地址',
-        hint: '填写对端 DSH 守卫地址（IP:端口），例如 http://192.168.1.10:8443',
-        children: React.createElement('div', { className: 'rh-row' },
-          React.createElement(Input, {
-            'data-testid': 'origin-input',
-            ariaLabel: '目标设备地址',
-            type: 'url',
-            inputMode: 'url',
-            autoComplete: 'url',
-            placeholder: STRINGS.originPlaceholder,
-            value: state.originDraft,
-            onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onOriginChange(event.currentTarget.value),
-          }),
-          React.createElement(Button, {
-            'data-testid': 'connect',
-            variant: 'primary',
-            disabled: state.busy !== null,
-            loading: state.busy === 'connect',
-            children: state.busy === 'connect' ? STRINGS.connecting : STRINGS.connect,
-            onClick: () => actions.onConnect(),
-          })),
-      }),
-      state.originDraft.trim() !== '' && normalizeOrigin(state.originDraft) === undefined
-        ? React.createElement(Notice, { 'data-testid': 'origin-invalid', tone: 'error' }, STRINGS.originInvalid)
-        : null,
-
-      // ── 已保存目标（3C）：用 keyring 里的绑定直连，无需再输口令 ────────────
-      (state.outboundTargets ?? []).length > 0
-        ? React.createElement('div', { style: { marginTop: 12 } },
-          React.createElement('div', { className: 'rh-k' }, `已保存的目标（${state.outboundTargets.length}）`),
-          renderOutboundCard(state, actions))
-        : null,
-
-      // ── 3B 首次连接：账号登录（MFA 在同一表单内切换，不跳页）───────────────
-      React.createElement('hr', { className: 'rh-divider' }),
-      React.createElement('div', { className: 'rh-row', 'data-testid': 'account-login-hint' },
-        React.createElement('span', { className: 'rh-cfg-title' }, '用目标设备的账号登录'),
-        React.createElement('span', { className: 'rh-k' }, '登录成功后本机公钥会被自动登记，之后重连不再需要 2FA')),
-      React.createElement('div', { className: 'rh-row' },
-        React.createElement(Field, {
-          label: '用户名',
-          children: React.createElement(Input, {
-            'data-testid': 'account-user',
-            ariaLabel: '对端账号',
-            autoComplete: 'username',
-            placeholder: '对端账号',
-            value: accountDraft.username,
-            onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('username', event.currentTarget.value),
-          }),
-        }),
-        React.createElement(Field, {
-          label: '口令',
-          children: React.createElement(PasswordInput, {
-            'data-testid': 'account-password',
-            ariaLabel: '对端口令',
-            autoComplete: 'current-password',
-            placeholder: '对端口令',
-            value: accountDraft.password,
-            onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('password', event.currentTarget.value),
-          }),
-        })),
-      React.createElement('div', { className: 'rh-row' },
-        React.createElement(Field, {
-          label: '动态码（目标要求 2FA 时填写）',
-          children: React.createElement(Input, {
-            'data-testid': 'account-code',
-            ariaLabel: '两步验证码',
-            inputMode: 'numeric',
-            autoComplete: 'one-time-code',
-            placeholder: '6 位验证码（可选）',
-            value: accountDraft.code,
-            onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAccountChange('code', event.currentTarget.value),
-          }),
-        }),
-        React.createElement(Field, {
-          label: '申请的角色',
-          children: React.createElement(Select, {
-            'data-testid': 'account-role',
-            ariaLabel: '申请的角色',
-            value: accountDraft.role,
-            options: ROLES.map(role => ({ value: role, label: ROLE_LABEL[role] })),
-            onChange: (event: React.ChangeEvent<HTMLSelectElement>) =>
-              actions.onAccountChange('role', event.currentTarget.value),
-          }),
-        })),
-      React.createElement('div', { className: 'rh-row' },
-        React.createElement(Button, {
-          'data-testid': 'account-connect',
-          variant: 'primary',
-          disabled: state.busy !== null
-            || normalizeOrigin(state.originDraft) === undefined
-            || accountDraft.username.trim() === ''
-            || accountDraft.password === '',
-          loading: state.busy === 'account',
-          children: state.busy === 'account' ? '登录中…' : '登录并信任本机',
-          onClick: () => actions.onAccountConnect(),
-        })),
-    ),
   })
 
   return React.createElement(
@@ -905,8 +866,9 @@ export function renderRemoteHubPage(state: RemoteHubPageState, actions: RemoteHu
     React.createElement('div', { className: 'rh-shell' },
       pageHead,
       hostCard,
+      // 主控端视图：先「连什么」（表单集中在一张卡的开头），再「连过谁」（已配对列表）
+      connectCard,
       devicesCard,
-      clientCard,
       statsCard,
       configCard,
 
@@ -1150,68 +1112,6 @@ export function isDeviceOnline(device: CloudDeviceRow, now: number): boolean {
   return status === 'connected' || status === 'idle'
 }
 
-/** 单张设备卡（入站）。 */
-function renderDeviceCard(
-  state: RemoteHubPageState,
-  actions: RemoteHubPageActions,
-  device: CloudDeviceRow,
-): React.ReactNode {
-  const status = deviceStatus(device, state.now)
-  const invalid = status === 'invalid'
-  // 三态：已连接 / 已配对 / 配对失效（2026-11-12）。
-  const connected = status === 'connected' || status === 'idle'
-  const statusLabel = status === 'invalid' ? STRINGS.statusInvalid
-    : connected ? STRINGS.statusConnected
-      : STRINGS.statusPaired
-  const pillCls = invalid ? 'off' : connected ? 'on' : 'off'
-  return el('div', `rh-dev${invalid ? ' revoked' : ''}${connected ? '' : ' offline'}`, {
-    key: device.deviceId,
-    'data-device-id': device.deviceId,
-    'data-role': device.role ?? '',
-    'data-revoked': invalid ? 'true' : 'false',
-    'data-status': status,
-    'data-online': connected ? 'true' : 'false',
-  },
-  el('div', 'rh-dev-top', undefined,
-    el('div', 'rh-dev-ico', undefined, invalid ? '🚫' : connected ? '🖥️' : '💤'),
-    el('div', 'rh-dev-meta', undefined,
-      el('div', 'rh-dev-nm', undefined, device.label ?? device.deviceId),
-      el('div', 'rh-dev-sub', undefined, device.deviceId)),
-    el('span', `rh-pill ${pillCls}`, {
-      'data-testid': 'device-status',
-      'data-status': status,
-    }, el('span', 'rh-dot'), statusLabel)),
-  el('div', 'rh-kv', { style: { margin: '2px 0' } },
-    device.username === undefined || device.username === null
-      ? null
-      : el('div', undefined,
-        el('div', 'rh-k', undefined, STRINGS.devAccount),
-        el('div', 'rh-v', { 'data-testid': 'device-account' }, `账号 ${device.username}`)),
-    device.role
-      ? el('div', undefined,
-        el('div', 'rh-k', undefined, STRINGS.devRole),
-        el('div', 'rh-v', undefined, ROLE_LABEL[device.role as RoleName] ?? device.role))
-      : null,
-    device.lastSeenAt
-      ? el('div', undefined,
-        el('div', 'rh-k', undefined, STRINGS.devLastSeen),
-        el('div', 'rh-v', undefined, formatTime(device.lastSeenAt)))
-      : null,
-    device.createdAt
-      ? el('div', undefined,
-        el('div', 'rh-k', undefined, STRINGS.devCreatedAt),
-        el('div', 'rh-v', undefined, new Date(device.createdAt).toLocaleDateString()))
-      : null),
-  // 状态由右上角三态标签表达，不再额外堆叠文字说明。
-  // 权限上限与撤销属于**身份管理**：统一在「设置 → 登录与账号」里做，
-  // 运行页只保留状态与连接事实，避免两处都能改权限而语义漂移。
-  el('div', 'rh-dev-foot', undefined,
-    el('span', {
-      'data-testid': 'manage-in-settings',
-      style: { fontSize: 'var(--rh-fs-label)', color: 'var(--rh-text-2)' },
-    }, STRINGS.manageInSettings)))
-}
-
 /** Display only recorded trust facts; legacy missing metadata remains unknown. */
 function renderOutboundFacts(target?: OutboundTarget): React.ReactNode {
   const time = (value?: number): string => value === undefined ? '未知（旧记录未保存）' : new Date(value).toLocaleString()
@@ -1226,79 +1126,93 @@ function renderOutboundFacts(target?: OutboundTarget): React.ReactNode {
     fact('客户端标识', target?.deviceId ?? target?.id?.slice(0, 12) ?? '未知'))
 }
 
-/** 出站分组内容卡（本机指向；不伪造设备列表）。 */
-function renderOutboundCard(state: RemoteHubPageState, actions: RemoteHubPageActions): React.ReactNode {
+/**
+ * 已配对设备列表（本机作为**主控端**连接过的目标）。
+ *
+ * 只画出站目标：本机主动连过去、并且公钥已被对方登记的设备。
+ * 「谁连进了本机」不在这里——那是设置页「登录与账号」里的可信客户端。
+ *
+ * 连接态下当前那台设备置顶并标「已连接」，其余照常列出（可直接「连接」切换）。
+ * @param state - 页面状态。
+ * @param actions - 页面动作。
+ * @returns 设备卡网格。
+ */
+function renderPairedDevices(state: RemoteHubPageState, actions: RemoteHubPageActions): React.ReactNode {
   const isCloud = state.mode.mode === 'cloud'
-  if (isCloud) {
-    const currentTarget = state.mode.targetId
+  const targets = state.outboundTargets ?? []
+  const currentId = isCloud
+    ? (state.mode.targetId
       ?? (state.mode.origin && state.mode.token
         ? outboundTargetIdentity({ origin: state.mode.origin, token: state.mode.token })
-        : undefined)
-    const otherTargets = (state.outboundTargets ?? []).filter(target => outboundTargetIdentity(target) !== currentTarget)
-    const currentCard = el('div', 'rh-dev', { 'data-testid': 'outbound-current' },
-      el('div', 'rh-dev-top', undefined,
-        el('div', 'rh-dev-ico', undefined, '☁️'),
-        el('div', 'rh-dev-meta', undefined,
-          el('div', 'rh-dev-nm', undefined, state.mode.deviceLabel ?? STRINGS.modeCloud),
-          el('div', 'rh-dev-sub', undefined, state.mode.origin ?? '')),
-        el('span', 'rh-pill is-online', undefined, el('span', 'rh-dot'), STRINGS.connected)),
-      renderOutboundFacts((state.outboundTargets ?? []).find(target => outboundTargetIdentity(target) === currentTarget)),
-      el('div', 'rh-dev-foot', undefined,
-        el('button', 'rh-btn is-small is-danger', {
-          type: 'button', 'data-testid': 'detach-inline',
-          onClick: () => actions.onDetach(),
-        }, STRINGS.detach)))
-    const otherCards = otherTargets.map(target => el('div', 'rh-dev is-offline', {
+        : undefined))
+    : undefined
+
+  const cards: React.ReactNode[] = []
+
+  // 当前已连接的设备：置顶，标「已连接」，给「断开」而不是「连接」。
+  if (isCloud) {
+    const current = currentId === undefined
+      ? undefined
+      : targets.find(target => outboundTargetIdentity(target) === currentId)
+    // ⚠️ 刚连上时该目标可能还没写进 outboundTargets（服务端尚未返回），
+    // 所以标题/副标题必须能回退到 mode 上的 deviceLabel / origin，
+    // 否则卡片会显示成空标题——用户看不出自己连到了哪台机器。
+    const origin = current?.origin ?? state.mode.origin ?? ''
+    cards.push(el('div', 'rh-dev', {
+      key: `current-${currentId ?? origin}`,
+      'data-testid': 'outbound-current',
+      'data-origin': origin,
+      'data-status': 'connected',
+    },
+    el('div', 'rh-dev-top', undefined,
+      el('div', 'rh-dev-ico', undefined, '☁️'),
+      el('div', 'rh-dev-meta', undefined,
+        el('div', 'rh-dev-nm', undefined, current !== undefined
+          ? outboundTargetTitle(current)
+          : (state.mode.deviceLabel ?? state.mode.origin ?? STRINGS.modeCloud)),
+        el('div', 'rh-dev-sub', undefined, current !== undefined
+          ? outboundTargetMeta(current, targets)
+          : (state.mode.origin ?? ''))),
+      el('span', 'rh-pill is-online', undefined, el('span', 'rh-dot'), STRINGS.connected)),
+    renderOutboundFacts(current),
+    el('div', 'rh-dev-foot', undefined,
+      el('button', 'rh-btn is-small is-danger', {
+        type: 'button', 'data-testid': 'detach-inline',
+        onClick: () => actions.onDetach(),
+      }, STRINGS.detach))))
+  }
+
+  // 其余已配对设备。
+  for (const target of targets) {
+    if (isCloud && currentId !== undefined && outboundTargetIdentity(target) === currentId) continue
+    cards.push(el('div', 'rh-dev is-offline', {
       key: outboundTargetIdentity(target),
       'data-testid': 'outbound-paired',
       'data-origin': target.origin,
       'data-status': 'paired',
     },
-      el('div', 'rh-dev-top', undefined,
-        el('div', 'rh-dev-ico', undefined, '💤'),
-        el('div', 'rh-dev-meta', undefined,
-          el('div', 'rh-dev-nm', undefined, outboundTargetTitle(target)),
-          el('div', 'rh-dev-sub', undefined, outboundTargetMeta(target, state.outboundTargets))),
-        el('span', 'rh-pill is-offline', undefined, el('span', 'rh-dot'), STRINGS.statusPaired)),
-      renderOutboundFacts(target),
-      actions.onForgetOutbound ? el('button', 'rh-btn is-small is-danger', {
-        type: 'button', 'data-testid': 'outbound-delete', disabled: state.busy !== null,
-        onClick: () => actions.onForgetOutbound?.(target),
-      }, '删除配对 / Delete') : null,
-      el('div', 'rh-dev-foot', undefined,
-        el('button', 'rh-btn is-small is-primary', {
-          type: 'button', 'data-testid': 'reconnect',
-          disabled: state.busy !== null,
-          onClick: () => actions.onReconnect(target),
-        }, STRINGS.connect))))
-    return React.createElement(React.Fragment, null, currentCard, ...otherCards)
+    el('div', 'rh-dev-top', undefined,
+      el('div', 'rh-dev-ico', undefined, '💤'),
+      el('div', 'rh-dev-meta', undefined,
+        el('div', 'rh-dev-nm', undefined, outboundTargetTitle(target)),
+        el('div', 'rh-dev-sub', undefined, outboundTargetMeta(target, targets))),
+      el('span', 'rh-pill is-offline', undefined, el('span', 'rh-dot'), STRINGS.statusPaired)),
+    renderOutboundFacts(target),
+    el('div', 'rh-dev-foot', undefined,
+      el('button', 'rh-btn is-small is-primary', {
+        type: 'button', 'data-testid': 'reconnect',
+        disabled: state.busy !== null,
+        onClick: () => actions.onReconnect(target),
+      }, STRINGS.connect),
+      actions.onForgetOutbound !== undefined
+        ? el('button', 'rh-btn is-small is-danger', {
+          type: 'button', 'data-testid': 'outbound-delete', disabled: state.busy !== null,
+          onClick: () => actions.onForgetOutbound?.(target),
+        }, '删除配对')
+        : null)))
   }
 
-  const paired = state.outboundTargets ?? []
-  return el('div', 'rh-devgrid', { 'data-testid': 'outbound-paired-list' },
-    paired.map(target => el('div', 'rh-dev is-offline', {
-        key: outboundTargetIdentity(target),
-        'data-testid': 'outbound-paired',
-        'data-origin': target.origin,
-        'data-status': 'paired',
-      },
-        el('div', 'rh-dev-top', undefined,
-          el('div', 'rh-dev-ico', undefined, '💤'),
-          el('div', 'rh-dev-meta', undefined,
-            el('div', 'rh-dev-nm', undefined, outboundTargetTitle(target)),
-            el('div', 'rh-dev-sub', undefined, outboundTargetMeta(target, state.outboundTargets))),
-          el('span', 'rh-pill is-offline', undefined, el('span', 'rh-dot'), STRINGS.statusPaired)),
-        renderOutboundFacts(target),
-        el('div', 'rh-dev-foot', undefined,
-          el('button', 'rh-btn is-small is-primary', {
-            type: 'button', 'data-testid': 'reconnect',
-            disabled: state.busy !== null,
-            onClick: () => actions.onReconnect(target),
-          }, STRINGS.connect),
-          actions.onForgetOutbound ? el('button', 'rh-btn is-small is-danger', {
-            type: 'button', 'data-testid': 'outbound-delete', disabled: state.busy !== null,
-            onClick: () => actions.onForgetOutbound?.(target),
-          }, '删除配对 / Delete') : null))))
+  return el('div', 'rh-devgrid', { 'data-testid': 'outbound-paired-list' }, ...cards)
 }
 
 // ── ③ 统计区子渲染 ────────────────────────────────────────────────────────────

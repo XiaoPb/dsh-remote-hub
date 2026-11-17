@@ -27,13 +27,14 @@ import {
   Button,
   CodeBox,
   Collapse,
+  EmptyState,
   Field,
   Input,
   PasswordInput,
   Notice,
   Pill,
   QrCode,
-  ROLE_OPTIONS,
+  roleOptions,
   Section,
   Segmented,
   Select,
@@ -157,6 +158,19 @@ export interface AccountPageState {
   busy: boolean
   /** MFA 挑战票据（第二步）。 */
   mfaToken: string | null
+  /**
+   * 「信任的公网地址」已保存的完整列表（含尚未生效的项）。
+   * 来源：运行时覆盖值优先，缺失时用 cordis.patch.yml 的配置值。
+   */
+  authorities?: readonly string[]
+  /** 其中**当前已生效**的部分（守卫启动时读到的）。用于区分「配置中 / 待重启」。 */
+  authoritiesApplied?: readonly string[]
+  /** 输入框草稿。 */
+  authorityDraft?: string
+  /** 校验错误（缺省时由 `validateAuthorityDraft` 现算）。 */
+  authorityError?: string | null
+  /** 最近一次保存的时间戳（非 null 时显示「重启后生效」提示）。 */
+  authoritySavedAt?: number | null
 }
 
 /** 页面动作。 */
@@ -168,6 +182,12 @@ export interface AccountPageActions {
   onChangePassword(currentPassword: string, newPassword: string): void
   /** 切换口令策略。 */
   onSetPasswordPolicy(policy: PasswordPolicy): void
+  /** 「信任的公网地址」输入草稿变更。 */
+  onAuthorityDraftChange?(value: string): void
+  /** 把输入框里的地址加入白名单（保存后需重启生效）。 */
+  onAddAuthority?(): void
+  /** 从白名单移除一个地址（保存后需重启生效）。 */
+  onRemoveAuthority?(host: string): void
   /** 移除一条对端账号的信任记录（不影响本机账号）。 */
   onForgetPeer(targetId: string): void
   /** 提权前的重新验证：输入字段变更。 */
@@ -275,15 +295,30 @@ const PEERS_SHOW_ALL_KEY = 'peers-show-all'
  */
 function pageHead(title?: string, lead = false): React.ReactElement {
   const resolvedTitle = title ?? t('pageTitle')
-  return React.createElement('header', { className: cx('rh-page-head', !lead && 'is-compact') },
+  // 页头用 `<header role="presentation">`：宿主外壳已有一个 banner 地标，
+  // 设置弹窗里再出现第二个 `<header>` 会构成重复 banner
+  // （axe `landmark-no-duplicate-banner`）。这里只借语义分组，不声明地标。
+  return React.createElement('header', { className: cx('rh-page-head', !lead && 'is-compact'), role: 'presentation' },
     React.createElement('div', { className: 'rh-page-head-row' },
       React.createElement('h1', { className: 'rh-h1', 'data-testid': 'account-title' }, resolvedTitle),
       lead ? null : React.createElement('span', { className: 'rh-page-head-hint' }, t('pageHint'))),
     lead ? React.createElement('p', { className: 'rh-lead' }, t('pageLead')) : null)
 }
 
-/** 登录流程步骤（从 locale 取文案）。 */
-const STEPS: readonly { key: 'login' | 'password' | 'enroll' | 'ready'; labelKey: 'stepCredentials' | 'stepPassword' | 'stepEnroll' | 'stepReady' }[] = [
+/**
+ * 登录流程步骤的**全集**（从 locale 取文案）。
+ *
+ * ⚠️ 不要直接把这四条全画出来：不同用户经历的路径长度不同（见 {@link stepsFor}）。
+ *  - 首次登录（要强制改初始口令 + 绑定两步验证）：4 步
+ *  - 普通设备登录：3 步（账号口令 → 两步验证 → 账号设置）
+ *  - 已登录看设置：只有 1 步
+ * 把 4 步全摆出来，会让「已登录」的用户看到三条永远点不亮的「已过期」步骤，
+ * 造成「我是不是还有步骤没走完」的误解。
+ */
+const ALL_STEPS: readonly {
+  key: 'login' | 'password' | 'enroll' | 'ready' | 'verify'
+  labelKey: 'stepCredentials' | 'stepPassword' | 'stepEnroll' | 'stepReady' | 'mfaTitle'
+}[] = [
   { key: 'login', labelKey: 'stepCredentials' },
   { key: 'password', labelKey: 'stepPassword' },
   { key: 'enroll', labelKey: 'stepEnroll' },
@@ -291,36 +326,66 @@ const STEPS: readonly { key: 'login' | 'password' | 'enroll' | 'ready'; labelKey
 ]
 
 /**
- * 当前阶段落在哪一步：`bootstrap` / `change-password` 属于第一步（还没进门），
- * `mfa` 是第二步，其余（`ready`）是第三步。`loading` / `error` 不显示步骤条。
+ * 本次会话**实际会走到**的步骤序列 + 当前所处下标。
+ *
  * @param phase - 页面阶段。
- * @returns 步骤索引；null = 不显示。
+ * @param meetsFirstTimeWizard - 是否处于首次登录向导（改初始口令 / 绑定 2FA）。
+ *   `true` 时保留 4 步；否则压缩掉不适用的一步。
+ * @returns `{ steps, current }`；`null` = 不显示步骤条。
  */
-function stepIndex(phase: AccountPhase): number | null {
-  if (phase === 'loading' || phase === 'error') return null
-  if (phase === 'mfa') return 1
-  // 首次登录向导：改初始口令 → 绑定两步验证 → 进设置。两步都是必走的。
-  if (phase === 'change-password') return 1
-  if (phase === 'enroll-totp') return 2
-  if (phase === 'ready') return 3
-  return 0
+function stepsFor(
+  phase: AccountPhase,
+  meetsFirstTimeWizard: boolean,
+): { steps: typeof ALL_STEPS; current: number } | null {
+  // 加载/错误/已登录的账号设置页：没有「流程」可讲，不显示步骤条。
+  if (phase === 'loading' || phase === 'error' || phase === 'ready') return null
+
+  if (meetsFirstTimeWizard) {
+    // 首次登录：账号口令 → 修改口令 → 绑定两步验证 → 账号设置
+    //
+    // `bootstrap` / `login` / `mfa` 都发生在「还没进门」的第 0 步；
+    // 显式列出，避免落进 else 被误标成最后一步。
+    const current = phase === 'bootstrap' || phase === 'login' || phase === 'mfa'
+      ? 0
+      : phase === 'change-password'
+        ? 1
+        : phase === 'enroll-totp'
+          ? 2
+          : 3
+    return { steps: ALL_STEPS, current }
+  }
+
+  // 普通登录：账号口令 → 两步验证 → 账号设置（**3 步**）
+  //
+  // ⚠️ `mfa` 就是「两步验证」这一步本身，不是「已走完账号口令、回到账号设置」。
+  // 所以这里单独定义三项，第二项用 mfaTitle（「两步验证」）而不是 stepEnroll
+  // （「绑定两步验证」——那是首次登录绑定 TOTP 的文案，语义不同）。
+  const LOGIN_STEPS: typeof ALL_STEPS = [
+    { key: 'login', labelKey: 'stepCredentials' },
+    { key: 'verify', labelKey: 'mfaTitle' },
+    { key: 'ready', labelKey: 'stepReady' },
+  ]
+  const current = phase === 'mfa' ? 1 : 0
+  return { steps: LOGIN_STEPS, current }
 }
 
 /**
- * 步骤条：一次只走一步（输入账号口令 → 两步验证 → 进入设置）。
+ * 步骤条：只画**本次会话实际会走**的步骤。
  * @param phase - 页面阶段。
- * @param busy - 是否进行中（决定哪一步是 active）。
+ * @param meetsFirstTimeWizard - 是否首次登录向导。
  * @returns 步骤条节点。
  */
-function stepBar(phase: AccountPhase): React.ReactElement | null {
-  const current = stepIndex(phase)
-  if (current === null) return null
+function stepBar(phase: AccountPhase, meetsFirstTimeWizard: boolean): React.ReactElement | null {
+  const plan = stepsFor(phase, meetsFirstTimeWizard)
+  if (plan === null) return null
+  const { steps, current } = plan
   return React.createElement('ol', {
     className: 'rh-steps',
     'data-testid': 'account-steps',
     'data-step': String(current + 1),
+    'data-step-count': String(steps.length),
     'aria-label': t('stepBarLabel'),
-  }, STEPS.map((step, index) => React.createElement('li', {
+  }, steps.map((step, index) => React.createElement('li', {
     key: step.key,
     className: cx(
       'rh-step',
@@ -332,6 +397,37 @@ function stepBar(phase: AccountPhase): React.ReactElement | null {
   },
   React.createElement('span', { className: 'rh-step-no' }, index < current ? '✓' : String(index + 1)),
   React.createElement('span', { className: 'rh-step-label' }, t(step.labelKey)))))
+}
+
+/**
+ * 校验「信任的公网地址」输入框的草稿，返回错误文案（null = 通过）。
+ *
+ * ⚠️ 这里只做**用户即时反馈**用的轻量校验；真正的权威判定在服务端
+ * `coercePublicAuthorities`（`host/src/runtime-config.ts`）。服务端会再校验一遍，
+ * 客户端这层只是避免用户提交了才看到红字。两者规则必须保持一致 ——
+ * 这条注释是给以后改规则的人的提醒。
+ *
+ * @param raw - 输入框当前内容。
+ * @param existing - 已在列表里的地址。
+ * @returns 错误文案；通过时返回 null。
+ */
+export function validateAuthorityDraft(raw: string, existing: readonly string[]): string | null {
+  const value = raw.trim()
+  if (value === '') return t('accessErrEmpty')
+  const lower = value.toLowerCase()
+  if (lower.startsWith('http://') || lower.startsWith('https://')) return t('accessErrScheme')
+  if (value.includes('/')) return t('accessErrPath')
+  if (value.includes('*')) return t('accessErrWildcard')
+  if (/\s/u.test(value)) return t('accessErrPath')
+  // 回环 / 局域网：围栏本来就无条件放行，添加无意义。
+  const hostOnly = value.replace(/:\d+$/u, '').replace(/^\[|\]$/gu, '')
+  if (hostOnly === 'localhost' || hostOnly === '::1' || /^127\./u.test(hostOnly)) return t('accessErrLoopback')
+  if (/^(10\.|192\.168\.|169\.254\.)/u.test(hostOnly)
+    || /^172\.(1[6-9]|2\d|3[01])\./u.test(hostOnly)
+    || /^f[cd][0-9a-f]{2}:/iu.test(hostOnly)
+    || /^fe[89ab][0-9a-f]:/iu.test(hostOnly)) return t('accessErrPrivate')
+  if (existing.some(host => host.toLowerCase() === lower)) return t('accessErrDuplicate')
+  return null
 }
 
 /**
@@ -347,7 +443,14 @@ function stepBar(phase: AccountPhase): React.ReactElement | null {
 function pageRoot(
   phase: AccountPhase,
   children: React.ReactNode,
-  options: { narrow?: boolean; theme?: 'dark' | 'light'; title?: string; lead?: boolean } = {},
+  options: {
+    narrow?: boolean
+    theme?: 'dark' | 'light'
+    title?: string
+    lead?: boolean
+    /** 是否首次登录向导（决定步骤条画几步，见 stepsFor）。 */
+    firstTimeWizard?: boolean
+  } = {},
 ): React.ReactElement {
   return React.createElement('div', {
     className: cx('rh-root', 'rh-scroll', 'rh-settings'),
@@ -360,7 +463,7 @@ function pageRoot(
   React.createElement('div', { className: cx('rh-shell', options.narrow !== false && 'rh-narrow') },
     React.createElement('div', { className: 'rh-page-sticky' },
       pageHead(options.title, options.lead === true),
-      stepBar(phase)),
+      stepBar(phase, options.firstTimeWizard === true)),
     React.createElement('div', { className: 'rh-page-body', 'data-testid': 'account-body' }, children)))
 }
 
@@ -406,9 +509,14 @@ function passwordFields(
   return React.createElement(React.Fragment, null,
     React.createElement(Field, {
       label: t('currentPasswordLabel'),
+      // label 与控件必须显式关联：`htmlFor` ↔ 控件的 `id`/`name` 同名，
+      // 否则输入框没有 accessible name（axe `label` / critical）。
+      htmlFor: 'rh-current-password',
       children: React.createElement(PasswordInput, {
         'data-testid': 'current-password',
         type: 'password',
+        id: 'rh-current-password',
+        name: 'rh-current-password',
         autoComplete: 'current-password',
         value: draft.currentPassword,
         onChange: (event: React.ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, currentPassword: event.currentTarget.value }),
@@ -417,9 +525,12 @@ function passwordFields(
     React.createElement(Field, {
       label: t('newPasswordLabel'),
       hint: t('newPasswordHint'),
+      htmlFor: 'rh-new-password',
       children: React.createElement(PasswordInput, {
         'data-testid': 'new-password',
         type: 'password',
+        id: 'rh-new-password',
+        name: 'rh-new-password',
         autoComplete: 'new-password',
         value: draft.newPassword,
         onChange: (event: React.ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, newPassword: event.currentTarget.value }),
@@ -693,7 +804,7 @@ function renderSubAccountRow(
           'data-testid': 'sub-account-new-ceiling',
           ariaLabel: t('subNewCeilingLabel'),
           value: pending.role ?? account.roleCeiling,
-          options: ROLE_OPTIONS.map(option => ({ value: option.value, label: option.label })),
+          options: roleOptions().map(option => ({ value: option.value, label: option.label })),
           onChange: value => actions.onSubRequest?.(account.accountId, 'ceiling', value as RoleName),
         })
         : null,
@@ -767,7 +878,7 @@ export function renderAccountPage(
         'aria-label': t('loadingAccount'),
       },
         React.createElement(Skeleton, { lines: 3 }),
-        React.createElement('span', { className: 'sr-only' }, t('loadingAccountSr')))))
+        React.createElement('span', { className: 'rh-sr-only' }, t('loadingAccountSr')))))
   }
 
   if (state.phase === 'error') {
@@ -957,7 +1068,7 @@ export function renderAccountPage(
             onClick: () => actions.onChangePassword(draft.currentPassword, draft.newPassword),
           }),
           state.notice === null ? null : React.createElement(Notice, { tone: 'error', children: state.notice })),
-      })), { title: t('changePasswordTitle'), lead: true })
+      })), { title: t('changePasswordTitle'), lead: true, firstTimeWizard: true })
   }
 
   // 首次登录第 3 步需要 TOTP 草稿（与 ready 态共用同一份状态）。
@@ -1026,7 +1137,7 @@ export function renderAccountPage(
         ...(state.notice === null || enrollment === null
           ? []
           : [React.createElement(Notice, { key: 'notice', tone: 'error', children: state.notice })]),
-      })), { title: t('enrollTotpTitle'), lead: true })
+      })), { title: t('enrollTotpTitle'), lead: true, firstTimeWizard: true })
   }
 
   // ── ready：区块 A–F（plan-settings.md §2.7）────────────────────────────────
@@ -1048,6 +1159,18 @@ export function renderAccountPage(
   // 列表过长时默认只显示前若干台，其余折叠到「显示全部」。
   const showAllClients = (state.expanded ?? {})[CLIENTS_SHOW_ALL_KEY] === true
   const visibleClients = showAllClients ? active : active.slice(0, CLIENTS_PREVIEW)
+
+  // ── 信任的公网地址（publicAuthorities，冷字段）─────────────────────────────
+  //
+  // `authorities`      当前**已保存**的完整列表（含待重启项）
+  // `accessPendingHosts` 其中哪些是重启后才生效的（不在 runtime 的生效值里）
+  const authorities = state.authorities ?? []
+  const accessApplied = state.authoritiesApplied ?? []
+  const accessPendingHosts = authorities.filter(host => !accessApplied.includes(host))
+  const accessPending = accessPendingHosts.length > 0
+  const accessDraft = state.authorityDraft ?? ''
+  const accessError = state.authorityError ?? validateAuthorityDraft(accessDraft, authorities)
+  const accessSavedAt = state.authoritySavedAt ?? null
 
   // 对端账号同样折叠：最近连接的在前，其余收进「显示全部」。
   const peers = state.peers ?? []
@@ -1111,8 +1234,11 @@ export function renderAccountPage(
           : React.createElement(Notice, { tone: 'warning', children: t('trustRequiresTotp') }),
         React.createElement(Field, {
           label: t('trustLabelField'),
+          htmlFor: 'rh-trust-label',
           children: React.createElement(Input, {
             'data-testid': 'trust-label',
+            id: 'rh-trust-label',
+            name: 'rh-trust-label',
             value: draft.label,
             onChange: (event: React.ChangeEvent<HTMLInputElement>) => setDraft({ ...draft, label: event.currentTarget.value }),
           }),
@@ -1255,7 +1381,11 @@ export function renderAccountPage(
       React.createElement(Segmented, {
         ariaLabel: t('policyLabel'),
         value: state.policy,
-        disabled: state.busy,
+        // ⚠️ 不能绑 `state.busy`：切换策略时 busy 会 true→false 翻转一次，若把
+        // Segmented 渲染成 disabled，浏览器会**立刻移走焦点**（disabled 元素不可聚焦），
+        // 再恢复可用时焦点不会回来 → 键盘用户按一次方向键就掉到 body，
+        // 后续 Home/End/方向键全部失效（WCAG 2.1.1 实测复现）。
+        // 防重复提交由 onChange 侧的实现保证（同一时刻只有一次在飞）。
         options: PASSWORD_POLICIES.map(policy => ({
           value: policy,
           label: policy === 'strong' ? t('policyOptionStrong') : t('policyOptionBasic'),
@@ -1278,6 +1408,110 @@ export function renderAccountPage(
       })),
   })
 
+  // ── 信任的公网地址（publicAuthorities，冷字段：重启后生效）────────────────
+  //
+  // 为什么和「可信客户端」放一起：两者都是**谁/从哪里能进来**的安全边界。
+  // 经隧道访问时浏览器发的 Host 是域名，围栏只放行「回环 ∪ publicAuthorities」，
+  // 不声明就整站 403 —— 这个配置必须让用户自己能在页面上看见并修改。
+  const accessItems = authorities.map(host => {
+    const pending = accessPendingHosts.includes(host)
+    const head = React.createElement('div', { className: 'rh-item-head' },
+      React.createElement('span', { className: 'rh-item-name' },
+        React.createElement('code', { className: 'rh-mono' }, host)),
+      React.createElement(Pill, {
+        'data-testid': 'access-item-pill',
+        tone: pending ? 'warning' : 'online',
+        dot: true,
+      }, pending ? t('accessPillPending') : t('accessPillActive')),
+      React.createElement('div', { className: 'rh-item-actions' },
+        React.createElement(Button, {
+          'data-testid': 'access-remove',
+          'data-host': host,
+          size: 'small',
+          variant: 'danger',
+          ariaLabel: t('accessRemoveLabel', { host }),
+          disabled: state.busy,
+          children: t('accessRemove'),
+          onClick: () => actions.onRemoveAuthority?.(host),
+        })))
+    return React.createElement('li', {
+      key: host,
+      className: 'rh-item',
+      'data-testid': 'access-item',
+      'data-host': host,
+      'data-pending': pending ? 'true' : 'false',
+      style: { marginBottom: 8 },
+    }, head)
+  })
+
+  const accessListOrEmpty = authorities.length === 0
+    ? React.createElement(EmptyState, {
+      'data-testid': 'access-empty',
+      icon: '🔒',
+      title: t('accessEmptyTitle'),
+      desc: t('accessEmptyDesc'),
+    })
+    : React.createElement('ul', {
+      'data-testid': 'access-list',
+      style: { listStyle: 'none', margin: '0 0 12px', padding: 0 },
+    }, ...accessItems)
+
+  const accessAdder = React.createElement(Field, {
+    label: t('accessAddLabel'),
+    hint: t('accessAddHint'),
+    error: accessError === null ? undefined : accessError,
+    htmlFor: 'rh-access-input',
+    children: React.createElement('div', { className: 'rh-row' },
+      React.createElement(Input, {
+        id: 'rh-access-input',
+        name: 'rh-access-host',
+        'data-testid': 'access-input',
+        ariaLabel: t('accessAddLabel'),
+        placeholder: t('accessAddPlaceholder'),
+        autoComplete: 'off',
+        value: accessDraft,
+        onChange: (event: React.ChangeEvent<HTMLInputElement>) => actions.onAuthorityDraftChange?.(event.currentTarget.value),
+        onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => {
+          if (event.key === 'Enter') actions.onAddAuthority?.()
+        },
+      }),
+      React.createElement(Button, {
+        'data-testid': 'access-add',
+        variant: 'primary',
+        disabled: state.busy,
+        children: t('accessAddBtn'),
+        onClick: () => actions.onAddAuthority?.(),
+      })),
+  })
+
+  // 生效提示：冷字段必须把「重启」说透，不能存完只显示一个绿勾。
+  const accessSavedNotice = accessSavedAt === null
+    ? null
+    : React.createElement(Notice, {
+      'data-testid': 'access-saved',
+      tone: 'info',
+      role: 'status',
+      children: t('accessSavedNotice'),
+    })
+
+  const accessSection = React.createElement(Section, {
+    'data-testid': 'public-authorities-section',
+    collapsible: true,
+    expanded: (state.expanded ?? {})['public-authorities-section'] === true,
+    onToggle: () => actions.onToggleSection?.('public-authorities-section'),
+    summary: `${authorities.length}${accessPending ? ` · ${t('accessPillPending')}` : ''}`,
+    title: React.createElement(React.Fragment, null,
+      t('accessTitle'),
+      accessPending
+        ? React.createElement(Pill, { 'data-testid': 'access-pending-pill', tone: 'warning', dot: true },
+          t('accessPillPending'))
+        : null),
+    desc: t('accessDesc'),
+    children: React.createElement(React.Fragment, null,
+      accessListOrEmpty,
+      accessAdder,
+      accessSavedNotice),
+  })
   const clientsSection = React.createElement(Section, {
     'data-testid': 'clients-list',
     collapsible: true,
@@ -1418,7 +1652,7 @@ export function renderAccountPage(
                 'data-testid': 'sub-account-ceiling',
                 ariaLabel: t('subCeilingAriaLabel'),
                 value: sub.draft.roleCeiling,
-                options: ROLE_OPTIONS.map(option => ({ value: option.value, label: option.label })),
+                options: roleOptions().map(option => ({ value: option.value, label: option.label })),
                 onChange: value => actions.onSubDraftChange?.('roleCeiling', value),
               }),
             }),
@@ -1466,7 +1700,9 @@ export function renderAccountPage(
     trustSection,
     totpSection,
     policySection,
+    // 「谁/从哪里能进来」：可信客户端列表之后紧跟访问来源声明。
     clientsSection,
+    accessSection,
     peersSection,
     subAccountsSection,
     state.notice === null

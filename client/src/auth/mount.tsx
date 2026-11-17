@@ -24,7 +24,8 @@ import {
 } from './AccountPage.js'
 import { createAuthApi, AuthApiError, type AuthApi } from './api.js'
 import { createKeyring, type ClientBinding, type ClientIdentity } from './keyring.js'
-import { t } from '../rhui/i18n.js'
+import { t, subscribeLocale } from '../rhui/i18n.js'
+import { validateAuthorityDraft } from './AccountPage.js'
 
 /** 角色名守卫（下拉/分段控件回传的是字符串）。 */
 function isRoleValue(value: string): value is RoleName {
@@ -85,13 +86,48 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
       busy: false,
       mfaToken: null,
       subAccounts: initialSubAccounts(),
+      // 信任的公网地址：加载完成前为空，避免闪现错误的「未配置」空态。
+      authorities: [],
+      authoritiesApplied: [],
+      authorityDraft: '',
+      authorityError: null,
+      authoritySavedAt: null,
     })
     const [draft, setDraft] = React.useState<AccountFormDraft>(initialDraft)
     const identityRef = React.useRef<ClientIdentity | null>(null)
 
+    // 语言：宿主在「设置 → 通用 → 语言」切语言时重渲染本页（不重新加载、不丢草稿）。
+    // `subscribeLocale` 只在文案集真的变化时回调，所以不会引起额外渲染。
+    const [, forceLocaleRender] = React.useReducer(count => count + 1, 0)
+    React.useEffect(() => subscribeLocale(forceLocaleRender), [])
+
     const patch = React.useCallback((next: Partial<AccountPageState>) => {
       setState(current => ({ ...current, ...next }))
     }, [])
+
+    /**
+     * 保存「信任的公网地址」。
+     *
+     * 冷字段：写入后不会立刻生效，必须重启 DSH。所以成功时把 `authoritySavedAt`
+     * 设为当前时间，页面据此显示「已保存，重启后生效」——不假装已经生效。
+     * @param next - 完整的新列表。
+     * @param removed - 刚移除的地址（用于清空输入框后的提示文案）。
+     */
+    const saveAuthorities = React.useCallback(async (next: readonly string[], removed: string): Promise<void> => {
+      patch({ busy: true, authorityError: null })
+      try {
+        await api.patchConfig?.({ publicAuthorities: next })
+        patch({
+          busy: false,
+          authorities: next,
+          authorityDraft: '',
+          authoritySavedAt: Date.now(),
+          notice: removed === '' ? '已添加公网地址，重启 DSH 后生效。' : '已移除公网地址，重启 DSH 后生效。',
+        })
+      } catch (error) {
+        patch({ busy: false, authorityError: messageOf(error) })
+      }
+    }, [api, patch])
 
     const load = React.useCallback(async () => {
       try {
@@ -122,6 +158,20 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
             .catch(() => ({ ...initialSubAccounts(), accounts: [] }))
           : initialSubAccounts()
         const session = status.session
+        // 信任的公网地址：配置读取失败不影响登录（宁可不显示也不阻断）。
+        // `authoritiesApplied` 取当前**运行中**的生效值，用于区分「配置中 / 待重启」。
+        const configSnapshot = await Promise.resolve()
+          .then(() => api.loadConfig?.())
+          .catch(() => undefined)
+        const configValue = configSnapshot?.config ?? {}
+        const authorities = Array.isArray(configValue.publicAuthorities)
+          ? (configValue.publicAuthorities as unknown[]).filter((v): v is string => typeof v === 'string')
+          : []
+        // 生效值由服务端在快照里一并给出；没有该字段时退化为「全部已生效」，
+        // 避免在旧宿主上误报「待重启」。
+        const applied = Array.isArray(configValue.publicAuthoritiesApplied)
+          ? (configValue.publicAuthoritiesApplied as unknown[]).filter((v): v is string => typeof v === 'string')
+          : authorities
         let phase: AccountPageState['phase']
         if (session === null) phase = status.bootstrapped ? 'login' : 'bootstrap'
         // 首次登录是一条**必须走完**的向导：改初始口令 → （可选改名）→ 绑定两步验证。
@@ -139,6 +189,8 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
           notice: null,
           busy: false,
           subAccounts: { ...(current.subAccounts ?? initialSubAccounts()), ...subAccounts },
+          authorities,
+          authoritiesApplied: applied,
         }))
       } catch (error) {
         setState(current => ({
@@ -239,6 +291,25 @@ export function createAccountPageComponent(deps: AccountPageDeps = {}): () => Re
             return load()
           })
           .catch(error => patch({ busy: false, notice: messageOf(error) }))
+      },
+      // ── 信任的公网地址（publicAuthorities）────────────────────────────────
+      onAuthorityDraftChange(value) {
+        // 边打字边清掉上一次的报错，避免用户改对了红字还挂着。
+        patch({ authorityDraft: value, authorityError: null })
+      },
+      onAddAuthority() {
+        const draft = (state.authorityDraft ?? '').trim()
+        const existing = state.authorities ?? []
+        const error = validateAuthorityDraft(draft, existing)
+        if (error !== null) {
+          patch({ authorityError: error })
+          return
+        }
+        void saveAuthorities([...existing, draft.toLowerCase()], '')
+      },
+      onRemoveAuthority(host) {
+        const next = (state.authorities ?? []).filter(item => item !== host)
+        void saveAuthorities(next, host)
       },
       onTrustClient(label, ceiling) {
         patch({ busy: true, notice: null })

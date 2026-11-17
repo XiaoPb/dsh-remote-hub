@@ -87,31 +87,34 @@ describe('设备三态语义', () => {
 })
 
 describe('离线置灰', () => {
-  it('未在线设备带 offline 标记（CSS 置灰）', () => {
-    const at = 1_000_000_000
+  // 2026-11-17 重构后：云端设备页只画**出站**配对目标，入站设备归设置页。
+  // 因此这里锁定出站设备的置灰行为（未连接的目标必须是 is-offline）。
+  it('未连接的已配对目标带 is-offline 标记（CSS 置灰）', () => {
     const tree = page.renderRemoteHubPage(baseState({
-      now: at,
-      devices: [
-        { deviceId: 'on', label: '在线', role: 'control', revokedAt: null, lastSeenAt: new Date(at - 1_000).toISOString() },
-        { deviceId: 'off', label: '离线', role: 'control', revokedAt: null, lastSeenAt: null },
+      outboundTargets: [
+        { id: 'dev_off', origin: 'http://192.168.0.30:8443', token: 't'.repeat(20), label: 'idle-box' },
       ],
     }), noopActions)
 
-    /** 收集带 data-device-id 的卡片。 */
+    /** 收集带 data-testid 的出站卡片。 */
     const cards = []
     const walk = node => {
       if (node === null || typeof node !== 'object') return
       if (Array.isArray(node)) { node.forEach(walk); return }
-      if (node.props?.['data-device-id'] !== undefined) cards.push(node)
+      if (node.props?.['data-testid'] === 'outbound-paired') cards.push(node)
       walk(node.props?.children)
     }
     walk(tree)
 
-    const online = cards.find(card => card.props['data-device-id'] === 'on')
-    const offline = cards.find(card => card.props['data-device-id'] === 'off')
-    assert.equal(online.props['data-online'], 'true')
-    assert.equal(offline.props['data-online'], 'false')
-    assert.match(String(offline.props.className), /offline/u, '离线卡片必须带 offline 类（置灰）')
+    assert.equal(cards.length, 1, '必须渲染出已配对目标卡')
+    assert.match(String(cards[0].props.className), /is-offline/u, '未连接的目标卡必须带 is-offline（置灰）')
+    assert.equal(cards[0].props['data-status'], 'paired')
+  })
+
+  it('入站设备的 offline 判定函数仍可用（统计 activeDevices 依赖它）', () => {
+    const at = 1_000_000_000
+    assert.equal(page.deviceStatus({ revokedAt: null, lastSeenAt: new Date(at - 1_000).toISOString() }, at), 'connected')
+    assert.equal(page.deviceStatus({ revokedAt: null, lastSeenAt: null }, at), 'paired')
   })
 })
 
@@ -128,19 +131,16 @@ describe('状态只用标签表达（不堆叠文字说明）', () => {
       ],
     }), noopActions)
 
+    // 入站设备不再在运行页渲染，因此三态 pill 不应出现。
     const pills = byTestId(tree, 'device-status')
-    const statuses = pills.map(pill => pill.props['data-status']).sort()
-    assert.deepEqual(statuses, ['connected', 'invalid', 'paired'], '三态各渲染一次')
+    assert.equal(pills.length, 0, '运行页不渲染入站设备状态 pill')
 
     const texts = collectText(tree)
-    assert.ok(texts.includes('已连接'))
-    assert.ok(texts.includes('已信任（离线）'))
-    assert.ok(texts.includes('已撤销'))
-
-    // 不应出现任何解释性长文案
+    // 状态只用标签表达：页面不得堆叠「为什么离线」之类的解释段落。
     const all = texts.join('')
     for (const banned of ['可随时重新连接', '无需重新扫码', '挤下线', '配对信息仍然保留']) {
       assert.equal(all.includes(banned), false, `UI 不应出现解释文案：${banned}`)
     }
+
   })
 })

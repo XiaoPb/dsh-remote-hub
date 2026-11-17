@@ -458,14 +458,12 @@ describe('区块结构（design-system §9：页头 + 区块 1–5）', () => {
     assert.equal(isDeviceOnline({ revokedAt: null, lastSeenAt: new Date(at - 10_000).toISOString() }, at), true)
     assert.equal(isDeviceOnline({ revokedAt: null, lastSeenAt: null }, at), false)
 
+    // 2026-11-17 重构：云端设备页只列**本机连出去**的设备（已配对目标），
+    // 「谁连进本机」归设置页，因此不再有「全部 / 连接本机」这个筛选。
     const tree = renderRemoteHubPage(baseState(), noopActions)
-    assert.equal(collectByTestId(tree, 'device-filter').length, 1)
-    // `Segmented` 是组件元素：选项 testid 在它的 props.options 里（渲染后才是按钮）。
-    const group = collectByTestId(tree, 'device-filter')[0]
-    const optionIds = group.type?.name === 'Segmented'
-      ? group.props.options.map(option => option.testId)
-      : collectByTestId(tree, 'filter').map(node => node.props['data-testid'])
-    assert.ok(optionIds.filter(id => id === 'filter').length >= 2, '全部/连接本机两个筛选')
+    assert.equal(collectByTestId(tree, 'device-filter').length, 0, '不再有入站/出站筛选')
+    assert.equal(collectByTestId(tree, 'devices-section').length, 1, '仍有「已配对的设备」区块')
+    assert.equal(collectByTestId(tree, 'remote-hub-devices').length, 0, '不渲染入站可信客户端网格')
   })
 
   it('② 三态文案与离线置灰', async () => {
@@ -477,15 +475,10 @@ describe('区块结构（design-system §9：页头 + 区块 1–5）', () => {
       { deviceId: 'c', label: '失效设备', role: 'control', revokedAt: new Date(at).toISOString(), lastSeenAt: null },
     ]
     const tree = renderRemoteHubPage(baseState({ devices: rows, now: at }), noopActions)
-    const pills = collectByTestId(tree, 'device-status')
-    const byStatus = new Map(pills.map(pill => [pill.props['data-status'], pill]))
-    assert.ok(byStatus.has('connected'), '必须渲染「已连接」')
-    assert.ok(byStatus.has('paired'), '必须渲染「已信任（离线）」')
-    assert.ok(byStatus.has('invalid'), '必须渲染「已撤销」')
+    // 2026-11-17：入站设备（谁连进了本机）不在云端设备页展示，统一放设置页。
+    assert.equal(collectByTestId(tree, 'device-status').length, 0, '运行页不再渲染入站设备状态')
     const texts = collectText(tree)
-    assert.ok(texts.includes('已连接'))
-    assert.ok(texts.includes('已信任（离线）'))
-    assert.ok(texts.includes('已撤销'))
+    assert.ok(texts.some(t => t.includes('设置 → 登录与账号')), '主卡引导去设置页管理接入设备')
   })
 
 
@@ -517,7 +510,7 @@ describe('区块结构（design-system §9：页头 + 区块 1–5）', () => {
 
 
 
-  it('可信客户端：运行页只显示状态，权限与撤销指向设置页', async () => {
+  it('可信客户端：运行页不展示入站设备，身份管理统一在设置页', async () => {
     const { renderRemoteHubPage } = await loadPage()
     const tree = renderRemoteHubPage(baseState({
       devices: [
@@ -525,14 +518,15 @@ describe('区块结构（design-system §9：页头 + 区块 1–5）', () => {
         { deviceId: 'd2', label: 'Old', role: 'full', lastSeenAt: null, revokedAt: '2026-01-01T00:00:00Z' },
       ],
     }), noopActions)
-    // 运行页不再提供撤销/删除：身份管理统一在设置页，避免两处都能改权限。
+    // 2026-11-17 重构：云端设备页 = 本机连出去的设备。
+    // 「谁连进了本机」整体归设置页「登录与账号」，运行页不再渲染这些行。
     assert.equal(collectByTestId(tree, 'revoke').length, 0)
     assert.equal(collectByTestId(tree, 'revoke-all').length, 0)
     assert.equal(collectByTestId(tree, 'device-delete').length, 0)
-    assert.ok(collectByTestId(tree, 'manage-in-settings').length >= 1, '每张卡都指向设置页')
+    assert.equal(collectByTestId(tree, 'device-status').length, 0, '不渲染入站设备状态')
     const texts = collectText(tree)
-    assert.ok(texts.some(t => t.includes('Pixel 9')))
-    assert.ok(texts.some(t => t.includes('已撤销')), '已吊销行显示「已撤销」')
+    assert.ok(!texts.some(t => t.includes('Pixel 9')), '入站设备名不出现在运行页')
+    assert.ok(texts.some(t => t.includes('设置 → 登录与账号')), '引导去设置页')
   })
 
   it('账号认证模式：对端账号登录表单存在，空输入禁用，填写后可提交', async () => {
@@ -603,16 +597,21 @@ describe('区块结构（design-system §9：页头 + 区块 1–5）', () => {
     assert.equal(collectByTestId(tree, 'diag-target-origin').length, 1)
   })
 
-  it('空设备表：引导文案（不是空白）', async () => {
+  it('空设备表：给出「去连接新设备」的引导（不是空白）', async () => {
     const { renderRemoteHubPage } = await loadPage()
     const tree = renderRemoteHubPage(baseState(), noopActions)
-    assert.equal(collectByTestId(tree, 'devices-empty').length, 1)
+    assert.equal(collectByTestId(tree, 'outbound-none').length, 1)
+    const texts = collectText(tree)
+    assert.ok(texts.some(t => t.includes('连接新设备')), '引导指向连接表单')
   })
 
   it('主控端：本地模式显示未连接；云端模式显示目标与断开', async () => {
     const { renderRemoteHubPage } = await loadPage()
     const local = renderRemoteHubPage(baseState(), noopActions)
-    assert.equal(collectByTestId(local, 'not-connected').length, 1)
+    // 未连接时不再单独渲染一行「未连接」文案，而是直接给出可填写的连接表单。
+    assert.equal(collectByTestId(local, 'not-connected').length, 0)
+    assert.equal(collectByTestId(local, 'origin-input').length, 1, '未连接时展示地址输入')
+    assert.equal(collectByTestId(local, 'account-user').length, 1, '账号输入与地址同卡')
     assert.equal(collectByTestId(local, 'detach').length, 0)
 
     const cloud = renderRemoteHubPage(baseState({

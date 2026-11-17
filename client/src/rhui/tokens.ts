@@ -1,17 +1,17 @@
 /**
- * Remote Hub 设计系统：`--rh-*` token 与基础样式（**权威基线**：`dev/ui-redesign/design-system.md`）。
+ * Remote Hub 设计系统：「--rh-*「 token 与基础样式（**权威基线**：「dev/ui-redesign/design-system.md「）。
  *
- * 两条硬约束（由 `test/rh-design-system.test.mjs` 守门）：
- *  1. 本文件是**唯一**允许出现字面色值（`#RRGGBB` / `rgba()`）的地方；
- *     `client/src/**` 其余文件（含公共组件）一律只写 `var(--rh-*)`。
- *  2. `client/src/**` 内不再出现非 `--rh-*` 的 CSS 变量定义与 `dsw-alias` 内联兜底色值。
+ * 两条硬约束（由 「test/rh-design-system.test.mjs「 守门）：
+ *  1. 本文件是**唯一**允许出现字面色值（「#RRGGBB「 / 「rgba()「）的地方；
+ *     「client/src/**「 其余文件（含公共组件）一律只写 「var(--rh-*)「。
+ *  2. 「client/src/**「 内不再出现非 「--rh-*「 的 CSS 变量定义与 「dsw-alias「 内联兜底色值。
  *
- * 注入方式：`renderRemoteHubPage` / `renderAccountPage` 的根容器里
- * `React.createElement('style', {'data-rh-theme': ''}, RH_CSS)`（幂等；同一份字符串
- * 只会让浏览器解析一次）。外部宿主可以预先在任意祖先元素覆盖 `--rh-*` 整体换肤。
+ * 注入方式：「renderRemoteHubPage「 / 「renderAccountPage「 的根容器里
+ * 「React.createElement('style', {'data-rh-theme': ''}, RH_CSS)「（幂等；同一份字符串
+ * 只会让浏览器解析一次）。外部宿主可以预先在任意祖先元素覆盖 「--rh-*「 整体换肤。
  *
- * 亮暗双套：亮色为默认；`@media (prefers-color-scheme: dark)` 跟随系统，
- * 根容器 `[data-theme="dark"]` 可强制（DSH 侧边弹窗里由宿主决定）。
+ * 亮暗双套：亮色为默认；「@media (prefers-color-scheme: dark)「 跟随系统，
+ * 根容器 「[data-theme="dark"]「 可强制（DSH 侧边弹窗里由宿主决定）。
  *
  * @module dsh-remote-hub/client/rhui/tokens
  */
@@ -22,47 +22,72 @@ const LIGHT_TOKENS = `  /* ── 表面 ─────────────
   --rh-surface: var(--dsw-alias-bg-layer-2, #FFFFFF);
   --rh-border: var(--dsw-alias-border-l1, #ECECF0);
   --rh-border-strong: var(--dsw-alias-border-l2, #E0E2E8);
-  /* ── 文字 ─────────────────────────────────────────── */
-  --rh-text: var(--dsw-alias-text-primary, #111418);
-  --rh-text-2: var(--dsw-alias-text-secondary, #6B7280);
-  --rh-text-3: var(--dsw-alias-text-tertiary, #6B7280); /* 从 #9CA3AF 调深，确保 4.5:1 对比度 */
+  /* ── 文字（**优先用 DSH 自己的文字 token**）────────────
+   * 宿主 DSH 的文字色由 「--dsw-alias-label-*「 承载（见
+   * 「packages/client/ui-theme/src/styles/design-platform.css「）：
+   *   label-primary / label-secondary / label-tertiary / label-caption / label-dimmed
+   * 它们随 DSH 主题（浅/深）整套切换，是**唯一正确的文字来源**。
+   *
+   * ⚠️ 之前误用了 「--dsw-alias-text-primary「（DSH **没有**这个 token），
+   * 于是永远回落到写死的浅色值 「#111418「 → 深色主题下「深底黑字」，几乎不可读。
+   * 现在：有上游 label token 就用上游，没有再退回本插件的安全兜底。 */
+  --rh-text: var(--dsw-alias-label-primary, #111418);
+  --rh-text-2: var(--dsw-alias-label-secondary, #4B5563);
+  --rh-text-3: var(--dsw-alias-label-tertiary, #6B7280);
   /* ── 选中态（跟随宿主：分段控件 / 标签的选中底）──────
    * 默认走宿主的 layer-3 / hover 颜色，不用纯黑；只有宿主完全没提供时才回退到
    * 浅灰底。--rh-accent 是「选中底」，强调按钮等需要深底的地方用 --rh-strong。 */
   --rh-accent: var(--dsw-alias-bg-layer-3, #E9EAEE);
-  --rh-accent-fg: var(--dsw-alias-text-primary, #111418);
+  --rh-accent-fg: var(--dsw-alias-label-primary, #111418);
   --rh-accent-hover: var(--dsw-alias-bg-layer-hover, #E2E4E9);
   --rh-strong: #111418;
   --rh-strong-fg: #FFFFFF;
   --rh-strong-hover: #1F2228;
-  /* ── 语义色 ───────────────────────────────────────── */
-  --rh-blue: var(--dsw-alias-brand-primary, #3B82F6);
+  /* ── 语义色 ───────────────────────────────────────────
+   * ⚠️ **不继承 「--dsw-alias-brand-primary「**：DSH 的这个 token 在深色主题下是
+   * near-white（#f9fafb），语义是「品牌反白」，拿它当按钮底色会得到白底白字。
+   * 同理 state-*-primary 在宿主的明暗两套里并不保证可作文字色，故自持一套。 */
+  --rh-blue: #2563EB; /* 主按钮底色：白字对比 5.17:1（#3B82F6 只有 3.68:1） */
   --rh-blue-bg: rgba(59,130,246,.1);
   --rh-blue-ring: rgba(59,130,246,.2);
-  --rh-green: var(--dsw-alias-state-success-primary, #10B981);
+  --rh-green: #10B981;
   --rh-green-bg: rgba(16,185,129,.12);
-  --rh-red: var(--dsw-alias-state-error-primary, #EF4444);
+  --rh-red: #EF4444;
   --rh-red-bg: rgba(239,68,68,.1);
   --rh-red-ring: rgba(239,68,68,.2);
-  --rh-orange: var(--dsw-alias-state-warning-primary, #F59E0B);
+  --rh-orange: #F59E0B;
   --rh-orange-bg: rgba(245,158,11,.1);
   --rh-purple: #8B5CF6;
   --rh-purple-bg: rgba(139,92,246,.1);
+  /* ── 语义色·文字版（WCAG AA 4.5:1）─────────────────────
+   * 上面那组 --rh-green / --rh-red / … 是「图形色」（圆点、左边框、开关底、
+   * 进度环），对白色只有 2.0–3.8:1，当「文字色」用不合格
+   * （实测：完成态步骤条 2.28:1、绿色 Pill「已启用 / 在线」2.28:1）。
+   * 规则：凡是 color: 用到语义色的地方，一律用下面这组 *-text；
+   * 背景仍用 *-bg。浅色下压深，深色下用图形色即可（对 #17191d ≥ 6.9:1）。 */
+  --rh-green-text: #047857;
+  --rh-red-text: #B91C1C;
+  --rh-orange-text: #B45309;
+  --rh-blue-text: #2563EB;
+  --rh-purple-text: #7C3AED;
   /* ── 阴影 ─────────────────────────────────────────── */
   --rh-shadow: 0 1px 3px rgba(17,20,24,.06), 0 4px 16px rgba(17,20,24,.04);
   --rh-shadow-lg: 0 8px 32px rgba(17,20,24,.12);
   --rh-mask: rgba(0,0,0,.4);`
 
-/** 暗色覆盖值（系统偏好与 `[data-theme="dark"]` 共用一份）。 */
+/** 暗色覆盖值（系统偏好与 「[data-theme="dark"]「 共用一份）。 */
 const DARK_TOKENS = `  --rh-bg: #17191d;
   --rh-surface: #1f2228;
   --rh-border: #2c3037;
   --rh-border-strong: #3a4048;
-  --rh-text: #eceef1;
-  --rh-text-2: #a3aab4;
-  --rh-text-3: #9CA3AF; /* 从 #6d747e 调亮，确保暗色模式 4.5:1 对比度 */
+  /* 文字同样优先用宿主 label token（宿主不存在时用本插件的深色安全值）。
+   * 注意：即使本插件的 「@media (prefers-color-scheme: dark)「 生效而宿主仍是浅色，
+   * 这里也不会取到宿主的浅色文字——因为宿主 token 与它的底色总是成对的。 */
+  --rh-text: var(--dsw-alias-label-primary, #eceef1);
+  --rh-text-2: var(--dsw-alias-label-secondary, #a3aab4);
+  --rh-text-3: var(--dsw-alias-label-tertiary, #9CA3AF);
   --rh-accent: var(--dsw-alias-bg-layer-3, #2c3037);
-  --rh-accent-fg: var(--dsw-alias-text-primary, #eceef1);
+  --rh-accent-fg: var(--dsw-alias-label-primary, #eceef1);
   --rh-accent-hover: var(--dsw-alias-bg-layer-hover, #343941);
   --rh-strong: #eceef1;
   --rh-strong-fg: #17191d;
@@ -72,6 +97,12 @@ const DARK_TOKENS = `  --rh-bg: #17191d;
   --rh-red-bg: rgba(239,68,68,.15);
   --rh-orange-bg: rgba(245,158,11,.15);
   --rh-purple-bg: rgba(139,92,246,.15);
+  /* 语义色·文字版：深色底下图形色本身已 ≥6.9:1，直接用即可。 */
+  --rh-green-text: #22c55e;
+  --rh-red-text: #f87171;
+  --rh-orange-text: #fbbf24;
+  --rh-blue-text: #60a5fa;
+  --rh-purple-text: #a78bfa;
   --rh-shadow: 0 1px 3px rgba(0,0,0,.2), 0 4px 16px rgba(0,0,0,.12);
   --rh-shadow-lg: 0 8px 32px rgba(0,0,0,.5);`
 
@@ -94,7 +125,7 @@ const SCALE_TOKENS = `  /* ── 字号 ─────────────
   --rh-pad: 20px;
   --rh-pad-mobile: 14px;`
 
-/** `--rh-*` 变量块（供宿主在任意祖先元素上覆盖：`Object.assign(el.style, RH_TOKENS)`）。 */
+/** 「--rh-*「 变量块（供宿主在任意祖先元素上覆盖：「Object.assign(el.style, RH_TOKENS)「）。 */
 export const RH_TOKEN_CSS = `.rh-root, [data-rh-scope] {
 ${LIGHT_TOKENS}
 ${SCALE_TOKENS}
@@ -103,15 +134,47 @@ ${SCALE_TOKENS}
 /** 设计系统完整样式表（token + 组件类 + 响应式）。 */
 export const RH_CSS = `${RH_TOKEN_CSS}
 
-/* 暗色：系统偏好（宿主显式 [data-theme="light"] 时不被覆盖） */
+/* ══ 暗色主题 ══════════════════════════════════════════════════════════
+ *
+ * ⚠️ **跟随 DSH 的实际主题，而不是 「prefers-color-scheme「**（0.5.1 修复的根本原因）。
+ *
+ * DSH 的主题是**应用内设置**（设置 → 通用 → 外观：浅色 / 深色 / 跟随系统），
+ * 它通过下面两个标记把当前主题写到 DOM 上：
+ *   - 「html[data-ds-theme-source="dark"]「  （theme source，取自 ui-theme）
+ *   - 「body[data-ds-dark-theme]「           （旧版标记，两者都兼容）
+ * 并且它会在 「html「 上写 「color-scheme: dark「。
+ *
+ * 只写 「@media (prefers-color-scheme: dark)「 会**与宿主脱钩**：实测用户把 DSH 设成
+ * 深色、而系统是浅色时，宿主已是深色（body 近黑、label-primary 近白），插件却仍渲染
+ * 浅色底 —— 于是「深色背景 + 深色文字 / 白底白字」，几乎不可读。
+ *
+ * 优先级（从高到低）：
+ *   1. 组件自身 「[data-theme]「（调用方可强制）
+ *   2. 宿主 DSH 主题标记（html/body 上的 data-ds-*）
+ *   3. system 「prefers-color-scheme「（纯浏览器/无宿主时的兜底）
+ */
+/* 1) 显式强制 */
+.rh-root[data-theme="dark"], [data-rh-scope][data-theme="dark"] {
+${DARK_TOKENS}
+}
+/* 2) 跟随 DSH 主题标记（最高优先的自动来源） */
+html[data-ds-theme-source="dark"] .rh-root:not([data-theme="light"]),
+html[data-ds-theme-source="dark"] [data-rh-scope]:not([data-theme="light"]),
+body[data-ds-dark-theme] .rh-root:not([data-theme="light"]),
+body[data-ds-dark-theme] [data-rh-scope]:not([data-theme="light"]) {
+${DARK_TOKENS}
+}
+/* 3) 兜底：没有 DSH 标记时（纯浏览器宿主）看系统偏好 */
 @media (prefers-color-scheme: dark) {
-  .rh-root:not([data-theme="light"]), [data-rh-scope]:not([data-theme="light"]) {
+  html:not([data-ds-theme-source]):not(:has(body[data-ds-dark-theme])) .rh-root:not([data-theme="light"]),
+  html:not([data-ds-theme-source]):not(:has(body[data-ds-dark-theme])) [data-rh-scope]:not([data-theme="light"]) {
 ${DARK_TOKENS}
   }
 }
-/* 暗色：宿主强制 */
-.rh-root[data-theme="dark"], [data-rh-scope][data-theme="dark"] {
-${DARK_TOKENS}
+/* 3b) DSH 明确是**浅色**时，别让系统深色把插件带跑 */
+html[data-ds-theme-source="light"] .rh-root:not([data-theme="dark"]),
+html[data-ds-theme-source="light"] [data-rh-scope]:not([data-theme="dark"]) {
+${LIGHT_TOKENS}
 }
 
 /* ===== 组件 ===== */
@@ -235,8 +298,8 @@ ${DARK_TOKENS}
 }
 .rh-step.is-current { color: var(--rh-text); background: var(--rh-surface); border: 1px solid var(--rh-border-strong); }
 .rh-step.is-current .rh-step-no { background: var(--rh-strong); color: var(--rh-strong-fg); }
-.rh-step.is-done { color: var(--rh-green); }
-.rh-step.is-done .rh-step-no { background: var(--rh-green-bg); color: var(--rh-green); }
+.rh-step.is-done { color: var(--rh-green-text); }
+.rh-step.is-done .rh-step-no { background: var(--rh-green-bg); color: var(--rh-green-text); }
 .rh-h1 {
   margin: 0; font-size: var(--rh-fs-h1); font-weight: 700; letter-spacing: -.3px;
   color: var(--rh-text); display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -279,7 +342,7 @@ ${DARK_TOKENS}
 .rh-btn:focus-visible { outline: 2px solid var(--rh-blue); outline-offset: 2px; }
 .rh-btn:disabled { opacity: .4; cursor: not-allowed; pointer-events: none; }
 .rh-btn.is-primary { background: var(--rh-blue); border-color: var(--rh-blue); color: #fff; }
-.rh-btn.is-danger { background: var(--rh-red-bg); border-color: var(--rh-red); color: var(--rh-red); }
+.rh-btn.is-danger { background: var(--rh-red-bg); border-color: var(--rh-red); color: var(--rh-red-text); }
 .rh-btn.is-ghost { background: transparent; border-color: transparent; color: var(--rh-text-2); }
 .rh-btn.is-ghost:hover:not(:disabled) { color: var(--rh-text); background: var(--rh-bg); }
 .rh-btn.is-selected { background: var(--rh-accent); border-color: var(--rh-border-strong); color: var(--rh-accent-fg); }
@@ -297,7 +360,7 @@ ${DARK_TOKENS}
 .rh-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; margin: 0 0 12px; }
 .rh-field-label { font-size: var(--rh-fs-label); font-weight: 500; color: var(--rh-text-2); }
 .rh-field-hint { font-size: var(--rh-fs-label); color: var(--rh-text-3); }
-.rh-field-error { font-size: var(--rh-fs-label); color: var(--rh-red); }
+.rh-field-error { font-size: var(--rh-fs-label); color: var(--rh-red-text); }
 .rh-input, .rh-textarea, .rh-select {
   width: 100%; min-width: 0; box-sizing: border-box;
   font-family: inherit; font-size: max(16px, var(--rh-fs-body)); color: var(--rh-text);
@@ -339,13 +402,13 @@ ${DARK_TOKENS}
   background: var(--rh-bg); color: var(--rh-text-2); border: 1px solid transparent;
   white-space: nowrap;
 }
-.rh-pill.is-online { background: var(--rh-green-bg); color: var(--rh-green); }
+.rh-pill.is-online { background: var(--rh-green-bg); color: var(--rh-green-text); }
 .rh-pill.is-offline { background: var(--rh-bg); color: var(--rh-text-3); }
-.rh-pill.is-error { background: var(--rh-red-bg); color: var(--rh-red); }
-.rh-pill.is-warning { background: var(--rh-orange-bg); color: var(--rh-orange); }
+.rh-pill.is-error { background: var(--rh-red-bg); color: var(--rh-red-text); }
+.rh-pill.is-warning { background: var(--rh-orange-bg); color: var(--rh-orange-text); }
 .rh-pill.is-neutral { background: var(--rh-bg); color: var(--rh-text-2); border-color: var(--rh-border-strong); }
-.rh-pill.is-info { background: var(--rh-blue-bg); color: var(--rh-blue); }
-.rh-pill.is-purple { background: var(--rh-purple-bg); color: var(--rh-purple); }
+.rh-pill.is-info { background: var(--rh-blue-bg); color: var(--rh-blue-text); }
+.rh-pill.is-purple { background: var(--rh-purple-bg); color: var(--rh-purple-text); }
 .rh-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
 
 /* Notice */
@@ -356,7 +419,7 @@ ${DARK_TOKENS}
   color: var(--rh-text); font-size: var(--rh-fs-body);
 }
 .rh-notice.is-success { border-left-color: var(--rh-green); background: var(--rh-green-bg); }
-.rh-notice.is-error { border-left-color: var(--rh-red); background: var(--rh-red-bg); color: var(--rh-red); }
+.rh-notice.is-error { border-left-color: var(--rh-red); background: var(--rh-red-bg); color: var(--rh-red-text); }
 .rh-notice.is-warning { border-left-color: var(--rh-orange); background: var(--rh-orange-bg); }
 
 /* Toggle */
@@ -608,9 +671,9 @@ ${DARK_TOKENS}
 .rh-logrow:first-child { border-top: 0; }
 .rh-logtime { font-family: var(--rh-mono); color: var(--rh-text-3); }
 .rh-loglevel { font-weight: 600; }
-.rh-log-error .rh-loglevel { color: var(--rh-red); }
-.rh-log-warn .rh-loglevel { color: var(--rh-orange); }
-.rh-log-info .rh-loglevel { color: var(--rh-green); }
+.rh-log-error .rh-loglevel { color: var(--rh-red-text); }
+.rh-log-warn .rh-loglevel { color: var(--rh-orange-text); }
+.rh-log-info .rh-loglevel { color: var(--rh-green-text); }
 .rh-logtitle { color: var(--rh-text); font-weight: 500; }
 .rh-logpath { font-family: var(--rh-mono); font-size: 11px; color: var(--rh-text-3); overflow-wrap: anywhere; }
 .rh-logdetail { grid-column: 3 / -1; color: var(--rh-text-3); overflow-wrap: anywhere; }
@@ -622,7 +685,7 @@ ${DARK_TOKENS}
   font-size: var(--rh-fs-label);
 }
 .rh-rules li { color: var(--rh-text-3); }
-.rh-rules li[data-ok="true"] { color: var(--rh-green); }
+.rh-rules li[data-ok="true"] { color: var(--rh-green-text); }
 
 /* 可复制的等宽值 */
 .rh-codebox {
@@ -637,7 +700,7 @@ ${DARK_TOKENS}
 }
 .rh-link {
   border: 0; background: transparent; padding: 0; cursor: pointer; font-family: inherit;
-  font-size: inherit; color: var(--rh-blue); text-decoration: underline;
+  font-size: inherit; color: var(--rh-blue-text); text-decoration: underline;
 }
 
 /* 内联二次确认 / 提权框 */
@@ -677,6 +740,10 @@ ${DARK_TOKENS}
   .rh-root h1, .rh-h1 { font-size: 20px; }
   .rh-card { padding: 16px; }
   .rh-shell { max-width: none; }
+  /* 双列下拉框（角色 / 权限上限）在 480–899px 也要纵向堆叠：
+   * 宽度不够时两列会各自被压到 ~120px，标签被截断且视觉上像「并排小方块」。
+   * 验收 D-1 明确要求 480px 与 320px 都堆叠、各占全宽。 */
+  .rh-select-pair { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 479px) {
   .rh-root h1, .rh-h1 { font-size: 18px; }
@@ -763,7 +830,7 @@ ${DARK_TOKENS}
   }
 }
 /* Screen reader only (visually hidden) */
-.sr-only {
+.rh-sr-only {
   position: absolute;
   width: 1px;
   height: 1px;

@@ -43,6 +43,16 @@ export interface AuthApiOptions {
    * 守卫上的认证面因此额外在响应体里返回 `sessionToken`，这里负责保存与回填。
    */
   headerSession?: boolean
+  /**
+   * 运行时配置通道（`admin.config` / `admin.configPatch`）。
+   *
+   * 认证面不承载运行时配置——那是守卫 `admin.*` 面（owner 权限）的职责。
+   * 由宿主在装配时从 transport 注入，避免 auth 模块直接依赖 transport。
+   */
+  configChannel?: {
+    get(): Promise<{ ok: boolean; config: Record<string, unknown> }>
+    patch(patch: Record<string, unknown>): Promise<{ ok: boolean; config: Record<string, unknown> }>
+  }
 }
 
 /** 认证 API。 */
@@ -108,6 +118,18 @@ export interface AuthApi {
     /** create 时仅在响应里出现一次的一次性初始口令。 */
     initialPassword?: string
   }>
+  /**
+   * 读取运行时配置快照（`publicAuthorities` 等）。
+   *
+   * 走守卫的 `admin.config` 面；未连接守卫时拒绝，调用方需自行兜底。
+   */
+  loadConfig?(): Promise<{ ok: boolean; config: Record<string, unknown> }>
+  /**
+   * 白名单写入（仅 `CONFIG_WRITABLE_KEYS` / `CONFIG_COLD_WRITABLE_KEYS` 内的键）。
+   *
+   * 冷字段（`publicAuthorities`）写入后需重启 DSH 才生效。
+   */
+  patchConfig?(patch: Record<string, unknown>): Promise<{ ok: boolean; config: Record<string, unknown> }>
 }
 
 /** 解析错误响应。 */
@@ -223,6 +245,23 @@ export function createAuthApi(options: AuthApiOptions = {}): AuthApi {
     },
     async accounts(action) {
       return readJson(await post(AUTH_ROUTES.accounts, action))
+    },
+    // ── 运行时配置（信任的公网地址）────────────────────────────────────────
+    //
+    // 认证面（`/remote-auth/*`）**不**承载运行时配置：那是守卫 `admin.*` 面的职责
+    // （需要 owner 权限）。所以这里不自己发请求，而是转交给注入的通道；
+    // 未注入时明确拒绝，避免页面误以为能读写配置。
+    async loadConfig() {
+      if (options.configChannel === undefined) {
+        throw new AuthApiError('config-unavailable', 'runtime config channel is not attached', 501)
+      }
+      return options.configChannel.get()
+    },
+    async patchConfig(patch) {
+      if (options.configChannel === undefined) {
+        throw new AuthApiError('config-unavailable', 'runtime config channel is not attached', 501)
+      }
+      return options.configChannel.patch(patch)
     },
   }
 }

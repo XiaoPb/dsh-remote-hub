@@ -11,6 +11,7 @@
  * @module dsh-remote-hub/client/rhui/components
  */
 import React from 'react'
+import { t } from './i18n.js'
 
 /** 把条件类名拼成 `className`。 */
 export function cx(...names: readonly (string | false | null | undefined)[]): string {
@@ -282,6 +283,8 @@ export interface InputProps extends Testable {
   reveal?: boolean
   ariaLabel?: string
   title?: string
+  /** 元素 id（`Field` 的 `htmlFor` 指向它；缺省时回退到 `name`）。 */
+  id?: string
   onChange?: (event: React.ChangeEvent<HTMLInputElement>) => void
   onKeyDown?: (event: React.KeyboardEvent<HTMLInputElement>) => void
   autoFocus?: boolean
@@ -310,6 +313,7 @@ export function PasswordInput({ type = 'password', ...rest }: PasswordInputProps
   return React.createElement('span', { className: 'rh-input-wrap' },
     React.createElement('input', {
       ...rest,
+      ...fieldIdProps(rest.id, rest.name),
       type: shown ? 'text' : type,
       className: cx('rh-input', rest.mono && 'is-mono', rest.error && 'is-error', rest.otp && 'is-otp'),
       ...(rest.ariaLabel === undefined ? {} : { 'aria-label': rest.ariaLabel }),
@@ -317,10 +321,27 @@ export function PasswordInput({ type = 'password', ...rest }: PasswordInputProps
     React.createElement('button', {
       type: 'button',
       className: 'rh-eye',
-      'aria-label': shown ? '隐藏口令' : '显示口令',
-      title: shown ? '隐藏口令' : '显示口令',
+      // 无障碍名称走字典：与页面语言一致（验收 A-1 / I-1 / I-2）。
+      'aria-label': shown ? t('hidePassword') : t('showPassword'),
+      title: shown ? t('hidePassword') : t('showPassword'),
       onClick: () => { setShown(current => !current) },
     }, shown ? '🙈' : '👁'))
+}
+
+/**
+ * 给输入控件补齐 `id`，让 `Field` 的 `<label htmlFor>` 能真正关联到控件。
+ *
+ * 为什么需要：本仓库的调用方普遍只写 `name`（写成期望的 id），`Field` 的
+ * `htmlFor` 也照这个值写。若控件没有 `id`，label 的 `for` 就指向不存在的元素，
+ * 输入框等于没有 accessible name（axe `label` / critical，屏幕阅读器读不出字段名）。
+ * @param id - 显式 id。
+ * @param name - 控件 name（本仓库约定等于期望 id）。
+ * @returns 需要合并进控件属性的片段（已显式给 id 时为空对象）。
+ */
+function fieldIdProps(id: string | undefined, name: string | undefined): { id?: string } {
+  if (id !== undefined && id !== '') return {}
+  if (typeof name !== 'string' || name === '') return {}
+  return { id: name }
 }
 
 /**
@@ -341,6 +362,8 @@ export function Input({
 }: InputProps): React.ReactElement {
   return React.createElement('input', {
     ...rest,
+    // `Field` 用 `<label htmlFor={id}>` 挂标签，控件必须有匹配的 `id` 才能关联。
+    ...fieldIdProps(rest.id, rest.name),
     type,
     className: cx('rh-input', mono && 'is-mono', error && 'is-error', otp && 'is-otp'),
     ...(ariaLabel === undefined ? {} : { 'aria-label': ariaLabel }),
@@ -540,6 +563,19 @@ export function Segmented<T extends string>({
   onChange,
   ...rest
 }: SegmentedProps<T>): React.ReactElement {
+  /**
+   * 排队的焦点目标（见 handleKeyDown 的说明）。
+   * 放在组件级 ref：同一控件同一时刻只可能有一个待聚焦项。
+   */
+  const pendingFocus = React.useRef<{ container: Element | null; index: number } | null>(null)
+  React.useEffect(() => {
+    const pending = pendingFocus.current
+    if (pending === null) return
+    pendingFocus.current = null
+    const target = pending.container?.children[pending.index] as HTMLElement | undefined
+    target?.focus()
+  })
+
   const handleKeyDown = (event: React.KeyboardEvent, currentIndex: number): void => {
     let nextIndex = currentIndex
 
@@ -573,11 +609,17 @@ export function Segmented<T extends string>({
       attempts++
     }
 
-    if (options[nextIndex]?.disabled !== true) {
-      onChange(options[nextIndex].value)
-      // 聚焦到新选中的按钮
-      const target = event.currentTarget.parentElement?.children[nextIndex] as HTMLElement | undefined
-      target?.focus()
+    const next = options[nextIndex]
+    if (next !== undefined && next.disabled !== true) {
+      // 先记下要聚焦的序号，等 React 提交完再聚焦。
+      //
+      // ⚠️ 不能在 `onChange()` 之后立刻 `target.focus()`：React 是异步提交的，
+      // 此刻焦点还在**即将被替换**的旧 DOM 节点上；提交后旧节点脱离文档，
+      // 浏览器把焦点丢回 `<body>`——实测步骤：按 → 选中项变了，但焦点掉到 body，
+      // 后续键盘操作全部失效（WCAG 2.1.1 键盘不可用）。
+      // 用 microtask 在 React（legacy/并发都是 microtask 调度）提交之后再聚焦。
+      pendingFocus.current = { container: event.currentTarget.parentElement, index: nextIndex }
+      onChange(next.value)
     }
   }
 
@@ -604,7 +646,7 @@ export function Segmented<T extends string>({
       tabIndex: active ? 0 : -1,
       disabled: disabled || option.disabled === true,
       onClick: () => { onChange(option.value) },
-      onKeyDown: (e) => { handleKeyDown(e, index) },
+      onKeyDown: (e: React.KeyboardEvent<HTMLButtonElement>) => { handleKeyDown(e, index) },
     }, option.label)
   }))
 }

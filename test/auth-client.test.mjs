@@ -57,10 +57,21 @@ async function loadBuiltClientModule(relativeFile) {
   // 设计系统（`rhui/`）也被 AccountPage 依赖：整个目录镜像过去，同样重写 `@core/*`。
   const rhuiDir = join(directory, 'rhui')
   await mkdir(rhuiDir, { recursive: true })
-  for (const name of ['index', 'tokens', 'components', 'format', 'qr-code']) {
+  for (const name of ['index', 'tokens', 'components', 'format', 'qr-code', 'i18n']) {
     try {
       const text = await readFile(new URL(`../.build/client/client/src/rhui/${name}.js`, import.meta.url), 'utf8')
       await writeFile(join(rhuiDir, `${name}.js`), rewriteCore(text, '../core/src'), 'utf8')
+    } catch {
+      // 缺失时由导入方报错，测试自然失败。
+    }
+  }
+  // `rhui/i18n.js` 的双语字典在 `rhui/locales/` 下（同目录结构一并镜像）。
+  const localeDir = join(rhuiDir, 'locales')
+  await mkdir(localeDir, { recursive: true })
+  for (const name of ['zh-CN', 'en']) {
+    try {
+      const text = await readFile(new URL(`../.build/client/client/src/rhui/locales/${name}.js`, import.meta.url), 'utf8')
+      await writeFile(join(localeDir, `${name}.js`), rewriteCore(text, '../../core/src'), 'utf8')
     } catch {
       // 缺失时由导入方报错，测试自然失败。
     }

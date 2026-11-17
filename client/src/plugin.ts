@@ -35,6 +35,7 @@ import { createAuthApi } from './auth/api.js'
 import { createKeyring } from './auth/keyring.js'
 import { mountLocalPluginsPanel } from './local-plugin-manager/panel.js'
 import { watchTakeover } from './local-plugin-manager/lifecycle.js'
+import { attachLocaleService, subscribeLocale, t } from './rhui/i18n.js'
 
 /** 装配选项（缺省时从 `window.__DSH_REMOTE_HUB__` 读本机注入值）。 */
 export interface ClientAssemblyOptions {
@@ -149,8 +150,16 @@ function hubGlobal(): HubGlobal {
  * 的 transport —— 后者的 origin 在页面加载时就固定了，而连接动作恰恰是要换
  * origin。
  */
-/** 「登录与账号」页：本机账号 + 对端账号（出站信任记录）。 */
+/** 「身份与访问」页：本机账号 + 对端账号（出站信任记录）+ 访问来源。 */
 const AccountPage = createAccountPageComponent({
+  api: createAuthApi({
+    // 运行时配置走守卫 `admin.*` 面（owner 权限），不在认证面上。
+    // 这里把 transport 的 config 方法接进来，auth 模块因此不必依赖 transport。
+    configChannel: {
+      get: () => createAdminTransport().getConfig(),
+      patch: input => createAdminTransport().patchConfig(input),
+    },
+  }),
   async loadPeers() {
     const targets = await createAdminTransport().listOutboundTargets()
     return targets.map(target => ({
@@ -388,6 +397,17 @@ export function applyRemoteHubClient(ctx: Context, options: ClientAssemblyOption
     const transport = options.transport ?? createTransport(transportOptions)
     push(() => transport.close())
 
+    // 2.5 语言：跟随 DSH 自己的 locale 服务（设置 → 通用 → 语言）。
+    //     不读 `<html lang>`、不读 `navigator.language` 当唯一真源——宿主切语言时
+    //     由 `ctx.locale.subscribe` 推进本插件文案，无需刷新页面。
+    //     服务缺失（纯浏览器沙箱/单测）时安静跳过，保持浏览器兜底。
+    const localeFiber = injectWhenReady(ctx, ['locale'], 'locale', scoped => {
+      const service = (scoped as unknown as { locale?: Parameters<typeof attachLocaleService>[0] }).locale
+      return attachLocaleService(service)
+    })
+    const disposeLocaleFiber = localeFiber?.dispose
+    if (disposeLocaleFiber !== undefined) push(() => { void disposeLocaleFiber() })
+
     // 3. mount（同源模式；跨源由 transport 负责）——延迟到 `remote` 就绪。
     //    scoped ctx 已声明注入，mount 内部读服务不会再触发 get trap。
     if (sameOrigin) {
@@ -425,8 +445,14 @@ export function applyRemoteHubClient(ctx: Context, options: ClientAssemblyOption
 
       declare('sidebar.panellist', () => {
         // 侧栏行：图标行；label 供展开态文本与收起态 tooltip。
+        //
+        // ⚠️ label 必须是**惰性函数**而不是 `t(...)` 的返回值：槽位注册是一次性的，
+        // 传字符串等于把语言快照定死在注册那一刻，之后宿主切语言不会重来一遍注册。
+        // 官方契约 `SlotLabel = string | (() => string)`，宿主每次读取都调
+        // `resolveSlotLabel()` 重新求值（官方 ui-schedule / ui-settings-models 同样
+        // 写 `label: () => t('panel')`），所以 thunk 会跟着当前语言走。
         disposersNav.push(slots.register(
-          { name: 'sidebar.panellist', id: 'remote-hub', order: 60, label: '云端设备' },
+          { name: 'sidebar.panellist', id: 'remote-hub', order: 60, label: () => t('navRemoteHub') },
           RemoteHubNavIcon,
         ))
       })
@@ -441,11 +467,13 @@ export function applyRemoteHubClient(ctx: Context, options: ClientAssemblyOption
       // 账号与信任：挂在**设置页**（`settings.section`），与运行面分开：
       // 身份/口令/2FA/可信客户端属于配置，云端设备页只保留运行与连接。
       declare('settings.section', () => {
+        // 同上：label 用 thunk，语言切换时宿主自己重新求值，无需重新注册。
         disposersNav.push(slots.register(
-          { name: 'settings.section', id: 'remote-hub-account', order: 25, label: '登录与账号' },
+          { name: 'settings.section', id: 'remote-hub-account', order: 25, label: () => t('navAccountSettings') },
           AccountPage,
         ))
       })
+
       return () => { for (const dispose of [...disposersNav].reverse()) dispose() }
     })
     const disposeNavFiber = navFiber?.dispose

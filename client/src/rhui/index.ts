@@ -51,13 +51,13 @@ export {
   type ToggleProps,
 } from './components.js'
 export {
-  AUTH_ERROR_TEXT,
   authErrorText,
+  authErrorTextMap,
   formatDateTime,
   formatRelative,
   formatRole,
   formatRoleCeiling,
-  ROLE_OPTIONS,
+  roleOptions,
   roleOptionLabel,
   shortRoleLabel,
 } from './format.js'

@@ -27,6 +27,7 @@ import { isRoleName } from '@core/index.js'
 import type { RoleName } from '@core/index.js'
 
 import { expandHome } from './devices.js'
+import { canonicalAuthority, isLoopbackLiteral, isPrivateAddress } from './config.js'
 
 /** 页面可改的字段白名单（运行时可变、立即热生效）。 */
 export const CONFIG_WRITABLE_KEYS = [
@@ -44,8 +45,12 @@ export type ConfigWritableKey = (typeof CONFIG_WRITABLE_KEYS)[number]
  * 为什么不做热改：守卫的端口在装配时一次性 bind，换端口必须重建监听并丢弃
  * 全部在途连接（还会连带隧道与配对链接）；自动热切等于「点一下保存就断线」，
  * 风险高于收益。这里只持久化覆盖值，并在快照里标记 `restartPending`。
+ *
+ * `publicAuthorities` 同理：它是守卫来源围栏（`fence.ts`）的组成部分，
+ * 围栏在装配时构建。改它等于改变「哪些 Host 被信任」这个安全边界，
+ * 和换端口是同一类操作，不适合热切。
  */
-export const CONFIG_COLD_WRITABLE_KEYS = ['guardPort', 'network'] as const
+export const CONFIG_COLD_WRITABLE_KEYS = ['guardPort', 'network', 'publicAuthorities'] as const
 
 export type ConfigColdKey = (typeof CONFIG_COLD_WRITABLE_KEYS)[number]
 
@@ -88,8 +93,73 @@ const ALL_WRITABLE: readonly string[] = [...CONFIG_WRITABLE_KEYS, ...CONFIG_COLD
 /** 冷键集合（写入后需重启）。 */
 const COLD_SET: ReadonlySet<string> = new Set(CONFIG_COLD_WRITABLE_KEYS)
 
+/**
+ * 校验并规范化 `publicAuthorities`。
+ *
+ * 这是**安全边界**的输入，必须严格：
+ *  - 每项是裸 authority（`host` 或 `host:port`），不带 scheme / 路径 / userinfo；
+ *  - 拒绝通配符（`*`、`*.example.com`）——放行所有来源等于关掉围栏；
+ *  - 拒绝回环与私网地址——它们本来就无条件放行，写进来只会让人误以为必须配；
+ *  - 去重（大小写不敏感），保持稳定顺序。
+ *
+ * 复用 `canonicalAuthority`（与 `assertPublicAuthorities` 同源），不另写正则，
+ * 避免客户端与服务端判定漂移。
+ * @param value - 页面传来的值。
+ * @returns 规范化后的数组。
+ * @throws 任一项不合法时。
+ */
+function coercePublicAuthorities(value: unknown): string[] {
+  if (!Array.isArray(value)) throw new Error('config: publicAuthorities must be an array')
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (typeof item !== 'string') throw new Error('config: publicAuthorities items must be strings')
+    const raw = item.trim()
+    if (raw === '') throw new Error('config: publicAuthorities must not contain empty entries')
+    if (raw.includes('*')) {
+      throw new Error(`config: publicAuthorities must not use wildcards (${JSON.stringify(raw)})`)
+    }
+    const canonical = canonicalAuthority(raw)
+    if (canonical === undefined) {
+      throw new Error(
+        `config: publicAuthorities entry ${JSON.stringify(raw)} must be a bare host[:port] `
+        + 'authority (no scheme, path, userinfo, percent-encoding, unbracketed IPv6 or zero-padded port)',
+      )
+    }
+    // 回环 / 私网本来就被围栏无条件放行，写进白名单是冗余且误导。
+    // ⚠️ `isLoopbackLiteral` 只认 IP 字面量（127.0.0.0/8、::1），
+    // `localhost` 是**主机名**，要单独判。
+    const hostname = canonical.replace(/:\d+$/u, '')
+    if (hostname === 'localhost' || isLoopbackLiteral(hostname) || hostname === '[::1]') {
+      throw new Error(
+        `config: ${JSON.stringify(raw)} is a loopback address and is always allowed; no need to add it`,
+      )
+    }
+    if (isPrivateAddress(hostname)) {
+      throw new Error(
+        `config: ${JSON.stringify(raw)} is a private/LAN address and is allowed by the LAN mode; `
+        + 'only public hostnames need to be declared here',
+      )
+    }
+    const key = canonical.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(canonical)
+  }
+  return out
+}
+
+/** 两个冷项值是否等价（数组按内容比较，避免 `!==` 永远为真的假待重启）。 */
+function sameColdValue(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((item, index) => item === b[index])
+  }
+  return a === b
+}
+
 /** 校验并收敛一个可写字段；非法抛错。 */
 function coerce(key: string, value: unknown): unknown {
+  if (key === 'publicAuthorities') return coercePublicAuthorities(value)
   if (BOOLEAN_KEYS.includes(key)) {
     if (typeof value !== 'boolean') throw new Error(`config: ${key} must be boolean`)
     return value
@@ -146,8 +216,10 @@ export function createRuntimeConfigStore(deps: RuntimeConfigDeps): RuntimeConfig
     async get() {
       const [overrides, current] = await Promise.all([load(), Promise.resolve(deps.current())])
       // 冷项与运行值不同 = 有待重启才生效的修改。
+      // 用 sameColdValue 而不是 !==：数组按内容比，否则 publicAuthorities
+      // 每次都会因引用不同而永远显示「待重启」。
       const restartPending = [...COLD_SET].some(key =>
-        Object.hasOwn(overrides, key) && overrides[key as ConfigColdKey] !== current[key as ConfigReadableKey])
+        Object.hasOwn(overrides, key) && !sameColdValue(overrides[key as ConfigColdKey], current[key as ConfigReadableKey]))
       return { ...current, ...overrides, restartPending }
     },
     async patch(input) {

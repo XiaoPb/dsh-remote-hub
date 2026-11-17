@@ -147,7 +147,7 @@ export function assertLoopbackLiteral(host: string): void {
  * 判据与 DSH 自己的 `assertTrustedAuthority` 同语义：必须能在 `http:` / `https:`
  * 两个 special scheme 下原样解析，且规范化后与原文（忽略大小写）相等。
  */
-function canonicalAuthority(entry: string): string | undefined {
+export function canonicalAuthority(entry: string): string | undefined {
   let parsed: URL
   try {
     parsed = new URL(`http://${entry}`)

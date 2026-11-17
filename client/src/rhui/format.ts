@@ -22,12 +22,22 @@ export function formatRoleCeiling(role: string | undefined | null): string {
   return `${t('roleCeilingPrefix')}${formatRole(role)}`
 }
 
-/** 三段式角色选项（segmented 控件用）。 */
-export const ROLE_OPTIONS: readonly { value: RoleName; label: string }[] = [
-  { value: 'read-only', label: t('roleReadOnly') },
-  { value: 'control', label: t('roleControl') },
-  { value: 'full', label: t('roleFull') },
-]
+/**
+ * 三段式角色选项（segmented 控件用）。
+ *
+ * ⚠️ 必须**每次调用**重新求值，不能做成模块级 `const` 常量：
+ * `t()` 读的是模块级当前语言，而宿主/用户可以在页面已加载后切语言
+ * （「设置 → 通用 → 语言」）。`const ROLE_OPTIONS = [{ label: t(...) }]`
+ * 会把文案冻结在模块加载那一刻，切语言后角色下拉仍停在旧语言。
+ * @returns 角色选项（当前语言）。
+ */
+export function roleOptions(): readonly { value: RoleName; label: string }[] {
+  return [
+    { value: 'read-only', label: t('roleReadOnly') },
+    { value: 'control', label: t('roleControl') },
+    { value: 'full', label: t('roleFull') },
+  ]
+}
 
 /** 角色选项展示名。 */
 export function roleOptionLabel(role: RoleName): string {
@@ -40,44 +50,48 @@ export function shortRoleLabel(role: RoleName): string {
 }
 
 /**
- * 错误码 → 页面文案。
- * 未收录的码回落到通用提示。
+ * 错误码 → 页面文案（**函数形式**：同 {@link roleOptions}，
+ * 不能在模块加载时把 `t()` 的结果冻结成常量）。
+ * @param code - 错误码。
+ * @returns 当前语言下的文案。
  */
-export const AUTH_ERROR_TEXT: Readonly<Record<string, string>> = {
-  'auth-invalid-credentials': t('errInvalidCredentials'),
-  'auth-account-disabled': t('errAccountDisabled'),
-  'auth-account-not-found': t('errInvalidCredentials'),
-  'auth-account-exists': t('errDefault'),
-  'auth-last-admin': t('errDefault'),
-  'auth-self-action': t('errDefault'),
-  'auth-mfa-required': t('errDefault'),
-  'auth-mfa-invalid': t('errMfaInvalid'),
-  'auth-mfa-expired': t('errMfaExpired'),
-  'auth-password-change-required': t('errPasswordChangeRequired'),
-  'auth-current-password-invalid': t('errCurrentPasswordInvalid'),
-  'auth-password-weak': t('errPasswordWeak'),
-  'auth-password-unchanged': t('errPasswordUnchanged'),
-  'auth-role-exceeded': t('errForbidden'),
-  'auth-forbidden': t('errForbidden'),
-  'auth-rate-limited': t('errRateLimited'),
-  'auth-lease-expired': t('errMfaExpired'),
-  'auth-lease-not-expired': t('errDefault'),
-  'auth-client-invalid': t('errMfaExpired'),
-  'auth-proof-invalid': t('errDefault'),
-  'auth-unauthorized': t('errMfaExpired'),
-  'auth-unavailable': t('serviceUnavailable'),
-  displaced: t('errDefault'),
-  revoked: t('errMfaExpired'),
-  'rate-limited': t('errRateLimited'),
-  'network-unreachable': t('errDefault'),
-  'origin-invalid': t('errDefault'),
+export function authErrorTextMap(): Readonly<Record<string, string>> {
+  return {
+    'auth-invalid-credentials': t('errInvalidCredentials'),
+    'auth-account-disabled': t('errAccountDisabled'),
+    'auth-account-not-found': t('errInvalidCredentials'),
+    'auth-account-exists': t('errDefault'),
+    'auth-last-admin': t('errDefault'),
+    'auth-self-action': t('errDefault'),
+    'auth-mfa-required': t('errDefault'),
+    'auth-mfa-invalid': t('errMfaInvalid'),
+    'auth-mfa-expired': t('errMfaExpired'),
+    'auth-password-change-required': t('errPasswordChangeRequired'),
+    'auth-current-password-invalid': t('errCurrentPasswordInvalid'),
+    'auth-password-weak': t('errPasswordWeak'),
+    'auth-password-unchanged': t('errPasswordUnchanged'),
+    'auth-role-exceeded': t('errForbidden'),
+    'auth-forbidden': t('errForbidden'),
+    'auth-rate-limited': t('errRateLimited'),
+    'auth-lease-expired': t('errMfaExpired'),
+    'auth-lease-not-expired': t('errDefault'),
+    'auth-client-invalid': t('errMfaExpired'),
+    'auth-proof-invalid': t('errDefault'),
+    'auth-unauthorized': t('errMfaExpired'),
+    'auth-unavailable': t('serviceUnavailable'),
+    displaced: t('errDefault'),
+    revoked: t('errMfaExpired'),
+    'rate-limited': t('errRateLimited'),
+    'network-unreachable': t('errDefault'),
+    'origin-invalid': t('errDefault'),
+  }
 }
 
 /** 取错误码对应的文案。 */
 export function authErrorText(code: string | undefined | null, fallback?: string): string {
   const fb = fallback ?? t('errDefault')
   if (typeof code !== 'string' || code === '') return fb
-  return AUTH_ERROR_TEXT[code] ?? fb
+  return authErrorTextMap()[code] ?? fb
 }
 
 /** 绝对时间（`2026-11-14 03:20:43`）。 */

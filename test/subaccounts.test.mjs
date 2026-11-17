@@ -21,7 +21,9 @@ import { registerAlias } from './panel-alias-loader.mjs'
 await registerAlias()
 
 const CORE_FILES = ['index', 'protocol', 'auth', 'roles', 'device', 'capabilities', 'capabilities-redlines', 'version-drift', 'redact', 'carrier-contract']
-const RHUI_FILES = ['index', 'tokens', 'components', 'format', 'qr-code']
+const RHUI_FILES = ['index', 'tokens', 'components', 'format', 'qr-code', 'i18n']
+/** `rhui/i18n.js` 的双语字典（相对 `rhui/locales/`）。 */
+const RHUI_LOCALE_FILES = ['zh-CN', 'en']
 
 /**
  * 把 `.build/client` 的 AccountPage 与它的相对依赖镜像到临时目录后加载
@@ -48,6 +50,8 @@ async function loadAccountPage() {
     await writeFile(target, rewrite(source, `${'../'.repeat(depth)}core/src`), 'utf8')
   }
   for (const name of RHUI_FILES) await mirror(`rhui/${name}.js`)
+  // i18n 的字典拆在 `rhui/locales/` 下，单独镜像（否则 `rhui/i18n.js` 解析失败）。
+  for (const name of RHUI_LOCALE_FILES) await mirror(`rhui/locales/${name}.js`)
   await mirror('panel/qr.js')
   await mirror('auth/AccountPage.js')
   return import(pathToFileURL(join(directory, 'auth', 'AccountPage.js')).href)

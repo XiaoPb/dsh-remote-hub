@@ -20,13 +20,20 @@ export const en: Record<LocaleKey, string> = {
   saved: 'Got it',
   close: 'Close',
 
+  // ── Sidebar / settings navigation (host slot labels) ──────────
+  navRemoteHub: 'Remote devices',
+  navAccountSettings: 'Identity & access',
+
   // ── Page header ───────────────────────────────────────────────
-  pageTitle: 'Login & Account',
-  pageHint: 'Account, two-factor auth & device trust',
-  pageLead: 'Manage login, security policy and device trust for this machine. Every request is signed by this client\'s private key; leases rotate automatically every 7 days.',
+  pageTitle: 'Identity & Access',
+  pageHint: 'Accounts, verification & access sources',
+  pageLead: 'Manage identity and access for this machine: who may enter, how they prove it is them, and from where. Every request is signed by this client\'s private key; leases rotate automatically every 7 days.',
   loadingAccount: 'Loading account information',
   loadingAccountSr: 'Loading account information, please wait...',
   serviceUnavailable: 'Authentication service unavailable',
+  // ── Password visibility (eye button accessible name) ───────────
+  showPassword: 'Show password',
+  hidePassword: 'Hide password',
 
   // ── Stepper ───────────────────────────────────────────────────
   stepCredentials: 'Credentials',
@@ -133,6 +140,33 @@ export const en: Record<LocaleKey, string> = {
 
   // ── Password policy section (D) ───────────────────────────────
   policyTitle: 'Password management',
+  // ── Trusted public addresses (publicAuthorities) ─────────────
+  accessTitle: 'Trusted public addresses',
+  accessDesc: 'When this machine is reached through a domain, that domain must be declared here or every request is refused (403).',
+  accessEmptyTitle: 'No public address configured',
+  accessEmptyDesc: 'Only this machine (127.0.0.1) can reach the guard right now. If you use a tunnel or a domain, add it above.',
+  accessAddLabel: 'Add an address',
+  accessAddHint: 'Host name only — no http:// and no path, e.g. dsh.example.com',
+  accessAddPlaceholder: 'e.g. dsh.example.com',
+  accessAddBtn: 'Add',
+  accessRemove: 'Remove',
+  accessRemoveLabel: 'Remove {host}',
+  accessPillActive: 'In effect',
+  accessPillPending: 'Pending restart',
+  accessSavedNotice: 'Saved. A DSH restart is required for it to take effect.',
+  accessNoRestart: 'No pending changes.',
+  accessErrEmpty: 'Enter an address',
+  accessErrScheme: 'Drop the http:// or https:// — host name only',
+  accessErrPath: 'Drop the path',
+  accessErrWildcard: 'Wildcards are not supported — add each host individually',
+  accessErrLoopback: 'Loopback is always allowed — nothing to add',
+  accessErrPrivate: 'LAN addresses are always allowed — nothing to add',
+  accessErrDuplicate: 'That address is already in the list',
+  hostCheckTitle: 'Request origin check',
+  hostCheckDomain: 'Current domain',
+  hostCheckAllowed: 'Allowed',
+  hostCheckBlocked: 'Not allowed',
+  hostCheckLoopback: 'Local access — nothing to configure',
   policyDesc: 'Policy changes take effect immediately: new and updated passwords must meet the new rules (existing passwords are unaffected).',
   policyStrong: 'Strong',
   policyBasic: 'Basic',
