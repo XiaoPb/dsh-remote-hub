@@ -3,6 +3,42 @@
 本文件记录 `@xiaopb/dsh-remote-hub` 与伴生包 `@xiaopb/dsh-remote-paths` 的公开变更。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)；`0.x` 期间的次版本号可能包含不兼容变更。
 
+## [0.5.3] - 2026-11-20
+
+**修复：远程访问登录页没有网页图标。**
+
+用 `https://<域名>/remote-web/login` 打开登录页时，浏览器标签页显示空白默认图标，
+而登录后的主界面正常显示 DSH 图标——同一站点两种观感。
+
+**根因**：`renderLoginPage`（`host/src/auth/web-session.ts`）拼出的 `<head>` 只有
+`<title>` 和内联 `<style>`，**没有任何 `<link rel="icon">` 声明**。守卫其实早已支持
+反代图标（`isProxyableAssetPath` 白名单里的 `/favicon*.svg`），只是登录页从未引用过。
+
+**修复**：登录页补三条声明，指向守卫已有的官方图标资源：
+
+```html
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="icon" type="image/svg+xml" href="/favicon-dark.svg" media="(prefers-color-scheme: dark)">
+<link rel="apple-touch-icon" href="/favicon.svg">
+```
+
+与主界面用的是**同一份** `favicon.svg` / `favicon-dark.svg`，不会出现图标风格漂移；
+深色模式图标走 `media` 查询，与官方声明方式一致。
+
+**实测**（未登录状态，匿名 read-only peer）：
+
+- `GET /remote-web/login` 的 head 含三条 icon 声明
+- `GET /favicon.svg` → 200，`image/svg+xml`，3634 字节
+- `GET /favicon-dark.svg` → 200，`image/svg+xml`，3634 字节
+- 浏览器内 `new Image()` 两个图标均成功解码为 50×50
+
+**测试**：`test/web-session.test.mjs` 里「不得引用外部样式表」的断言原本是
+`/<link[^>]+href=/`，会把图标 `<link>` 一并判为违规。已收紧为只禁
+`rel="stylesheet"`，并新增两条正面断言锁住 favicon 声明。
+
+> 注：官方还有 `apple-touch-icon.png`，但守卫白名单只放行 `.svg`，
+> 故 iOS 也用同一份 SVG（现代 iOS 可处理），不做会 404 的无效引用。
+
 ## [0.5.2] - 2026-11-18
 
 **新增「信任的公网地址」配置；设置页更名为「身份与访问」。**

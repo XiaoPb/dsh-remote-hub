@@ -181,8 +181,15 @@ test('登录页包含全部 6 个 data-testid，且源码里没有任何形如�
   // 最小独立：不引用任何官方 Web 资源 / CDN / 外链。
   assert.equal(/https?:\/\//u.test(page), false, '页面不得引用任何外部 URL')
   assert.equal(/<script[^>]+src=/u.test(page), false, '不得引用外部脚本')
-  assert.equal(/<link[^>]+href=/u.test(page), false, '不得引用外部样式表')
+  // 样式必须内联。这里**只禁样式表**，不禁所有 `<link href>`：
+  // 图标（`rel="icon"` / `apple-touch-icon`）必须用 `<link>` 声明，
+  // 否则浏览器标签页显示空白默认图标（此前就是这样）。
+  assert.equal(/<link[^>]+rel=["']?stylesheet/u.test(page), false, '不得引用外部样式表')
   assert.equal(/@import/u.test(page), false, 'CSS 不得 @import')
+  // 图标必须声明，且指向**本站**资源（守卫的 /favicon*.svg 白名单会反代）。
+  assert.match(page, /<link rel="icon"[^>]*href="\/favicon\.svg"/u, '登录页必须声明 favicon')
+  assert.match(page, /<link rel="icon"[^>]*href="\/favicon-dark\.svg"[^>]*media="\(prefers-color-scheme: dark\)"/u,
+    '深色模式下应使用深色图标')
   // 红线：页面源码任何地方都不能有形如令牌的串。
   for (const pattern of TOKEN_LIKE) {
     assert.equal(pattern.test(page), false, `登录页出现了形如令牌的串: ${pattern}`)

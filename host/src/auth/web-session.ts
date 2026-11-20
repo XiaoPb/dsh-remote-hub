@@ -630,6 +630,17 @@ export function createWebSession(deps: WebSessionDeps): WebSession {
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
         '<meta name="robots" content="noindex, nofollow">',
         '<title>远程访问登录</title>',
+        // 图标：登录页此前完全没有 favicon 声明，浏览器标签页因此显示空白默认图标
+        // （与登录后的主界面不一致）。这里引用**官方**图标，由守卫的
+        // `isProxyableAssetPath` 白名单（`/favicon*.svg`）反代到 :3080，
+        // 与主界面用的是同一份资源，不会出现图标风格漂移。
+        //
+        // 深色图标用 `media="(prefers-color-scheme: dark)"` 声明，与官方
+        // `favicon-dark.svg` 的用途一致；不支持该属性的旧浏览器会忽略这一行，
+        // 仍然拿到上一个已生效的图标，不会变成空白。
+        '<link rel="icon" type="image/svg+xml" href="/favicon.svg">',
+        '<link rel="icon" type="image/svg+xml" href="/favicon-dark.svg" media="(prefers-color-scheme: dark)">',
+        '<link rel="apple-touch-icon" href="/favicon.svg">',
         `<style>${LOGIN_PAGE_STYLE}</style>`,
         '</head>',
         '<body>',
