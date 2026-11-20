@@ -104,6 +104,36 @@ const session = await loadBuiltClientModule('auth/session.js')
 const accountPage = await loadBuiltClientModule('auth/AccountPage.js')
 
 /**
+ * 固定页面语言为中文。
+ *
+ * ## 为什么必须显式固定
+ *
+ * `i18n.ts` 的 `detectLocale()` 走 `navigator.languages[0] ?? navigator.language`，
+ * 而 **Node 21+ 自带 `navigator` 全局**。于是同一个测试在不同机器上渲染出不同语言：
+ *
+ *   - 本机 `navigator.language === 'zh-CN'` → 中文 → 断言「本机账号」通过
+ *   - GitHub Actions runner 是 `en-US` → 英文 → 同一条断言失败
+ *
+ * 实测就卡在这里：产品代码完全正确，只是测试**依赖了宿主系统语言**。
+ *
+ * ## 实现要点
+ *
+ * `loadBuiltClientModule` 每次调用都建新的临时目录，因此拿到的是**不同的模块实例**。
+ * 直接 import 一份 `rhui/i18n.js` 再 `setLocale()` 不会影响 `AccountPage` 内部那份。
+ * 可靠做法是从 `AccountPage` 暴露的同一路径入手：`__DSH_REMOTE_HUB_I18N__` 是
+ * `i18n.ts` 挂在 globalThis 上的单例钩子，`AccountPage` 与本测试看到的是同一个对象。
+ */
+function pinLocaleToChinese() {
+  const hook = globalThis.__DSH_REMOTE_HUB_I18N__
+  if (hook !== undefined && typeof hook.setLocale === 'function') {
+    hook.setLocale('zh')
+    return true
+  }
+  return false
+}
+assert.equal(pinLocaleToChinese(), true, '必须能把测试语言固定为中文（否则断言依赖宿主 locale）')
+
+/**
  * 去掉 `ThemeStyle` 注入的 `<style data-rh-theme>` 节点。
  *
  * ## 为什么必须剥掉再序列化

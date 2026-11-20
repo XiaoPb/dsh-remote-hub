@@ -58,6 +58,24 @@ async function loadAccountPage() {
 }
 
 const page = await loadAccountPage()
+
+/**
+ * 固定测试语言为中文。
+ *
+ * `i18n.ts` 的 `detectLocale()` 读 `navigator.languages[0] ?? navigator.language`，
+ * 而 **Node 21+ 自带 `navigator`**。本机是 `zh-CN`（中文，断言通过），
+ * GitHub Actions runner 是 `en-US`（英文，断言「账号 admin」失败）——
+ * 产品代码无误，是测试依赖了宿主系统语言。
+ *
+ * 用 `i18n.ts` 挂在 globalThis 上的单例钩子，保证与 `AccountPage` 内部是同一实例
+ * （`loadAccountPage` 每次建新临时目录，单独 import 一份 i18n 不会生效）。
+ */
+assert.equal(
+  typeof globalThis.__DSH_REMOTE_HUB_I18N__?.setLocale === 'function',
+  true,
+  '必须能把测试语言固定为中文（否则断言依赖宿主 locale）',
+)
+globalThis.__DSH_REMOTE_HUB_I18N__.setLocale('zh')
 const { renderToStaticMarkup } = await import('react-dom/server')
 
 /**
