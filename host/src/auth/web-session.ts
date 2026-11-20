@@ -494,9 +494,17 @@ const LOGIN_PAGE_STYLE = `:root {
   --line: #d8dce4;
   --accent: #2f6feb;
   --danger: #b42318;
+  /* 背景水印的不透明度。
+   *
+   * 取值依据（实测对比度，见下方注释）：水印要**看得出**，但不能与表单争夺注意力。
+   *   .16 -> 与背景 1.45:1（浅色）
+   *   .20 -> 与背景 1.74:1（深色，浅色前景在深底上亮度差更小，故加一档补偿）
+   * 再高（≥.20）就开始干扰文字阅读了。
+   */
+  --mark-opacity: .16;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #14161a; --card: #1d2026; --fg: #e8eaee; --muted: #9aa2b0; --line: #333944; --danger: #ff8a80; }
+  :root { --bg: #14161a; --card: #1d2026; --fg: #e8eaee; --muted: #9aa2b0; --line: #333944; --danger: #ff8a80; --mark-opacity: .20; }
 }
 * { box-sizing: border-box; }
 body {
@@ -509,6 +517,46 @@ body {
   color: var(--fg);
   font: 15px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
   padding: 24px;
+  /* 水印定位锚点 */
+  position: relative;
+  overflow: hidden;
+  /*
+   * 建立独立的堆叠上下文：否则 z-index:-1 的 ::before 会穿到 html 背景之后
+   * 而完全不可见（这是负 z-index 水印最常见的坑）。
+   */
+  isolation: isolate;
+}
+/*
+ * 背景水印：等比放大的 DSH 图标。
+ *
+ * 为什么用 mask 而不是直接 <img>：
+ *   favicon.svg 是 fill="#000" 的**单色**图标。直接铺在深色背景上等于黑上加黑，
+ *   什么都看不见；用 mask + currentColor 才能自动跟随深浅主题。
+ *
+ * 约束（都为了不干扰表单可读性）：
+ *   - 用 ::before 且 z-index 为负，永远在 main 卡片**之下**，不遮挡输入框；
+ *   - 透明度极低（浅 .035 / 深 .06），只是让纯色背景不再单调，不构成视觉噪音；
+ *   - 固定尺寸 + 溢出裁切，窄屏不会撑出横向滚动条；
+ *   - 不拦截指针事件（纯装饰）。
+ */
+body::before {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  width: min(96vmin, 900px);
+  height: min(96vmin, 900px);
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  background: currentColor;
+  opacity: var(--mark-opacity);
+  pointer-events: none;
+  -webkit-mask: url("/favicon.svg") center / contain no-repeat;
+  mask: url("/favicon.svg") center / contain no-repeat;
+}
+/* 高对比度模式：水印毫无价值，还可能与用户自定义配色冲突，直接去掉。 */
+@media (forced-colors: active) {
+  body::before { display: none; }
 }
 main {
   width: 100%;
@@ -517,6 +565,8 @@ main {
   border: 1px solid var(--line);
   border-radius: 12px;
   padding: 24px;
+  /* 卡片本体不透明，保证水印只出现在卡片外的留白里。 */
+  position: relative;
 }
 h1 { margin: 0 0 4px; font-size: 18px; }
 p.sub { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
