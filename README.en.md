@@ -6,7 +6,7 @@
 [![Release](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml/badge.svg)](https://github.com/XiaoPb/dsh-remote-hub/actions/workflows/release.yml)
 [![npm](https://img.shields.io/npm/v/@xiaopb/dsh-remote-hub?label=npm)](https://www.npmjs.com/package/@xiaopb/dsh-remote-hub)
 
-**Dual-role remote takeover for DSH (v0.5.0)**
+**Dual-role remote takeover for DSH (v0.5.5)**
 
 Docs: [Deployment](docs/DEPLOY.md) ｜ [Architecture](docs/ARCHITECTURE.md) ｜ [Design contract](docs/DESIGN.md) ｜ [API permission matrix](docs/API-MATRIX.md) ｜ [Doc index](docs/INDEX.md) ｜ [Changelog](CHANGELOG.md) ｜ [中文](README.md)
 
@@ -198,7 +198,7 @@ pnpm run build
 dsh plugin --profile web add link:$PWD
 ```
 
-The package is `@xiaopb/dsh-remote-hub@0.5.0` (the cloud path UI is built in — no other package needed). Requires **Node.js ≥ 24.9.0** and **DSH ≥ 0.2.2-rc.1 < 0.3.0** (published: 0.2.2-rc.1 / rc.2 / rc.3).
+The package is `@xiaopb/dsh-remote-hub@0.5.5` (the cloud path UI is built in — no other package needed). Requires **Node.js ≥ 24.9.0** and **DSH ≥ 0.2.2-rc.1 < 0.3.0** (published: 0.2.2-rc.1 / rc.2 / rc.3).
 
 ---
 
