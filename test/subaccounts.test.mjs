@@ -60,7 +60,31 @@ async function loadAccountPage() {
 const page = await loadAccountPage()
 const { renderToStaticMarkup } = await import('react-dom/server')
 
-/** 渲染成 HTML 字符串。 */
+/**
+ * 去掉 `ThemeStyle` 注入的 `<style data-rh-theme>` 节点后再序列化。
+ *
+ * 页面根容器会注入约 4 万字符的 `RH_CSS`，它与页面内容挤在同一个 HTML 字符串里：
+ * CI 上实测输出在样式表中间被截断，页面主体丢失，断言因此误报（产品代码无误）。
+ * 这些测试只关心结构，剥掉样式表既让断言可靠也更聚焦。
+ * @param node - React 节点。
+ * @returns 不含样式表节点的新树。
+ */
+function stripThemeStyle(node) {
+  if (node === null || node === undefined || typeof node !== 'object') return node
+  if (Array.isArray(node)) return node.map(stripThemeStyle)
+  if (node.props === undefined) return node
+  if (node.props['data-rh-theme'] !== undefined) return null
+  const nextProps = {}
+  for (const key of Object.keys(node.props)) {
+    const value = node.props[key]
+    nextProps[key] = Array.isArray(value) || (typeof value === 'object' && value !== null)
+      ? stripThemeStyle(value)
+      : value
+  }
+  return { ...node, props: nextProps }
+}
+
+/** 渲染成 HTML 字符串（已剥离样式表）。 */
 async function render(state, actions = {}) {
   const merged = {
     onSubmitBootstrap() {}, onSubmitLogin() {}, onSubmitMfa() {}, onChangePassword() {},
@@ -70,7 +94,7 @@ async function render(state, actions = {}) {
     onLogout() {}, onRefresh() {},
     ...actions,
   }
-  return renderToStaticMarkup(page.renderAccountPage(state, merged, page.initialDraft(), () => {}))
+  return renderToStaticMarkup(stripThemeStyle(page.renderAccountPage(state, merged, page.initialDraft(), () => {})))
 }
 
 /**

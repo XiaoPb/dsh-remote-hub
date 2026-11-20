@@ -103,10 +103,43 @@ const keyring = await loadBuiltClientModule('auth/keyring.js')
 const session = await loadBuiltClientModule('auth/session.js')
 const accountPage = await loadBuiltClientModule('auth/AccountPage.js')
 
-/** 把 React 树渲染成静态 HTML（不依赖浏览器）。 */
+/**
+ * 去掉 `ThemeStyle` 注入的 `<style data-rh-theme>` 节点。
+ *
+ * ## 为什么必须剥掉再序列化
+ *
+ * 页面根容器会注入约 4 万字符的 `RH_CSS`。它和页面内容挤在同一个 HTML 字符串里，
+ * 导致两个问题：
+ *
+ *  1. **输出被截断**：CI 上实测 `renderToStaticMarkup` 的结果在样式表中间就断了，
+ *     页面主体完全没出现，于是「找不到本机账号」这类断言误报——而产品代码无误。
+ *  2. **正则误命中**：`/本机账号/u` 可能匹配到 CSS 注释里的同名字样。
+ *
+ * 这些测试关心的是**页面结构**，不是样式内容；剥掉样式表既让断言可靠，
+ * 也让它更聚焦。真正需要验证样式的地方另有专门的测试。
+ *
+ * @param node - React 节点。
+ * @returns 不含样式表节点的新树。
+ */
+function stripThemeStyle(node) {
+  if (node === null || node === undefined || typeof node !== 'object') return node
+  if (Array.isArray(node)) return node.map(stripThemeStyle)
+  if (node.props === undefined) return node
+  if (node.props['data-rh-theme'] !== undefined) return null
+  const nextProps = {}
+  for (const key of Object.keys(node.props)) {
+    const value = node.props[key]
+    nextProps[key] = Array.isArray(value) || (typeof value === 'object' && value !== null)
+      ? stripThemeStyle(value)
+      : value
+  }
+  return { ...node, props: nextProps }
+}
+
+/** 把 React 树渲染成静态 HTML（不依赖浏览器；已剥离样式表，见 stripThemeStyle）。 */
 async function renderMarkup(node) {
   const { renderToStaticMarkup } = await import('react-dom/server')
-  return renderToStaticMarkup(node)
+  return renderToStaticMarkup(stripThemeStyle(node))
 }
 
 /**
@@ -686,12 +719,17 @@ test('raising a ceiling without fresh 2FA opens the escalation prompt', async ()
     escalation: { clientId: 'c1', role: 'full', password: '', code: '', error: null },
   }
 
-  const markup = await renderMarkup(accountPage.renderAccountPage(base, noopActions(), accountPage.initialDraft(), () => {}))
-  assert.match(markup, /data-testid="escalation"/u)
-  assert.match(markup, /提升权限需要重新验证/u)
-  assert.match(markup, /data-testid="escalation-password"/u)
-  assert.match(markup, /data-testid="escalation-code"/u)
-  assert.match(markup, /data-testid="escalation-submit"[^>]*disabled/u, '空输入时不可提交')
+  // 用元素树断言（同上方说明）：renderToStaticMarkup 的输出混着 4 万字符 CSS，
+  // 在 CI 上曾于样式表处截断，导致页面主体丢失、断言误报。
+  const escTree = accountPage.renderAccountPage(base, noopActions(), accountPage.initialDraft(), () => {})
+  assert.equal(findByTestId(escTree, 'escalation').length, 1, '提权面板')
+  assert.equal(findByTestId(escTree, 'escalation-password').length, 1, '口令输入')
+  assert.equal(findByTestId(escTree, 'escalation-code').length, 1, '动态码输入')
+  const escTexts = collectText(escTree).join(' ')
+  assert.match(escTexts, /提升权限需要重新验证/u, '说明文案')
+  const submit = findByTestId(escTree, 'escalation-submit')
+  assert.equal(submit.length, 1, '提交按钮')
+  assert.equal(submit[0].props.disabled, true, '空输入时不可提交')
 
   const withError = await renderMarkup(accountPage.renderAccountPage({
     ...base,
