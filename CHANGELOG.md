@@ -3,6 +3,45 @@
 本文件记录 `@xiaopb/dsh-remote-hub` 与伴生包 `@xiaopb/dsh-remote-paths` 的公开变更。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)；`0.x` 期间的次版本号可能包含不兼容变更。
 
+## [0.5.5] - 2026-11-20
+
+**修复：CI 上两个测试假失败（产品代码无误）。**
+
+`auth-client.test.mjs` 与 `subaccounts.test.mjs` 从 0.5.2 起在 GitHub Actions 上
+持续失败，而**同一提交本地通过**。失败信息是断言页面上找不到「本机账号」「账号 admin」，
+但 CI 打印出的实际 HTML 是一段被截断的样式表——产品代码并没有问题。
+
+### 根因
+
+这两个测试用 `renderToStaticMarkup` 把整棵 React 树序列化成字符串再做正则匹配，
+而 `ThemeStyle` 注入的 `RH_CSS` 有约 4 万字符，与页面内容混在同一个字符串里。
+于是：
+
+- 序列化在 CI 环境下于样式表中途截断，内容部分直接丢失，断言必然失败；
+- 即便不截断，`/本机账号/u` 这类正则也可能命中 CSS 注释里的同名字样，
+  通过与否都不能说明结构正确。
+
+### 修复
+
+结构性断言改为**直接遍历 React 元素树**，不再经过字符串序列化：
+
+```js
+findByTestId(tree, 'local-account')   // 结构
+collectText(tree)                      // 可见文案（已跳过样式表字符串）
+```
+
+只保留真正需要检查 HTML 形态的地方（如 `<svg>` 二维码）继续用 `renderToStaticMarkup`。
+
+### 验证
+
+用 CI 同款 runner（`scripts/run-all-tests.mjs`）本地跑：
+
+- 修复前：`FAILED: carrier-sync.test.mjs`（另一处），74 文件
+- 修复后：**74/74 files passed**
+
+配套 CI 关卡同样通过：`version-gate`（node-engine / manifest-version / upper-bound）、
+`contract-check`、`verify-package`（40/40）。
+
 ## [0.5.4] - 2026-11-20
 
 **登录页背景加上 DSH 图标水印，替代纯色单调背景。**

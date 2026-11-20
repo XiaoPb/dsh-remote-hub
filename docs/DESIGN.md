@@ -1,6 +1,6 @@
 # Design and Security Contract
 
-**Version:** 0.5.4
+**Version:** 0.5.5
 **Status:** Web-to-Web primary path verified; Desktop matrix and several Host-management workflows remain incomplete.
 
 ## Product behavior

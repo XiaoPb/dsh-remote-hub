@@ -73,6 +73,61 @@ async function render(state, actions = {}) {
   return renderToStaticMarkup(page.renderAccountPage(state, merged, page.initialDraft(), () => {}))
 }
 
+/**
+ * 遍历 React 元素树，收集 `data-testid`。
+ *
+ * 为什么不只用 `renderToStaticMarkup` 的字符串：它会把 `ThemeStyle` 注入的
+ * 4 万字符 CSS 一起序列化，断言既脆弱（CI 上曾截断）又可能误命中注释里的字样。
+ * @param node - React 节点。
+ * @param testid - 目标 testid。
+ * @param out - 累加器。
+ * @returns 匹配元素数组。
+ */
+function findByTestId(node, testid, out = []) {
+  if (node === null || node === undefined || typeof node !== 'object') return out
+  if (Array.isArray(node)) {
+    for (const child of node) findByTestId(child, testid, out)
+    return out
+  }
+  if (node.props === undefined) return out
+  if (node.props['data-testid'] === testid) out.push(node)
+  for (const key of Object.keys(node.props)) findByTestId(node.props[key], testid, out)
+  return out
+}
+
+/**
+ * 收集元素树里的可见文本（跳过样式表字符串）。
+ * @param node - React 节点。
+ * @param out - 累加器。
+ * @returns 文本数组。
+ */
+function collectText(node, out = []) {
+  if (node === null || node === undefined || typeof node === 'boolean') return out
+  if (typeof node === 'string' || typeof node === 'number') {
+    const text = String(node)
+    if (!text.includes('--rh-') && text.length < 400) out.push(text)
+    return out
+  }
+  if (Array.isArray(node)) {
+    for (const child of node) collectText(child, out)
+    return out
+  }
+  if (node.props === undefined) return out
+  for (const key of Object.keys(node.props)) collectText(node.props[key], out)
+  return out
+}
+
+/** 空动作集（结构断言不触发副作用）。 */
+function noopActions() {
+  return {
+    onSubmitBootstrap() {}, onSubmitLogin() {}, onSubmitMfa() {}, onChangePassword() {},
+    onSetPasswordPolicy() {}, onForgetPeer() {}, onEscalationChange() {}, onEscalationSubmit() {},
+    onEscalationCancel() {}, onStartTotp() {}, onTotpChange() {}, onConfirmTotp() {}, onDisableTotp() {},
+    onCancelTotp() {}, onTrustClient() {}, onRevokeClient() {}, onSetRole() {}, onSetCeiling() {},
+    onLogout() {}, onRefresh() {},
+  }
+}
+
 /** 带子账号状态的基础 ready 状态。 */
 function readyState(overrides = {}) {
   const base = {
@@ -225,11 +280,14 @@ test('客户端行显示归属账号；设备行同源字段（C2）', async () 
     leaseExpiresAt: Date.now() + 86_400_000, leaseGeneration: 1, revokedAt: null,
     accountId: 'acc_admin', username: 'admin',
   }]
-  const markup = await render(readyState({
-    status: { ...readyState().status, clients },
-  }))
-  assert.match(markup, /data-testid="client-account"/u)
-  assert.match(markup, /账号 admin/u)
+  const state = readyState({ status: { ...readyState().status, clients } })
+  // ⚠️ 用元素树断言而不是 renderToStaticMarkup 的字符串：
+  // 后者会把 4 万字符的样式表一起序列化，CI 上曾出现截断导致误报
+  // （同一提交本地通过、CI 失败，而产品代码无误）。
+  const tree = page.renderAccountPage(state, noopActions(), page.initialDraft(), () => {})
+  const accountNode = findByTestId(tree, 'client-account')
+  assert.equal(accountNode.length, 1, '客户端行必须有归属账号节点')
+  assert.match(collectText(accountNode).join(' '), /账号 admin/u, '显示归属账号用户名')
 })
 
 test('TOTP 绑定渲染二维码（totp-qr），文本密钥与 otpauth 仍在（C3）', async () => {

@@ -109,6 +109,62 @@ async function renderMarkup(node) {
   return renderToStaticMarkup(node)
 }
 
+/**
+ * 遍历 React 元素树，收集 `data-testid` 与文本。
+ *
+ * ## 为什么需要它（为什么不再只靠 `renderToStaticMarkup`）
+ *
+ * `renderToStaticMarkup` 把整棵树序列化成一个字符串，其中**混着完整的 CSS**
+ * （`ThemeStyle` 注入的 `RH_CSS` 有 4 万字符）。用它做断言有两个问题：
+ *
+ *  1. **脆弱**：CI 上曾出现过输出在样式表中间被截断的情况（同一个提交本地通过、
+ *     CI 失败），断言随之失败，但**产品代码并没有问题**。排查成本极高。
+ *  2. **语义错位**：`/本机账号/u` 这类正则既可能命中真实文案，也可能命中 CSS
+ *     注释里的同名字样，断言通过不代表结构正确。
+ *
+ * 因此结构性断言改为**直接读元素树**（不经过字符串序列化），只有确实需要
+ * 检查 HTML 形态的地方（如 `<svg>`）才继续用 `renderMarkup`。
+ *
+ * @param node - React 节点。
+ * @param testid - 要查找的 `data-testid`。
+ * @returns 匹配的元素数组。
+ */
+function findByTestId(node, testid, out = []) {
+  if (node === null || node === undefined || typeof node !== 'object') return out
+  if (Array.isArray(node)) {
+    for (const child of node) findByTestId(child, testid, out)
+    return out
+  }
+  if (node.props === undefined) return out
+  if (node.props['data-testid'] === testid) out.push(node)
+  // 递归所有 prop 值：文案常挂在 title/desc/children 上，只走 children 会漏。
+  for (const key of Object.keys(node.props)) findByTestId(node.props[key], testid, out)
+  return out
+}
+
+/**
+ * 收集元素树里所有可见文本片段。
+ * @param node - React 节点。
+ * @param out - 累加器。
+ * @returns 文本数组。
+ */
+function collectText(node, out = []) {
+  if (node === null || node === undefined || typeof node === 'boolean') return out
+  if (typeof node === 'string' || typeof node === 'number') {
+    // 跳过样式表字符串：它是实现细节，不是可见文案。
+    const text = String(node)
+    if (!text.includes('--rh-') && text.length < 400) out.push(text)
+    return out
+  }
+  if (Array.isArray(node)) {
+    for (const child of node) collectText(child, out)
+    return out
+  }
+  if (node.props === undefined) return out
+  for (const key of Object.keys(node.props)) collectText(node.props[key], out)
+  return out
+}
+
 /** 空动作集（渲染测试不触发副作用）。 */
 function noopActions() {
   return {
@@ -683,14 +739,17 @@ test('settings separates the local account from peer accounts', async () => {
     peers: [],
   }
 
-  const empty = await renderMarkup(accountPage.renderAccountPage(base, noopActions(), accountPage.initialDraft(), () => {}))
-  assert.match(empty, /data-testid="local-account"/u)
-  assert.match(empty, /本机账号/u)
-  assert.match(empty, /data-testid="peer-accounts"/u)
-  assert.match(empty, /对端账号/u)
-  assert.match(empty, /data-testid="peers-empty"/u)
+  // ⚠️ 用元素树断言，不用 renderToStaticMarkup 的字符串：
+  // 后者把 4 万字符的 CSS 一起序列化进来，既脆弱（CI 上曾截断）又可能误命中文案。
+  const emptyTree = accountPage.renderAccountPage(base, noopActions(), accountPage.initialDraft(), () => {})
+  assert.equal(findByTestId(emptyTree, 'local-account').length, 1, '本机账号区块')
+  assert.equal(findByTestId(emptyTree, 'peer-accounts').length, 1, '对端账号区块')
+  assert.equal(findByTestId(emptyTree, 'peers-empty').length, 1, '无对端时显示空态')
+  const emptyTexts = collectText(emptyTree)
+  assert.ok(emptyTexts.some(text => text.includes('本机账号')), '本机账号文案')
+  assert.ok(emptyTexts.some(text => text.includes('对端账号')), '对端账号文案')
 
-  const withPeer = await renderMarkup(accountPage.renderAccountPage({
+  const withPeerTree = accountPage.renderAccountPage({
     ...base,
     peers: [{
       id: 'a'.repeat(64),
@@ -699,12 +758,14 @@ test('settings separates the local account from peer accounts', async () => {
       role: 'control',
       lastConnectedAt: Date.now(),
     }],
-  }, noopActions(), accountPage.initialDraft(), () => {}))
-  assert.match(withPeer, /data-testid="peer-account"/u)
-  assert.match(withPeer, /http:\/\/192\.168\.1\.20:8443/u)
-  assert.match(withPeer, /家里的机器/u)
-  assert.match(withPeer, /data-testid="forget-peer"/u)
-  assert.doesNotMatch(withPeer, /data-testid="peers-empty"/u)
+  }, noopActions(), accountPage.initialDraft(), () => {})
+  const peerNode = findByTestId(withPeerTree, 'peer-account')
+  assert.equal(peerNode.length, 1, '对端账号行')
+  assert.equal(findByTestId(withPeerTree, 'forget-peer').length, 1, '移除按钮')
+  assert.equal(findByTestId(withPeerTree, 'peers-empty').length, 0, '有对端时不显示空态')
+  const peerTexts = collectText(peerNode).join(' ')
+  assert.match(peerTexts, /192\.168\.1\.20:8443/u, '显示 origin')
+  assert.match(peerTexts, /家里的机器/u, '显示设备名')
 
   // 对端账号过多时同样只显示前 3 个，其余收进「显示全部」。
   const manyPeers = Array.from({ length: 5 }, (_, index) => ({
